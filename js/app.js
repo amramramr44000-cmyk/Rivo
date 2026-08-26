@@ -237,7 +237,6 @@
         const u = PF.normalizeUsername(state.username);
         if (!PF.validUsername(u)) throw new Error("Invalid username format.");
         if (u !== oldUsername && await PF.getProfile(u)) throw new Error("Username already taken.");
-        if (u !== oldUsername) await PF.deleteProfile(oldUsername);
         state.username = u;
         state.password ||= me.password;
         state.projects = [];

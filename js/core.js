@@ -1,54 +1,43 @@
-/* ProfileForge Local Engine
-   Local-first: no server, no API, no hosting required.
-   Data is persisted in IndexedDB; session state is kept in localStorage.
+/* Rivo Cloud Engine
+   GitHub Pages + Supabase edition.
+   Auth/session -> Supabase Auth
+   Profiles/social data -> PostgreSQL
+   Images/audio -> Supabase Storage
 */
 (() => {
   "use strict";
 
-  const DB_NAME = "ProfileForgeLocal";
-  const DB_VERSION = 2;
-  const STORE = "profiles";
-  const SESSION_KEY = "pf_session";
+  const cfg = window.RIVO_SUPABASE || {};
+  const READY = !!(window.supabase && cfg.url && cfg.anonKey &&
+    !String(cfg.url).includes("YOUR_SUPABASE") &&
+    !String(cfg.anonKey).includes("YOUR_SUPABASE"));
+
+  if (!READY) {
+    console.warn("[Rivo] Supabase is not configured. Edit js/supabase-config.js first.");
+  }
+
+  const sb = READY ? window.supabase.createClient(cfg.url, cfg.anonKey, {
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+  }) : null;
+
+  const CACHE_KEY = "rivo_username";
+  const MEDIA_BUCKET = "rivo-media";
 
   const defaults = {
-    username: "",
-    displayName: "",
-    bio: "",
-    description: "",
-    location: "",
-    website: "",
-    avatar: "",
-    banner: "",
-    miniImage: "",
-    status: "Online",
-    customStatus: "",
-    theme: "obsidian",
-    template: "discord",
-    accent: "#8b5cf6",
-    cardRadius: 24,
-    cardStyle: "glass",
-    glow: 45,
-    background: "aurora",
-    animation: "soft",
-    socials: [],
-    skills: [],
-    badges: [],
-    projects: [],
-    friends: [],
+    username: "", displayName: "", bio: "", description: "", location: "", website: "",
+    avatar: "", banner: "", miniImage: "", status: "Online", customStatus: "",
+    theme: "obsidian", template: "discord-noir", accent: "#7488ff", cardRadius: 24,
+    cardStyle: "glass", glow: 45, background: "aurora", animation: "soft",
+    socials: [], skills: [], badges: [], projects: [], friends: [],
     friendRequests: { incoming: [], outgoing: [] },
     sections: [
-      { id: (crypto.randomUUID ? crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2)), type: "about", title: "About Me", visible: true },
-      { id: (crypto.randomUUID ? crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2)), type: "friends", title: "Friends", visible: true }
+      { id: crypto.randomUUID ? crypto.randomUUID() : "about", type: "about", title: "About Me", visible: true },
+      { id: crypto.randomUUID ? crypto.randomUUID() : "friends", type: "friends", title: "Friends", visible: true }
     ],
     music: { title: "", artist: "", cover: "", audio: "", mime: "", size: 0 },
-    avatarFrame: "none",
-    avatarFrameColor: "#8b5cf6",
-    avatarFrameGlow: 35,
-    avatarFrameWidth: 3,
-    stats: { views: 0 },
-    likes: { count: 0, users: [] },
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    avatarFrame: "none", avatarFrameColor: "#8b5cf6", avatarFrameGlow: 35, avatarFrameWidth: 3,
+    stats: { views: 0 }, likes: { count: 0, users: [] },
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
   };
 
   const badgeCatalog = [
@@ -75,244 +64,238 @@
     ["monochrome-pro","Monochrome Pro","High-contrast executive portfolio presentation"]
   ];
 
-  function openDB() {
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VERSION);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains(STORE)) {
-          const store = db.createObjectStore(STORE, { keyPath: "username" });
-          store.createIndex("displayName", "displayName", { unique: false });
-          store.createIndex("updatedAt", "updatedAt", { unique: false });
-        }
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
+  function requireClient() {
+    if (!READY || !sb) throw new Error("Rivo is not connected to Supabase. Configure js/supabase-config.js.");
   }
-
-  async function tx(mode, action) {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const t = db.transaction(STORE, mode);
-      const store = t.objectStore(STORE);
-      let result;
-      try { result = action(store); } catch (e) { reject(e); return; }
-      t.oncomplete = () => resolve(result);
-      t.onerror = () => reject(t.error);
-    });
-  }
-
-  async function getProfile(username) {
-    if (!username) return null;
-    return tx("readonly", store => new Promise((resolve, reject) => {
-      const req = store.get(normalizeUsername(username));
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => reject(req.error);
-    }));
-  }
-
-  async function listProfiles() {
-    return tx("readonly", store => new Promise((resolve, reject) => {
-      const req = store.getAll();
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => reject(req.error);
-    }));
-  }
-
-  async function putProfile(profile) {
-    profile.updatedAt = new Date().toISOString();
-    return tx("readwrite", store => store.put(profile));
-  }
-
-  async function deleteProfile(username) {
-    return tx("readwrite", store => store.delete(normalizeUsername(username)));
-  }
-
   function normalizeUsername(value) {
     return String(value || "").trim().replace(/^@+/, "").toLowerCase();
   }
-
   function validUsername(value) {
     const u = normalizeUsername(value);
     return /^[a-z0-9](?:[a-z0-9._-]{2,24})[a-z0-9]$/.test(u) &&
-      !["admin","administrator","support","help","profileforge","root","system","api","null","undefined"].includes(u);
+      !["admin","administrator","support","help","rivo","root","system","api","null","undefined"].includes(u);
   }
-
-  function currentUsername() { return localStorage.getItem(SESSION_KEY) || ""; }
-  function setSession(username) { localStorage.setItem(SESSION_KEY, normalizeUsername(username)); }
-  function clearSession() { localStorage.removeItem(SESSION_KEY); }
-  async function currentProfile() { return getProfile(currentUsername()); }
-
-  const PASSWORD_ITERATIONS = 120000;
-  const PASSWORD_MIN = 6;
-
-  function bytesToBase64(bytes) {
-    let binary = "";
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-    }
-    return btoa(binary);
-  }
-  function base64ToBytes(value) {
-    const binary = atob(value);
-    const out = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-    return out;
-  }
-  function randomSalt() {
-    const salt = new Uint8Array(16);
-    crypto.getRandomValues(salt);
-    return bytesToBase64(salt);
-  }
-  async function hashPassword(password, saltBase64) {
-    const salt = saltBase64 ? base64ToBytes(saltBase64) : base64ToBytes(randomSalt());
-    const salt64 = saltBase64 || bytesToBase64(salt);
-    const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-    const bits = await crypto.subtle.deriveBits(
-      { name: "PBKDF2", salt, iterations: PASSWORD_ITERATIONS, hash: "SHA-256" },
-      material,
-      256
-    );
-    return { salt: salt64, hash: bytesToBase64(new Uint8Array(bits)) };
-  }
-  async function verifyPassword(password, stored) {
-    if (!stored?.salt || !stored?.hash) return false;
-    const result = await hashPassword(password, stored.salt);
-    const a = base64ToBytes(result.hash), b = base64ToBytes(stored.hash);
-    if (a.length !== b.length) return false;
-    let diff = 0;
-    for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
-    return diff === 0;
-  }
-
-  async function createAccount({ username, displayName, password }) {
+  function currentUsername() { return localStorage.getItem(CACHE_KEY) || ""; }
+  function cacheUsername(username) {
     const u = normalizeUsername(username);
-    if (!validUsername(u)) throw new Error("Username must use 4–26 chars: letters, numbers, . _ -.");
-    if (!String(displayName || "").trim()) throw new Error("Display name is required.");
-    if (String(password || "").length < PASSWORD_MIN) throw new Error(`Password must be at least ${PASSWORD_MIN} characters.`);
-    if (await getProfile(u)) throw new Error("That username is already taken.");
-    const profile = structuredClone(defaults);
-    profile.username = u;
-    profile.displayName = displayName.trim().slice(0, 60);
-    profile.password = await hashPassword(String(password));
-    profile.createdAt = new Date().toISOString();
-    profile.updatedAt = profile.createdAt;
-    await putProfile(profile);
-    setSession(u);
-    return profile;
+    if (u) localStorage.setItem(CACHE_KEY, u); else localStorage.removeItem(CACHE_KEY);
   }
-
-  async function login(username, password) {
-    const u = normalizeUsername(username);
-    const profile = await getProfile(u);
-    if (!profile) throw new Error("Incorrect username or password.");
-    if (!profile.password) {
-      if (String(password || "").length < PASSWORD_MIN) throw new Error(`Password must be at least ${PASSWORD_MIN} characters.`);
-      profile.password = await hashPassword(String(password));
-      await putProfile(profile);
-    } else if (!password || !(await verifyPassword(String(password), profile.password))) {
-      throw new Error("Incorrect username or password.");
+  function setSession(username) { cacheUsername(username); }
+  async function clearSession() {
+    cacheUsername("");
+    if (sb) await sb.auth.signOut();
+  }
+  function publicData(profile) {
+    const p = structuredClone(profile || {});
+    delete p.password;
+    delete p.friendRequests;
+    return p;
+  }
+  function mergeProfile(row, includePrivate = false) {
+    const p = structuredClone(row?.public_data || {});
+    p.username = row?.username || p.username || "";
+    p.createdAt = row?.created_at || p.createdAt;
+    p.updatedAt = row?.updated_at || p.updatedAt;
+    if (includePrivate) {
+      const priv = row?.private_data || {};
+      p.friendRequests = priv.friendRequests || { incoming: [], outgoing: [] };
     }
-    setSession(u);
-    return profile;
+    return p;
   }
 
-  async function updateProfile(patch) {
-    const profile = await currentProfile();
-    if (!profile) throw new Error("No signed-in profile.");
-    const next = { ...profile, ...patch };
-    if (patch.socials) next.socials = patch.socials;
-    if (patch.skills) next.skills = patch.skills;
-    if (patch.projects) next.projects = patch.projects;
-    if (patch.sections) next.sections = patch.sections;
-    await putProfile(next);
-    return next;
+  async function currentProfile() {
+    requireClient();
+    const { data: { user }, error: userError } = await sb.auth.getUser();
+    if (userError || !user) return null;
+    const { data, error } = await sb.from("profiles")
+      .select("id,username,public_data,private_data,created_at,updated_at")
+      .eq("id", user.id).maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    cacheUsername(data.username);
+    return mergeProfile(data, true);
   }
 
-  async function saveProfile(profile) {
-    if (!profile || !profile.username) throw new Error("Invalid profile.");
-    await putProfile(profile);
-    return profile;
+  async function getProfile(username) {
+    requireClient();
+    const u = normalizeUsername(username);
+    if (!u) return null;
+    const { data, error } = await sb.rpc("rivo_get_public_profile", { p_username: u });
+    if (error) throw error;
+    if (!data) return null;
+    return data;
+  }
+
+  async function listProfiles() {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_list_public_profiles", { p_limit: 24 });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
   }
 
   async function searchUsers(query) {
+    requireClient();
     const q = String(query || "").trim().toLowerCase().replace(/^@/, "");
     if (!q) return [];
-    const all = await listProfiles();
-    return all.filter(p =>
-      p.username.includes(q) || (p.displayName || "").toLowerCase().includes(q)
-    ).slice(0, 24);
+    const { data, error } = await sb.rpc("rivo_search_profiles", { p_query: q, p_limit: 24 });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  }
+
+  function dataUrlToBlob(dataUrl) {
+    const [meta, body] = String(dataUrl).split(",");
+    const mime = (meta.match(/data:([^;]+)/) || [,"application/octet-stream"])[1];
+    const bin = atob(body || "");
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
+
+  async function uploadDataUrl(dataUrl, path, mime) {
+    requireClient();
+    const blob = dataUrlToBlob(dataUrl);
+    const { error } = await sb.storage.from(MEDIA_BUCKET).upload(path, blob, {
+      contentType: blob.type || mime || "application/octet-stream",
+      upsert: false
+    });
+    if (error) throw error;
+    return sb.storage.from(MEDIA_BUCKET).getPublicUrl(path).data.publicUrl;
+  }
+
+  async function persistMedia(profile) {
+    const uid = (await sb.auth.getUser()).data.user?.id;
+    if (!uid) throw new Error("Your session expired. Please sign in again.");
+    const out = structuredClone(profile);
+    const stamp = `${Date.now()}-${crypto.randomUUID()}`;
+    const media = [
+      ["avatar", "image/webp"], ["banner", "image/webp"], ["miniImage", "image/webp"],
+      ["music.cover", "image/webp"], ["music.audio", out.music?.mime || "audio/mpeg"]
+    ];
+    for (const [key, fallbackMime] of media) {
+      const parts = key.split(".");
+      const value = parts.length === 1 ? out[key] : out[parts[0]]?.[parts[1]];
+      if (!String(value || "").startsWith("data:")) continue;
+      const ext = fallbackMime.startsWith("image/") ? "webp" :
+        (fallbackMime.includes("ogg") ? "ogg" : fallbackMime.includes("wav") ? "wav" : "mp3");
+      const path = `${uid}/${stamp}-${parts.join("-")}.${ext}`;
+      const url = await uploadDataUrl(value, path, fallbackMime);
+      if (parts.length === 1) out[key] = url;
+      else { out[parts[0]] ||= {}; out[parts[0]][parts[1]] = url; }
+    }
+    return out;
+  }
+
+  async function saveProfile(profile) {
+    requireClient();
+    if (!profile?.username) throw new Error("Invalid profile.");
+    const me = await currentProfile();
+    if (!me) throw new Error("No signed-in profile.");
+    const row = await persistMedia(profile);
+    row.username = normalizeUsername(row.username);
+    row.friendRequests = undefined;
+    const payload = {
+      username: row.username,
+      public_data: publicData(row),
+      updated_at: new Date().toISOString()
+    };
+    const { data, error } = await sb.from("profiles")
+      .update(payload).eq("id", (await sb.auth.getUser()).data.user.id)
+      .select("username,public_data,private_data,created_at,updated_at").single();
+    if (error) throw error;
+    cacheUsername(data.username);
+    return mergeProfile(data, true);
+  }
+
+  async function updateProfile(patch) {
+    const current = await currentProfile();
+    if (!current) throw new Error("No signed-in profile.");
+    return saveProfile({ ...current, ...patch });
+  }
+
+  async function createAccount({ username, displayName, password }) {
+    requireClient();
+    const u = normalizeUsername(username);
+    if (!validUsername(u)) throw new Error("Username must use 4–26 chars: letters, numbers, . _ -.");
+    if (!String(displayName || "").trim()) throw new Error("Display name is required.");
+    if (String(password || "").length < 6) throw new Error("Password must be at least 6 characters.");
+    const { data: existing, error: lookupError } = await sb.rpc("rivo_username_exists", { p_username: u });
+    if (lookupError) throw lookupError;
+    if (existing) throw new Error("That username is already taken.");
+
+    const syntheticEmail = `${u}@users.rivo.app`;
+    const { data: auth, error: authError } = await sb.auth.signUp({
+      email: syntheticEmail,
+      password: String(password)
+    });
+    if (authError) throw authError;
+    if (!auth.user || !auth.session) {
+      throw new Error("Supabase email confirmations are enabled. Disable email confirmation in Supabase Auth, then create the account again.");
+    }
+
+    const now = new Date().toISOString();
+    const base = structuredClone(defaults);
+    base.username = u;
+    base.displayName = String(displayName).trim().slice(0, 60);
+    base.createdAt = now; base.updatedAt = now;
+    const { error } = await sb.from("profiles").insert({
+      id: auth.user.id,
+      username: u,
+      auth_email: syntheticEmail,
+      public_data: publicData(base),
+      private_data: { friendRequests: { incoming: [], outgoing: [] } }
+    });
+    if (error) {
+      await sb.auth.signOut();
+      if (String(error.message || "").includes("duplicate")) throw new Error("That username is already taken.");
+      throw error;
+    }
+    cacheUsername(u);
+    return base;
+  }
+
+  async function login(username, password) {
+    requireClient();
+    const u = normalizeUsername(username);
+    if (!u) throw new Error("Enter your username.");
+    const { data: row, error: lookupError } = await sb.from("profiles")
+      .select("auth_email,username").eq("username", u).maybeSingle();
+    if (lookupError) throw lookupError;
+    if (!row) throw new Error("Incorrect username or password.");
+    const { data, error } = await sb.auth.signInWithPassword({
+      email: row.auth_email, password: String(password || "")
+    });
+    if (error || !data.user) throw new Error("Incorrect username or password.");
+    cacheUsername(row.username);
+    return currentProfile();
+  }
+
+  async function deleteProfile(username) {
+    // Kept for API compatibility. Deleting a profile must be an explicit account action.
+    return false;
+  }
+
+  async function callRpc(name, args) {
+    requireClient();
+    const { data, error } = await sb.rpc(name, args || {});
+    if (error) throw error;
+    return data;
   }
 
   async function sendFriendRequest(targetUsername) {
-    const me = await currentProfile();
-    const target = await getProfile(targetUsername);
-    if (!me || !target) throw new Error("User not found.");
-    if (me.username === target.username) throw new Error("You cannot add yourself.");
-    me.friendRequests ||= { incoming: [], outgoing: [] };
-    target.friendRequests ||= { incoming: [], outgoing: [] };
-    if ((me.friends || []).includes(target.username)) throw new Error("Already friends.");
-    if (me.friendRequests.outgoing.includes(target.username)) throw new Error("Request already sent.");
-    if (target.friendRequests.incoming.includes(me.username)) throw new Error("Request already exists.");
-    me.friendRequests.outgoing.push(target.username);
-    target.friendRequests.incoming.push(me.username);
-    await putProfile(me);
-    await putProfile(target);
+    return callRpc("rivo_send_friend_request", { p_target_username: normalizeUsername(targetUsername) });
   }
-
   async function acceptFriendRequest(fromUsername) {
-    const me = await currentProfile();
-    const other = await getProfile(fromUsername);
-    if (!me || !other) throw new Error("User not found.");
-    me.friendRequests ||= { incoming: [], outgoing: [] };
-    other.friendRequests ||= { incoming: [], outgoing: [] };
-    me.friendRequests.incoming = me.friendRequests.incoming.filter(x => x !== other.username);
-    other.friendRequests.outgoing = other.friendRequests.outgoing.filter(x => x !== me.username);
-    me.friends = [...new Set([...(me.friends || []), other.username])];
-    other.friends = [...new Set([...(other.friends || []), me.username])];
-    await putProfile(me);
-    await putProfile(other);
+    return callRpc("rivo_accept_friend_request", { p_from_username: normalizeUsername(fromUsername) });
   }
-
   async function rejectFriendRequest(fromUsername) {
-    const me = await currentProfile();
-    const other = await getProfile(fromUsername);
-    if (!me || !other) throw new Error("User not found.");
-    me.friendRequests ||= { incoming: [], outgoing: [] };
-    other.friendRequests ||= { incoming: [], outgoing: [] };
-    me.friendRequests.incoming = me.friendRequests.incoming.filter(x => x !== other.username);
-    other.friendRequests.outgoing = other.friendRequests.outgoing.filter(x => x !== me.username);
-    await putProfile(me); await putProfile(other);
+    return callRpc("rivo_reject_friend_request", { p_from_username: normalizeUsername(fromUsername) });
   }
-
   async function removeFriend(username) {
-    const me = await currentProfile();
-    const other = await getProfile(username);
-    if (!me || !other) throw new Error("User not found.");
-    me.friends = (me.friends || []).filter(x => x !== other.username);
-    other.friends = (other.friends || []).filter(x => x !== me.username);
-    await putProfile(me); await putProfile(other);
+    return callRpc("rivo_remove_friend", { p_username: normalizeUsername(username) });
   }
-
-
   async function toggleLike(username) {
-    const me = await currentProfile();
-    const target = await getProfile(username);
-    if (!me || !target) throw new Error("User not found.");
-    if (me.username === target.username) throw new Error("You cannot like your own profile.");
-    target.likes ||= { count: 0, users: [] };
-    target.likes.users ||= [];
-    const index = target.likes.users.indexOf(me.username);
-    const liked = index >= 0;
-    if (liked) target.likes.users.splice(index, 1);
-    else target.likes.users.push(me.username);
-    target.likes.count = target.likes.users.length;
-    await putProfile(target);
-    return { liked: !liked, count: target.likes.count };
+    return callRpc("rivo_toggle_like", { p_username: normalizeUsername(username) });
   }
-
   function friendshipState(profile, targetUsername) {
     const u = normalizeUsername(targetUsername);
     if (!profile || !u) return "none";
@@ -321,39 +304,15 @@
     if ((profile.friendRequests?.incoming || []).includes(u)) return "incoming";
     return "none";
   }
-
   async function addView(username) {
-    const p = await getProfile(username);
-    if (!p) return;
-    p.stats ||= { views: 0 };
-    const key = `pf_view_${p.username}`;
-    if (sessionStorage.getItem(key)) return;
-    sessionStorage.setItem(key, "1");
-    p.stats.views = Number(p.stats.views || 0) + 1;
-    await putProfile(p);
+    return callRpc("rivo_add_view", { p_username: normalizeUsername(username) });
   }
 
-  async function ensureDemoAccount() {
-    const list = await listProfiles();
-    if (list.length) return false;
-    const samples = [
-      {username:"gx", displayName:"GX", bio:"Building digital identities, interfaces and game worlds.", template:"neon-arena", badges:["developer","creator"]},
-      {username:"nova", displayName:"Nova", bio:"Designer • gamer • visual storyteller", template:"anime-cinema", badges:["creator"]}
-    ];
-    for (const s of samples) {
-      const p = structuredClone(defaults);
-      Object.assign(p, s);
-      p.accent = templates.find(t => t[0] === s.template)?.[0] === "anime-cinema" ? "#ff6fb0" : "#55d6ff";
-      p.sections = structuredClone(defaults.sections);
-      await putProfile(p);
-    }
-    return true;
-  }
+  async function ensureDemoAccount() { return false; }
 
   async function compressImage(file, maxW=1400, quality=.82) {
     if (!file || !file.type.startsWith("image/")) throw new Error("Please choose a valid image.");
     if (file.size > 10 * 1024 * 1024) throw new Error("Image must be 10 MB or smaller.");
-    // Keep animated GIFs intact. Canvas would destroy animation.
     if (file.type === "image/gif") {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -374,7 +333,7 @@
   }
 
   async function readAudio(file) {
-    if (!file || !file.type.startsWith("audio/")) throw new Error("Please choose an audio file.");
+    if (!file || !file.type.startsWith("audio/")) throw new Error("Please choose a valid audio file.");
     if (file.size > 10 * 1024 * 1024) throw new Error("Audio must be 10 MB or smaller.");
     const allowed = ["audio/mpeg","audio/mp3","audio/ogg","audio/wav","audio/x-wav","audio/mp4","audio/aac","audio/webm"];
     if (!allowed.includes(file.type) && !/\.(mp3|ogg|wav|m4a|aac|webm)$/i.test(file.name)) {
@@ -382,7 +341,7 @@
     }
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => resolve({ data: String(reader.result), mime: file.type || "audio/mpeg", size: file.size, name: file.name });
+      reader.onload = () => resolve({ data:String(reader.result), mime:file.type || "audio/mpeg", size:file.size, name:file.name });
       reader.onerror = () => reject(new Error("Could not read audio."));
       reader.readAsDataURL(file);
     });
@@ -391,23 +350,38 @@
   function initials(p) {
     return (p?.displayName || p?.username || "?").split(/\s+/).filter(Boolean).slice(0,2).map(x=>x[0]).join("").toUpperCase();
   }
-
   function safeUrl(value) {
     try {
       const u = new URL(String(value || "").trim());
       return ["http:","https:"].includes(u.protocol) ? u.href : "";
     } catch { return ""; }
   }
-
   function escapeHtml(s) {
     return String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
+  if (sb) {
+    sb.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        sb.from("profiles").select("username").eq("id", session.user.id).maybeSingle()
+          .then(({data}) => { if (data?.username) cacheUsername(data.username); });
+      } else {
+        cacheUsername("");
+      }
+    });
+    sb.auth.getSession().then(({ data }) => {
+      if (data?.session?.user) {
+        sb.from("profiles").select("username").eq("id", data.session.user.id).maybeSingle()
+          .then(({data: row}) => { if (row?.username) cacheUsername(row.username); });
+      }
+    });
+  }
+
   window.PF = {
-    defaults, badgeCatalog, templates, openDB, getProfile, listProfiles, putProfile, deleteProfile,
+    defaults, badgeCatalog, templates, getProfile, listProfiles, putProfile: saveProfile, deleteProfile,
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
     updateProfile, saveProfile, searchUsers, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
-    removeFriend, toggleLike, friendshipState, addView, ensureDemoAccount, compressImage, readAudio, initials, escapeHtml, hashPassword, verifyPassword, safeUrl,
-    paths: {home:"../index.html", login:"login.html", signup:"signup.html", profile:"profile.html", editor:"editor.html", explore:"explore.html", friends:"friends.html"}
+    removeFriend, toggleLike, friendshipState, addView, ensureDemoAccount, compressImage, readAudio,
+    initials, escapeHtml, safeUrl
   };
 })();
