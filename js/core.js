@@ -537,7 +537,7 @@
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
     updateProfile, saveProfile, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
     removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, sendMessage,
-    listConversations, getMessages, subscribeMessages, ensureDemoAccount, compressImage, readAudio,
+    listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     initials, escapeHtml, safeUrl
   };
 })();

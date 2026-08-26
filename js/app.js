@@ -610,8 +610,38 @@
       activeUser = PF.normalizeUsername(username);
       const c = conversations.find(x => x.username === activeUser);
       activeUserId = c?.userId || "";
-      title.innerHTML = c
-        ? `<span class="thread-user-avatar">${avatarMini(c)}</span><span><b>${esc(c.displayName)}</b><small>@${esc(c.username)}</small></span>`
+      clearTimeout(typingStopTimer);
+      if (presence) {
+        try { await presence.update({ typingTo: "" }); } catch {}
+      }
+
+      let conversation = c;
+      if (!conversation || !activeUserId) {
+        try {
+          const profile = await PF.getProfile(activeUser);
+          if (profile) {
+            activeUserId = profile.userId || activeUserId;
+            conversation = conversation || {
+              username: profile.username,
+              userId: profile.userId || "",
+              displayName: profile.displayName || profile.username,
+              avatar: profile.avatar || "",
+              lastMessage: "Start a new conversation",
+              updatedLabel: "",
+              createdAt: ""
+            };
+            if (!c) {
+              conversations.unshift(conversation);
+            } else if (c.userId !== activeUserId) {
+              const idx = conversations.indexOf(c);
+              if (idx >= 0) conversations[idx] = { ...c, userId: activeUserId };
+            }
+          }
+        } catch {}
+      }
+
+      title.innerHTML = conversation
+        ? `<span class="thread-user-avatar">${avatarMini(conversation)}</span><span><b>${esc(conversation.displayName)}</b><small>@${esc(conversation.username)}</small></span>`
         : `<span><b>@${esc(activeUser)}</b></span>`;
       renderConversations();
       try {
@@ -668,22 +698,26 @@
     search.addEventListener("input", renderConversations);
 
     messageUnsubscribe = await PF.subscribeMessages(async msg => {
-      if (msg.sender_id !== me.id && msg.receiver_id !== me.id) return;
+      if (!msg || (msg.sender_id !== me.id && msg.receiver_id !== me.id)) return;
+
       const otherId = msg.sender_id === me.id ? msg.receiver_id : msg.sender_id;
-      const matchesActive = Boolean(activeUserId && otherId === activeUserId);
-      if (matchesActive) {
-        try {
-          const messages = await PF.getMessages(activeUser, 80);
-          renderThread(messages);
-        } catch {}
+      const isActiveConversation = Boolean(activeUser && activeUserId && otherId === activeUserId);
+      const isOwnEcho = msg.sender_id === me.id;
+
+      if (isActiveConversation) {
+        appendMessage({
+          id: msg.id,
+          sender_username: isOwnEcho ? me.username : activeUser,
+          receiver_username: isOwnEcho ? activeUser : me.username,
+          content: msg.content,
+          created_at: msg.created_at
+        });
       }
+
       try {
         await loadConversations();
         const active = conversations.find(c => c.username === activeUser);
         if (active?.userId) activeUserId = active.userId;
-        if (active?.userId && active.userId === otherId) {
-          try { renderThread(await PF.getMessages(activeUser, 80)); } catch {}
-        }
       } catch {}
     });
 
@@ -710,7 +744,7 @@
         if (!profileConversation) {
           const profile = await PF.getProfile(initialUser);
           if (profile) {
-            profileConversation = { username: profile.username, displayName: profile.displayName || profile.username, avatar: profile.avatar || "", lastMessage: "Start a new conversation", updatedLabel: "", createdAt: "", userId: "" };
+            profileConversation = { username: profile.username, userId: profile.userId || "", displayName: profile.displayName || profile.username, avatar: profile.avatar || "", lastMessage: "Start a new conversation", updatedLabel: "", createdAt: "" };
             conversations.unshift(profileConversation);
             renderConversations();
           }
