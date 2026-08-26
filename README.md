@@ -1,74 +1,51 @@
-# ProfileForge — Local Edition
+# Rivo — Cloud Edition
 
-ProfileForge is a local-first interactive profile/portfolio platform. This edition is intentionally built to run without a server, hosting, Supabase, OAuth provider, or API key.
+Rivo is now a **GitHub Pages + Supabase** project.
 
-## What works
+GitHub Pages hosts the HTML/CSS/JavaScript. Supabase provides the shared backend:
+- Supabase Auth: registration, login and persistent sessions
+- PostgreSQL: profiles, settings, friends, friend requests, likes and view counters
+- Supabase Storage: avatar, banner, mini image, music cover and music files
 
-- Username-only account creation and sign-in
-- Unique username validation and reserved-name protection
-- Real persistent storage with IndexedDB (browser-native local database; SQLite is intentionally not bundled in the no-server build)
-- Session persistence in the browser
-- Profile editor with live preview
-- Avatar, banner and floating mini-image upload with WebP compression
-- 50 visual template identities
-- Accent colors, radius and glow controls
-- Re-orderable profile sections
-- Social links, skills and projects
-- Badge selection
-- Public profile view using `profile.html?u=username`
-- Search by username or display name
-- Friend requests: send, accept, decline, remove
-- Profile views and basic statistics
-- Responsive desktop/tablet/mobile UI
-- English / Arabic direction toggle
-- No mock API calls and no fake Save buttons
+## Setup
 
-## Run
+### 1. Create a Supabase project
+Create a project at https://supabase.com/.
 
-Because this is a static local application, you can open `index.html` directly in a modern Chromium/Firefox browser.
+### 2. Create the database
+Open **SQL Editor** and run the entire `supabase_schema.sql` file.
 
-For the most consistent IndexedDB (browser-native local database; SQLite is intentionally not bundled in the no-server build) behavior, use a local static server:
+### 3. Configure Auth
+In **Authentication → Providers → Email**, turn **Confirm email** OFF for this version of Rivo.  
+The UI uses username + password; internally each username gets a private synthetic auth email such as `username@users.rivo.app`.
 
-```bash
-python -m http.server 8080
-```
+### 4. Add your public keys
+Open:
 
-Then open:
+`js/supabase-config.js`
 
-`http://localhost:8080/`
+Replace:
+- `url` with your Supabase Project URL
+- `anonKey` with the Supabase **anon/public** key
 
-No package installation is required.
+Do **not** put a `service_role` or secret key in the browser.
 
-## Data model
+### 5. Deploy to GitHub Pages
+Push the project to GitHub and publish it with GitHub Pages.
 
-All profile records live in the browser's IndexedDB (browser-native local database; SQLite is intentionally not bundled in the no-server build) database named `ProfileForgeLocal`.
+No PHP/Python server is required. The browser talks directly to Supabase over HTTPS.
 
-This means:
+## Important migration note
 
-- Data survives refreshes and browser restarts.
-- Data is local to this browser/device.
-- Other devices cannot see the same accounts.
-- Clearing site data removes the local database.
+The old build used IndexedDB, so data from the old local version is not automatically uploaded to Supabase.  
+Accounts created after this cloud version is configured are stored centrally and can be used from other devices.
 
-This local architecture is deliberate for a no-hosting environment. A hosted production release can later replace the storage adapter with Supabase without rebuilding the UI.
+## Media
 
-## Security note
+Rivo uploads selected images/audio to the `rivo-media` Storage bucket on profile save and then stores permanent URLs in PostgreSQL. This avoids keeping large base64 media blobs inside the profile row.
 
-This local edition does not claim to provide production-grade remote authentication. Username-only sign-in is appropriate for this offline/local product and deliberately avoids passwords and OAuth secrets.
+## Security
 
-## Structure
+Supabase Auth handles passwords. Database Row Level Security limits direct profile-row access to the signed-in owner. Public profile/search/social actions are exposed through controlled PostgreSQL functions.
 
-- `index.html` — landing page
-- `pages/login.html` — sign in
-- `pages/signup.html` — account creation
-- `pages/profile.html` — public profile
-- `pages/editor.html` — profile editor
-- `pages/explore.html` — search
-- `pages/friends.html` — friend management
-- `css/style.css` — complete visual system
-- `js/core.js` — IndexedDB (browser-native local database; SQLite is intentionally not bundled in the no-server build), authentication/session, profile data and social operations
-- `js/app.js` — page controllers and UI behavior
-
-## License
-
-MIT — see `LICENSE`.
+For a real production launch, add email verification, password reset and a custom server-side username/login flow instead of relying on synthetic auth email addresses.
