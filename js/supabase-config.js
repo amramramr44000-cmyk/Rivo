@@ -5,5 +5,5 @@
 */
 window.RIVO_SUPABASE = {
   url: "https://stfjcrcualeggmiygqur.supabase.co/rest/v1/",
-  anonKey: "sb_publishable_qk-z6tDGDPwG-sFck7xAlQ_84XGMhrv"
+  anonKey: "https://stfjcrcualeggmiygqur.supabase.co"
 };
