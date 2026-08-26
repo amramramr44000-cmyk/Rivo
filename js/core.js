@@ -131,7 +131,7 @@
     const force = !!options.force;
     if (!force) {
       const cached = cacheRead(CURRENT_PROFILE_CACHE_KEY, CURRENT_PROFILE_CACHE_TTL);
-      if (cached) return cached;
+      if (cached?.id) return cached;
     }
     const { data: { session }, error: sessionError } = await sb.auth.getSession();
     if (sessionError || !session?.user) return null;
@@ -142,6 +142,7 @@
     if (!data) return null;
     cacheUsername(data.username);
     const merged = mergeProfile(data, true);
+    merged.id = data.id;
     cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
     return merged;
   }
@@ -269,6 +270,7 @@
     cacheUsername(data.username);
     invalidateProfileCache(data.username);
     const merged = mergeProfile(data, true);
+    merged.id = data.id;
     cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
     cacheWrite(PROFILE_CACHE_PREFIX + data.username, merged);
     return merged;
@@ -416,10 +418,49 @@
   }
   async function subscribeMessages(callback) {
     requireClient();
-    const channel = sb.channel(`rivo-messages-${crypto.randomUUID()}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_messages" }, payload => callback?.(payload.new))
+    const { data: { session } } = await sb.auth.getSession();
+    const myId = session?.user?.id || null;
+    if (!myId) return () => {};
+    const channel = sb.channel(`rivo-messages-${myId}-${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_messages" }, payload => {
+        const row = payload?.new;
+        if (!row || (row.sender_id !== myId && row.receiver_id !== myId)) return;
+        callback?.(row);
+      })
       .subscribe();
     return () => { sb.removeChannel(channel); };
+  }
+  async function subscribePresence(username, onChange) {
+    requireClient();
+    const me = normalizeUsername(username);
+    if (!me) return { unsubscribe: async () => {}, update: async () => {} };
+    const channel = sb.channel("rivo-presence", {
+      config: { presence: { key: me } }
+    });
+    const state = { username: me, online: true, typingTo: "" };
+    const api = { state: {}, update: async () => {}, unsubscribe: async () => {} };
+    const emit = (event = "sync") => {
+      api.state = channel.presenceState();
+      onChange?.({ event, state: api.state });
+    };
+    channel.on("presence", { event: "sync" }, () => emit("sync"));
+    channel.on("presence", { event: "join" }, () => emit("join"));
+    channel.on("presence", { event: "leave" }, ({ key }) => onChange?.({ event: "leave", key, state: channel.presenceState() }));
+    await channel.subscribe(async s => {
+      if (s === "SUBSCRIBED") {
+        await channel.track(state);
+        emit("sync");
+      }
+    });
+    api.update = async patch => {
+      Object.assign(state, patch || {});
+      try { await channel.track(state); } catch {}
+    };
+    api.unsubscribe = async () => {
+      try { await channel.untrack(); } catch {}
+      await sb.removeChannel(channel);
+    };
+    return api;
   }
 
   async function ensureDemoAccount() { return false; }

@@ -511,77 +511,211 @@
     const me = await PF.currentProfile();
     if (!me) { location.href = "login.html"; return; }
     const list = $("#conversationList");
-    const empty = $("#messageEmpty");
     const search = $("#messageSearch");
     const thread = $("#messageThread");
     const title = $("#messageThreadTitle");
     const form = $("#messageForm");
     const input = $("#messageInput");
     const status = $("#messageStatus");
-    let activeUser = "";
-    let conversations = [];
-    let unsubscribe = null;
+    if (!list || !thread || !title || !form || !input || !status) return;
 
-    const scrollThread = () => { if (thread) thread.scrollTop = thread.scrollHeight; };
-    const avatarMini = p => p?.avatar ? `<img class="message-avatar" src="${esc(p.avatar)}" alt="">` : `<span class="message-avatar message-avatar-fallback">${esc(PF.initials(p))}</span>`;
+    let activeUser = "";
+    let activeUserId = "";
+    let conversations = [];
+    let messageUnsubscribe = null;
+    let presence = null;
+    let typingTimer = null;
+    let typingStopTimer = null;
+    const renderedMessageIds = new Set();
+
+    const scrollThread = () => { thread.scrollTop = thread.scrollHeight; };
+    const avatarMini = p => p?.avatar
+      ? `<img class="message-avatar" src="${esc(p.avatar)}" alt="">`
+      : `<span class="message-avatar message-avatar-fallback">${esc(PF.initials(p))}</span>`;
+
+    const getPresenceFor = username => {
+      const key = PF.normalizeUsername(username);
+      if (!presence || !key) return null;
+      const state = presence.state?.[key];
+      return Array.isArray(state) && state.length ? state[state.length - 1] : null;
+    };
+
+    const updateThreadPresence = () => {
+      if (!activeUser) { status.textContent = ""; return; }
+      const peer = getPresenceFor(activeUser);
+      if (!peer) {
+        status.innerHTML = `<span class="presence-dot offline"></span> Offline`;
+        return;
+      }
+      if (peer.typingTo === me.username) {
+        status.innerHTML = `<span class="presence-dot online"></span> Typing…`;
+      } else {
+        status.innerHTML = `<span class="presence-dot online"></span> Online`;
+      }
+    };
+
     const renderConversations = () => {
-      const q = String(search?.value || "").trim().toLowerCase().replace(/^@/, "");
-      const filtered = conversations.filter(c => !q || c.username.includes(q) || c.displayName.toLowerCase().includes(q));
-      list.innerHTML = filtered.length ? filtered.map(c => `<button type="button" class="conversation-item ${activeUser === c.username ? "active" : ""}" data-conversation="${esc(c.username)}"><span class="conversation-avatar">${avatarMini(c)}</span><span class="conversation-copy"><b>${esc(c.displayName)}</b><small>@${esc(c.username)}</small><em>${esc(c.lastMessage || "No messages yet")}</em></span><time>${esc(c.updatedLabel || "")}</time></button>`).join("") : `<div class="message-list-empty">${q ? "No matching conversations." : "No conversations yet."}</div>`;
+      const q = String(search.value || "").trim().toLowerCase().replace(/^@/, "");
+      const filtered = conversations.filter(c => !q || c.username.includes(q) || String(c.displayName || "").toLowerCase().includes(q));
+      list.innerHTML = filtered.length
+        ? filtered.map(c => `<button type="button" class="conversation-item ${activeUser === c.username ? "active" : ""}" data-conversation="${esc(c.username)}"><span class="conversation-avatar">${avatarMini(c)}</span><span class="conversation-copy"><b>${esc(c.displayName)}</b><small>@${esc(c.username)}</small><em>${esc(c.lastMessage || "No messages yet")}</em></span><time>${esc(c.updatedLabel || "")}</time></button>`).join("")
+        : `<div class="message-list-empty">${q ? "No matching conversations." : "No conversations yet."}</div>`;
       $$('[data-conversation]').forEach(btn => btn.onclick = () => openConversation(btn.dataset.conversation));
     };
+
+    const appendMessage = (m, keepBottom = true) => {
+      if (!m?.id || renderedMessageIds.has(String(m.id))) return;
+      renderedMessageIds.add(String(m.id));
+      const row = document.createElement("div");
+      row.className = `message-row ${m.sender_username === me.username ? "mine" : "theirs"}`;
+      const bubble = document.createElement("div");
+      bubble.className = "message-bubble";
+      bubble.dir = "auto";
+      bubble.setAttribute("data-message-id", String(m.id));
+      bubble.textContent = String(m.content ?? "");
+      const time = document.createElement("time");
+      time.textContent = new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      bubble.appendChild(time);
+      row.appendChild(bubble);
+      const placeholder = thread.querySelector(".message-empty");
+      if (placeholder) thread.innerHTML = "";
+      thread.appendChild(row);
+      if (keepBottom) scrollThread();
+    };
+
     const renderThread = messages => {
-      messages = [...messages].reverse();
-      if (!activeUser) { thread.innerHTML = `<div id="messageEmpty" class="message-empty"><div class="message-empty-icon">✉</div><h2>Choose a conversation</h2><p>Select someone from the left to start messaging.</p></div>`; return; }
-      thread.innerHTML = messages.length ? messages.map(m => `<div class="message-row ${m.sender_username === me.username ? "mine" : "theirs"}"><div class="message-bubble">${esc(m.content).replace(/\n/g,"<br>")}<time>${new Date(m.created_at).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})}</time></div></div>`).join("") : `<div class="message-empty"><div class="message-empty-icon">✉</div><h2>No messages yet</h2><p>Send the first text message.</p></div>`;
+      renderedMessageIds.clear();
+      thread.innerHTML = "";
+      if (!activeUser) {
+        thread.innerHTML = `<div id="messageEmpty" class="message-empty"><div class="message-empty-icon">✉</div><h2>Choose a conversation</h2><p>Select someone from the left to start messaging.</p></div>`;
+        return;
+      }
+      const ordered = [...messages].reverse();
+      if (!ordered.length) {
+        thread.innerHTML = `<div class="message-empty"><div class="message-empty-icon">✉</div><h2>No messages yet</h2><p>Send the first text message.</p></div>`;
+        return;
+      }
+      ordered.forEach(m => appendMessage(m, false));
       scrollThread();
     };
+
     async function loadConversations() {
       conversations = await PF.listConversations();
+      const active = conversations.find(c => c.username === activeUser);
+      if (active?.userId) activeUserId = active.userId;
       renderConversations();
     }
+
     async function openConversation(username) {
       activeUser = PF.normalizeUsername(username);
       const c = conversations.find(x => x.username === activeUser);
-      title.innerHTML = c ? `<span class="thread-user-avatar">${avatarMini(c)}</span><span><b>${esc(c.displayName)}</b><small>@${esc(c.username)}</small></span>` : esc("@" + activeUser);
-      status.textContent = "";
+      activeUserId = c?.userId || "";
+      title.innerHTML = c
+        ? `<span class="thread-user-avatar">${avatarMini(c)}</span><span><b>${esc(c.displayName)}</b><small>@${esc(c.username)}</small></span>`
+        : `<span><b>@${esc(activeUser)}</b></span>`;
       renderConversations();
-      try { renderThread(await PF.getMessages(activeUser)); input.disabled = false; input.focus(); }
-      catch (e) { notify(e.message, "error"); }
+      try {
+        const messages = await PF.getMessages(activeUser);
+        renderThread(messages);
+        updateThreadPresence();
+        input.disabled = false;
+        input.focus();
+      } catch (e) { notify(e.message, "error"); }
     }
-    form?.addEventListener("submit", async e => {
+
+    async function updateTyping(value) {
+      if (!presence) return;
+      const isTyping = Boolean(value && activeUser);
+      clearTimeout(typingStopTimer);
+      await presence.update({ typingTo: isTyping ? activeUser : "" });
+      if (isTyping) {
+        typingStopTimer = setTimeout(() => { presence?.update({ typingTo: "" }); }, 1200);
+      }
+    }
+
+    form.addEventListener("submit", async e => {
       e.preventDefault();
-      const text = input.value.trim();
+      const text = String(input.value || "").trim();
       if (!activeUser || !text) return;
       input.disabled = true;
+      clearTimeout(typingStopTimer);
       try {
-        await PF.sendMessage(activeUser, text);
+        const sent = await PF.sendMessage(activeUser, text);
         input.value = "";
-        renderThread([...(await PF.getMessages(activeUser))]);
-        await loadConversations();
+        await presence?.update({ typingTo: "" });
+        if (sent) {
+          appendMessage(sent);
+          const idx = conversations.findIndex(c => c.username === activeUser);
+          if (idx >= 0) {
+            conversations[idx] = { ...conversations[idx], lastMessage: sent.content, createdAt: sent.created_at, updatedLabel: new Date(sent.created_at).toLocaleDateString([], { month: "short", day: "2-digit" }) };
+          } else {
+            conversations.unshift({ username: activeUser, userId: activeUserId, displayName: activeUser, avatar: "", lastMessage: sent.content, createdAt: sent.created_at, updatedLabel: "Now" });
+          }
+          conversations.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+          renderConversations();
+        }
       } catch (e) { notify(e.message, "error"); }
       finally { input.disabled = false; input.focus(); }
     });
-    search?.addEventListener("input", renderConversations);
-    unsubscribe = await PF.subscribeMessages(async msg => {
-      if (msg.sender_username === activeUser || msg.receiver_username === activeUser) {
-        try { renderThread(await PF.getMessages(activeUser)); } catch {}
-      }
-      try { await loadConversations(); } catch {}
+
+    input.addEventListener("input", () => {
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(() => updateTyping(input.value.trim()), 80);
     });
-    window.addEventListener("beforeunload", () => { try { unsubscribe?.(); } catch {} });
-    if (list) await loadConversations();
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+    });
+    search.addEventListener("input", renderConversations);
+
+    messageUnsubscribe = await PF.subscribeMessages(async msg => {
+      if (msg.sender_id !== me.id && msg.receiver_id !== me.id) return;
+      const otherId = msg.sender_id === me.id ? msg.receiver_id : msg.sender_id;
+      const matchesActive = Boolean(activeUserId && otherId === activeUserId);
+      if (matchesActive) {
+        try {
+          const messages = await PF.getMessages(activeUser, 80);
+          renderThread(messages);
+        } catch {}
+      }
+      try {
+        await loadConversations();
+        const active = conversations.find(c => c.username === activeUser);
+        if (active?.userId) activeUserId = active.userId;
+        if (active?.userId && active.userId === otherId) {
+          try { renderThread(await PF.getMessages(activeUser, 80)); } catch {}
+        }
+      } catch {}
+    });
+
+    presence = await PF.subscribePresence(me.username, evt => {
+      if (presence) presence.state = evt?.state || {};
+      updateThreadPresence();
+    });
+
+    window.addEventListener("beforeunload", () => {
+      try { messageUnsubscribe?.(); } catch {}
+      try { presence?.unsubscribe?.(); } catch {}
+      clearTimeout(typingTimer);
+      clearTimeout(typingStopTimer);
+    });
+
+    await loadConversations();
     input.disabled = true;
-    status.textContent = "Text messages only · no voice or files";
+    status.textContent = "";
+
     const initialUser = PF.normalizeUsername(new URLSearchParams(location.search).get("u") || "");
     if (initialUser && initialUser !== me.username) {
       try {
-        const profile = await PF.getProfile(initialUser);
-        if (profile && !conversations.some(c => c.username === initialUser)) {
-          conversations.unshift({ username: profile.username, displayName: profile.displayName || profile.username, avatar: profile.avatar || "", lastMessage: "Start a new conversation", updatedLabel: "" });
-          renderConversations();
+        let profileConversation = conversations.find(c => c.username === initialUser);
+        if (!profileConversation) {
+          const profile = await PF.getProfile(initialUser);
+          if (profile) {
+            profileConversation = { username: profile.username, displayName: profile.displayName || profile.username, avatar: profile.avatar || "", lastMessage: "Start a new conversation", updatedLabel: "", createdAt: "", userId: "" };
+            conversations.unshift(profileConversation);
+            renderConversations();
+          }
         }
-        if (profile) await openConversation(initialUser);
+        if (profileConversation) await openConversation(initialUser);
       } catch (e) { notify(e.message, "error"); }
     }
   }
