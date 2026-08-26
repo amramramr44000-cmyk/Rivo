@@ -4,6 +4,6 @@
    NEVER put a service_role/secret key in this file.
 */
 window.RIVO_SUPABASE = {
-  url: "https://stfjcrcualeggmiygqur.supabase.co/rest/v1/",
-  anonKey: "https://stfjcrcualeggmiygqur.supabase.co"
+  url: "https://stfjcrcualeggmiygqur.supabase.co",
+  anonKey: "sb_publishable_qk-z6tDGDPwG-sFck7xAlQ_84XGMhrv"
 };
