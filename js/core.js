@@ -22,6 +22,28 @@
 
   const CACHE_KEY = "rivo_username";
   const MEDIA_BUCKET = "rivo-media";
+  const PROFILE_CACHE_PREFIX = "rivo_profile_v2:";
+  const PROFILE_CACHE_TTL = 45 * 1000;
+  const CURRENT_PROFILE_CACHE_KEY = "rivo_current_profile_v2";
+  const CURRENT_PROFILE_CACHE_TTL = 20 * 1000;
+
+  function cacheRead(key, ttl) {
+    try {
+      const raw = sessionStorage.getItem(key);
+      if (!raw) return null;
+      const item = JSON.parse(raw);
+      if (!item || Date.now() - Number(item.t) > ttl) { sessionStorage.removeItem(key); return null; }
+      return item.v ?? null;
+    } catch { return null; }
+  }
+  function cacheWrite(key, value) {
+    try { sessionStorage.setItem(key, JSON.stringify({ t: Date.now(), v: value })); } catch {}
+  }
+  function cacheDelete(key) { try { sessionStorage.removeItem(key); } catch {} }
+  function invalidateProfileCache(username = "") {
+    if (username) cacheDelete(PROFILE_CACHE_PREFIX + normalizeUsername(username));
+    cacheDelete(CURRENT_PROFILE_CACHE_KEY);
+  }
 
   const defaults = {
     username: "", displayName: "", bio: "", description: "", location: "", website: "",
@@ -99,38 +121,76 @@
     if (includePrivate) {
       const priv = row?.private_data || {};
       p.friendRequests = priv.friendRequests || { incoming: [], outgoing: [] };
+      p.messageSettings = { whoCanMessage: priv.messageSettings?.whoCanMessage === "friends" ? "friends" : "everyone" };
     }
     return p;
   }
 
-  async function currentProfile() {
+  async function currentProfile(options = {}) {
     requireClient();
-    const { data: { user }, error: userError } = await sb.auth.getUser();
-    if (userError || !user) return null;
+    const force = !!options.force;
+    if (!force) {
+      const cached = cacheRead(CURRENT_PROFILE_CACHE_KEY, CURRENT_PROFILE_CACHE_TTL);
+      if (cached) return cached;
+    }
+    const { data: { session }, error: sessionError } = await sb.auth.getSession();
+    if (sessionError || !session?.user) return null;
     const { data, error } = await sb.from("profiles")
       .select("id,username,public_data,private_data,created_at,updated_at")
-      .eq("id", user.id).maybeSingle();
+      .eq("id", session.user.id).maybeSingle();
     if (error) throw error;
     if (!data) return null;
     cacheUsername(data.username);
-    return mergeProfile(data, true);
+    const merged = mergeProfile(data, true);
+    cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
+    return merged;
   }
 
-  async function getProfile(username) {
+  async function getProfile(username, options = {}) {
     requireClient();
     const u = normalizeUsername(username);
     if (!u) return null;
+    if (!options.force) {
+      const cached = cacheRead(PROFILE_CACHE_PREFIX + u, PROFILE_CACHE_TTL);
+      if (cached) return cached;
+    }
     const { data, error } = await sb.rpc("rivo_get_public_profile", { p_username: u });
     if (error) throw error;
     if (!data) return null;
+    cacheWrite(PROFILE_CACHE_PREFIX + u, data);
     return data;
+  }
+
+  async function getProfiles(usernames) {
+    requireClient();
+    const names = [...new Set((usernames || []).map(normalizeUsername).filter(Boolean))];
+    if (!names.length) return [];
+    const missing = [];
+    const ready = [];
+    for (const u of names) {
+      const cached = cacheRead(PROFILE_CACHE_PREFIX + u, PROFILE_CACHE_TTL);
+      if (cached) ready.push(cached); else missing.push(u);
+    }
+    if (missing.length) {
+      const { data, error } = await sb.rpc("rivo_get_public_profiles", { p_usernames: missing });
+      if (error) throw error;
+      for (const p of (Array.isArray(data) ? data : [])) { cacheWrite(PROFILE_CACHE_PREFIX + p.username, p); ready.push(p); }
+    }
+    const byName = new Map(ready.map(p => [p.username, p]));
+    return names.map(u => byName.get(u)).filter(Boolean);
   }
 
   async function listProfiles() {
     requireClient();
+    const key = "rivo_profiles_list_v2";
+    const cached = cacheRead(key, 30 * 1000);
+    if (cached) return cached;
     const { data, error } = await sb.rpc("rivo_list_public_profiles", { p_limit: 24 });
     if (error) throw error;
-    return Array.isArray(data) ? data : [];
+    const list = Array.isArray(data) ? data : [];
+    list.forEach(p => cacheWrite(PROFILE_CACHE_PREFIX + p.username, p));
+    cacheWrite(key, list);
+    return list;
   }
 
   async function searchUsers(query) {
@@ -156,6 +216,7 @@
     const blob = dataUrlToBlob(dataUrl);
     const { error } = await sb.storage.from(MEDIA_BUCKET).upload(path, blob, {
       contentType: blob.type || mime || "application/octet-stream",
+      cacheControl: "31536000",
       upsert: false
     });
     if (error) throw error;
@@ -163,7 +224,8 @@
   }
 
   async function persistMedia(profile) {
-    const uid = (await sb.auth.getUser()).data.user?.id;
+    const { data: { session } } = await sb.auth.getSession();
+    const uid = session?.user?.id;
     if (!uid) throw new Error("Your session expired. Please sign in again.");
     const out = structuredClone(profile);
     const stamp = `${Date.now()}-${crypto.randomUUID()}`;
@@ -171,17 +233,17 @@
       ["avatar", "image/webp"], ["banner", "image/webp"], ["miniImage", "image/webp"],
       ["music.cover", "image/webp"], ["music.audio", out.music?.mime || "audio/mpeg"]
     ];
-    for (const [key, fallbackMime] of media) {
+    await Promise.all(media.map(async ([key, fallbackMime]) => {
       const parts = key.split(".");
       const value = parts.length === 1 ? out[key] : out[parts[0]]?.[parts[1]];
-      if (!String(value || "").startsWith("data:")) continue;
+      if (!String(value || "").startsWith("data:")) return;
       const ext = fallbackMime.startsWith("image/") ? "webp" :
-        (fallbackMime.includes("ogg") ? "ogg" : fallbackMime.includes("wav") ? "wav" : "mp3");
+        (fallbackMime.includes("ogg") ? "ogg" : fallbackMime.includes("wav") ? "wav" : fallbackMime.includes("mp4") ? "m4a" : "mp3");
       const path = `${uid}/${stamp}-${parts.join("-")}.${ext}`;
       const url = await uploadDataUrl(value, path, fallbackMime);
       if (parts.length === 1) out[key] = url;
       else { out[parts[0]] ||= {}; out[parts[0]][parts[1]] = url; }
-    }
+    }));
     return out;
   }
 
@@ -198,12 +260,18 @@
       public_data: publicData(row),
       updated_at: new Date().toISOString()
     };
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session?.user?.id) throw new Error("Your session expired. Please sign in again.");
     const { data, error } = await sb.from("profiles")
-      .update(payload).eq("id", (await sb.auth.getUser()).data.user.id)
+      .update(payload).eq("id", session.user.id)
       .select("username,public_data,private_data,created_at,updated_at").single();
     if (error) throw error;
     cacheUsername(data.username);
-    return mergeProfile(data, true);
+    invalidateProfileCache(data.username);
+    const merged = mergeProfile(data, true);
+    cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
+    cacheWrite(PROFILE_CACHE_PREFIX + data.username, merged);
+    return merged;
   }
 
   async function updateProfile(patch) {
@@ -282,19 +350,34 @@
   }
 
   async function sendFriendRequest(targetUsername) {
-    return callRpc("rivo_send_friend_request", { p_target_username: normalizeUsername(targetUsername) });
+    const u = normalizeUsername(targetUsername);
+    const result = await callRpc("rivo_send_friend_request", { p_target_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   async function acceptFriendRequest(fromUsername) {
-    return callRpc("rivo_accept_friend_request", { p_from_username: normalizeUsername(fromUsername) });
+    const u = normalizeUsername(fromUsername);
+    const result = await callRpc("rivo_accept_friend_request", { p_from_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   async function rejectFriendRequest(fromUsername) {
-    return callRpc("rivo_reject_friend_request", { p_from_username: normalizeUsername(fromUsername) });
+    const u = normalizeUsername(fromUsername);
+    const result = await callRpc("rivo_reject_friend_request", { p_from_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   async function removeFriend(username) {
-    return callRpc("rivo_remove_friend", { p_username: normalizeUsername(username) });
+    const u = normalizeUsername(username);
+    const result = await callRpc("rivo_remove_friend", { p_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   async function toggleLike(username) {
-    return callRpc("rivo_toggle_like", { p_username: normalizeUsername(username) });
+    const u = normalizeUsername(username);
+    const result = await callRpc("rivo_toggle_like", { p_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   function friendshipState(profile, targetUsername) {
     const u = normalizeUsername(targetUsername);
@@ -306,6 +389,37 @@
   }
   async function addView(username) {
     return callRpc("rivo_add_view", { p_username: normalizeUsername(username) });
+  }
+
+  async function getMessageSettings() {
+    const me = await currentProfile();
+    return { whoCanMessage: me?.messageSettings?.whoCanMessage === "friends" ? "friends" : "everyone" };
+  }
+  async function setMessageSetting(value) {
+    const v = value === "friends" ? "friends" : "everyone";
+    await callRpc("rivo_set_message_setting", { p_who_can_message: v });
+    invalidateProfileCache(currentUsername());
+    return v;
+  }
+  async function sendMessage(username, content) {
+    const u = normalizeUsername(username);
+    const text = String(content || "").trim();
+    if (!u || !text) throw new Error("Message and recipient are required.");
+    if (text.length > 2000) throw new Error("Message is too long (max 2000 characters).");
+    return callRpc("rivo_send_message", { p_receiver_username: u, p_content: text });
+  }
+  async function listConversations() {
+    return callRpc("rivo_list_conversations");
+  }
+  async function getMessages(username, limit = 80) {
+    return callRpc("rivo_get_messages", { p_other_username: normalizeUsername(username), p_limit: Math.max(1, Math.min(Number(limit) || 80, 200)) });
+  }
+  async function subscribeMessages(callback) {
+    requireClient();
+    const channel = sb.channel(`rivo-messages-${crypto.randomUUID()}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_messages" }, payload => callback?.(payload.new))
+      .subscribe();
+    return () => { sb.removeChannel(channel); };
   }
 
   async function ensureDemoAccount() { return false; }
@@ -380,8 +494,9 @@
   window.PF = {
     defaults, badgeCatalog, templates, getProfile, listProfiles, putProfile: saveProfile, deleteProfile,
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
-    updateProfile, saveProfile, searchUsers, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
-    removeFriend, toggleLike, friendshipState, addView, ensureDemoAccount, compressImage, readAudio,
+    updateProfile, saveProfile, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
+    removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, sendMessage,
+    listConversations, getMessages, subscribeMessages, ensureDemoAccount, compressImage, readAudio,
     initials, escapeHtml, safeUrl
   };
 })();
