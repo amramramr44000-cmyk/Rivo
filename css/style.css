@@ -239,3 +239,26 @@ img{max-width:100%}
   .profile-mini-standalone{margin:-2px 0 6px}
   .profile-mini-standalone .profile-mini-float{width:46px;height:46px}
 }
+
+
+/* Rivo messaging + performance UI */
+.messages-shell{padding-bottom:34px}
+.messages-layout{display:grid;grid-template-columns:320px minmax(0,1fr);min-height:650px;overflow:hidden;border-radius:22px}
+.conversation-panel{border-inline-end:1px solid var(--border);display:flex;flex-direction:column;min-width:0}
+.messages-panel-head{padding:16px;border-bottom:1px solid var(--border);display:grid;gap:10px}
+.messages-panel-head h2{margin:0;font-size:15px}
+.conversation-list{overflow:auto;padding:8px}
+.conversation-item{display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:10px;align-items:center;width:100%;border:1px solid transparent;background:transparent;color:inherit;border-radius:14px;padding:10px;text-align:start;cursor:pointer}
+.conversation-item:hover,.conversation-item.active{background:rgba(255,255,255,.045);border-color:rgba(255,255,255,.07)}
+.conversation-avatar,.thread-user-avatar{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;overflow:hidden;background:rgba(255,255,255,.06);flex:0 0 auto}
+.message-avatar{width:100%;height:100%;object-fit:cover;display:block}.message-avatar-fallback{display:grid;place-items:center;font-size:12px;font-weight:800}
+.conversation-copy{min-width:0;display:grid;gap:2px}.conversation-copy b,.conversation-copy small,.conversation-copy em{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.conversation-copy b{font-size:12px}.conversation-copy small{font-size:9px;color:#748093}.conversation-copy em{font-style:normal;font-size:10px;color:#96a0af}.conversation-item time{font-size:8px;color:#667284;white-space:nowrap}
+.message-list-empty{padding:24px 12px;text-align:center;color:#7e8897;font-size:11px}
+.thread-panel{display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-width:0}
+.thread-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border);min-height:70px}
+.thread-head>div{display:flex;align-items:center;gap:10px;min-width:0}.thread-head>div>span{display:flex;align-items:center;gap:10px}.thread-head b{display:block;font-size:13px}.thread-head small{display:block;color:#7f8b9c;font-size:9px;margin-top:2px}.thread-placeholder{font-size:12px;color:#7e899a}.thread-status{font-size:9px;color:#6f7b8d;text-align:end}
+.message-thread{padding:18px;overflow:auto;display:flex;flex-direction:column;gap:8px;min-height:0;background:radial-gradient(circle at top right,rgba(116,136,255,.06),transparent 36%)}
+.message-row{display:flex}.message-row.mine{justify-content:flex-end}.message-row.theirs{justify-content:flex-start}.message-bubble{max-width:min(74%,620px);padding:9px 11px;border-radius:15px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.065);font-size:11px;line-height:1.55;white-space:normal;overflow-wrap:anywhere}.message-row.mine .message-bubble{background:color-mix(in srgb,var(--accent) 13%,rgba(255,255,255,.045));border-color:color-mix(in srgb,var(--accent) 22%,rgba(255,255,255,.065))}.message-bubble time{display:block;margin-top:5px;color:#657184;font-size:8px}
+.message-empty{margin:auto;text-align:center;color:#8993a2;max-width:300px}.message-empty-icon{width:54px;height:54px;border-radius:16px;display:grid;place-items:center;background:rgba(255,255,255,.045);margin:0 auto 12px;font-size:22px}.message-empty h2{font-size:16px;margin:0 0 6px;color:#d5dbe4}.message-empty p{font-size:10px;line-height:1.6;margin:0}
+.message-compose{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:12px;border-top:1px solid var(--border);background:rgba(10,13,19,.72)}.message-compose textarea{width:100%;resize:none;min-height:42px;max-height:120px;border:1px solid var(--border);background:rgba(255,255,255,.035);color:inherit;border-radius:13px;padding:10px 12px;font:inherit;font-size:11px;outline:none}.message-compose textarea:focus{border-color:color-mix(in srgb,var(--accent) 45%,transparent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 10%,transparent)}
+@media(max-width:760px){.messages-layout{grid-template-columns:1fr;min-height:calc(100vh - 210px)}.conversation-panel{border-inline-end:0;border-bottom:1px solid var(--border);max-height:290px}.thread-panel{min-height:500px}.thread-status{display:none}.message-bubble{max-width:84%}}
