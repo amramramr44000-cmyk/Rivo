@@ -72,6 +72,7 @@ begin
   if not found then return null; end if;
 
   return jsonb_build_object(
+    'userId', r.id,
     'username', r.username,
     'displayName', coalesce(r.public_data->>'displayName', r.username),
     'bio', coalesce(r.public_data->>'bio',''),
@@ -554,6 +555,7 @@ with ranked as (
   select * from ranked where rn = 1
 )
 select jsonb_build_object(
+  'userId', other.id,
   'username', other.username,
   'displayName', coalesce(other.public_data->>'displayName', other.username),
   'avatar', coalesce(other.public_data->>'avatar',''),
