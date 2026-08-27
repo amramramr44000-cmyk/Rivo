@@ -916,7 +916,8 @@ begin
   create temporary table if not exists tmp_rivo_story_paths(path text) on commit drop;
   truncate tmp_rivo_story_paths;
   insert into tmp_rivo_story_paths(path) select storage_path from public.rivo_stories where expires_at <= now();
-  delete from storage.objects o using tmp_rivo_story_paths x where o.bucket_id='rivo-media' and o.name=x.path;
+  -- Supabase does not allow direct DELETEs from storage.objects from SQL.
+  -- Remove expired DB rows here; media objects must be removed through the Storage API.
   delete from public.rivo_stories where expires_at <= now();
   get diagnostics deleted_count = row_count;
   return deleted_count;
@@ -979,15 +980,14 @@ revoke all on function public.rivo_get_story_statuses(text[]) from public;
 grant execute on function public.rivo_get_story_statuses(text[]) to anon, authenticated;
 
 create or replace function public.rivo_delete_story(p_story_id bigint)
-returns boolean language plpgsql security definer set search_path=public as $$
+returns jsonb language plpgsql security definer set search_path=public as $$
 declare s public.rivo_stories;
 begin
   select * into s from public.rivo_stories where id=p_story_id for update;
-  if s.id is null then return false; end if;
+  if s.id is null then return jsonb_build_object('deleted',false); end if;
   if s.user_id <> auth.uid() then raise exception 'Access denied'; end if;
-  delete from storage.objects where bucket_id='rivo-media' and name=s.storage_path;
   delete from public.rivo_stories where id=s.id;
-  return true;
+  return jsonb_build_object('deleted',true,'storage_path',s.storage_path);
 end;
 $$;
 revoke all on function public.rivo_delete_story(bigint) from public;
@@ -1040,7 +1040,8 @@ begin
   select id into target from public.profiles where username=lower(trim(both '@' from p_username));
   if target is null then return false; end if;
   if target=auth.uid() then raise exception 'You cannot delete the current admin account from this dashboard'; end if;
-  delete from storage.objects where bucket_id='rivo-media' and name like target::text || '/stories/%';
+  -- Storage objects must be deleted through the Storage API / server-side service role.
+  -- Account deletion still removes DB rows through the auth cascade.
   delete from auth.users where id=target;
   return true;
 end; $$;

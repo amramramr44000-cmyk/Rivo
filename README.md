@@ -72,3 +72,7 @@ The dashboard is at `pages/admin.html`. Never expose a service-role key in the w
 
 ## Stories
 Run `supabase_schema.sql` to enable one active Story per account for 12 hours, avatar story rings, story likes, unique viewer counts, owner deletion, and expiry cleanup. Story images are resized to 1080px and videos are reduced to a mobile-friendly 720p/24fps format in browsers that support MediaRecorder.
+
+## Story storage cleanup fix
+
+Supabase does not permit deleting `storage.objects` directly from PostgreSQL. Story deletion now removes the database row through RPC and removes the owner's media through the Supabase Storage API in the client. Expired stories are removed from the database by the cleanup RPC; a trusted server/Edge Function should be used for unattended physical cleanup of expired Storage objects.
