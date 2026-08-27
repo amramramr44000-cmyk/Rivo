@@ -68,3 +68,7 @@ insert into public.rivo_admin_users(user_id)
 select id from public.profiles where username='YOUR_USERNAME';
 ```
 The dashboard is at `pages/admin.html`. Never expose a service-role key in the website.
+
+
+## Stories
+Run `supabase_schema.sql` to enable one active Story per account for 12 hours, avatar story rings, story likes, unique viewer counts, owner deletion, and expiry cleanup. Story images are resized to 1080px and videos are reduced to a mobile-friendly 720p/24fps format in browsers that support MediaRecorder.
