@@ -76,7 +76,7 @@
       });
     };
     const load = async () => { try { notifications = await PF.listNotifications(50); render(); } catch { count.textContent = "Unavailable"; } };
-    button.onclick = async e => { e.stopPropagation(); const open = !pop.classList.contains("open"); pop.classList.toggle("open", open); if (open) await load(); if (open && "Notification" in window && Notification.permission === "default") await PF.requestBrowserNotifications(); };
+    button.onclick = async e => { e.stopPropagation(); const open = !pop.classList.contains("open"); pop.classList.toggle("open", open); if (open) await load(); };
     $("[data-notification-readall]", wrap).onclick = async () => { try { await PF.markAllNotificationsRead(); notifications = notifications.map(n => ({...n,read_at:new Date().toISOString()})); render(); } catch {} };
     document.addEventListener("click", e => { if (!wrap.contains(e.target)) pop.classList.remove("open"); });
     try {
@@ -86,7 +86,7 @@
         render();
         const body = label(n);
         notify(body, "success");
-        if (document.hidden) await PF.notifyBrowser("Rivo", {body, tag:`rivo-${n.id}`});
+        if (document.hidden && PF.browserNotificationsEnabled()) await PF.notifyBrowser("Rivo", {body, tag:`rivo-${n.id}`});
       });
       window.addEventListener("beforeunload", () => { try { unsubscribe?.(); } catch {} });
     } catch {}
@@ -381,9 +381,9 @@
     const friends = Array.isArray(p.friends) ? p.friends : [];
     const more = Math.max(0, friends.length - 5);
     const badges = badgePills(p);
-    const likedBy = p.likes?.users || [];
+    const likedBy = Array.isArray(p.likes?.users) ? p.likes.users : [];
     const meUsername = PF.currentUsername();
-    const liked = !!meUsername && likedBy.includes(meUsername);
+    const liked = !!meUsername && (p.likes?.viewerLiked === true || likedBy.includes(meUsername));
     const likeCount = Number(p.likes?.count ?? likedBy.length ?? 0);
     const mini = p.miniImage ? `<div class="profile-mini-float" title="Decorative image"><img src="${esc(p.miniImage)}" alt=""></div>` : "";
     const frame = `frame-${p.avatarFrame || "none"}`;
@@ -463,9 +463,9 @@
     const friendProfiles = await PF.getProfiles(friends);
     if (!isMe) await PF.addView(username);
     p = !isMe ? await PF.getProfile(username) : p;
-    p.likes ||= {count:0, users:[]};
-    p.likes.users ||= [];
-    p.likes.count = p.likes.users.length;
+    p.likes ||= {count:0, users:[], viewerLiked:false};
+    p.likes.count = Number(p.likes.count || 0);
+    p.likes.viewerLiked = !!p.likes.viewerLiked;
     root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship });
     bindPlayer(root);
     $(`[data-add-friend]`)?.addEventListener("click", async () => {
@@ -733,9 +733,30 @@
         const messages = await PF.getMessages(activeUser);
         renderThread(messages);
         updateThreadPresence();
-        input.disabled = false;
-        input.focus();
+        await updateComposerAccess();
+        if (!input.disabled) input.focus();
       } catch (e) { notify(e.message, "error"); }
+    }
+
+    async function updateComposerAccess() {
+      if (!activeUser) { input.disabled = true; return false; }
+      try {
+        const target = await PF.getProfile(activeUser, { force: true });
+        const rule = target?.messagePrivacy || "everyone";
+        const meFresh = await PF.currentProfile({ force: true });
+        const allowed = rule === "everyone" || (rule === "friends" && PF.friendshipState(meFresh, activeUser) === "friends");
+        input.disabled = !allowed;
+        if (!allowed) {
+          status.innerHTML = rule === "nobody"
+            ? '<span class="presence-dot offline"></span> Messages closed'
+            : '<span class="presence-dot offline"></span> Friends only';
+          form.querySelector('button[type="submit"]')?.setAttribute("disabled", "disabled");
+        } else {
+          form.querySelector('button[type="submit"]')?.removeAttribute("disabled");
+          updateThreadPresence();
+        }
+        return allowed;
+      } catch { return true; }
     }
 
     async function updateTyping(value) {
@@ -753,6 +774,10 @@
       const text = String(input.value || "").trim();
       if (!activeUser || !text) return;
       clearTimeout(typingStopTimer);
+      try {
+        const allowed = await PF.canMessageProfile(activeUser);
+        if (!allowed) { notify("This user accepts messages from friends only.", "error"); await updateComposerAccess(); return; }
+      } catch (gateError) { notify(gateError.message, "error"); await updateComposerAccess(); return; }
 
       // Optimistic send: show the bubble instantly instead of waiting on the
       // round trip, so sending *feels* fast even on a slow connection. It's
@@ -810,11 +835,6 @@
       }
     });
     search.addEventListener("input", renderConversations);
-    const emojiTray = document.createElement("div");
-    emojiTray.className = "message-emoji-tray";
-    emojiTray.innerHTML = PF.REACTION_SET.map(e => `<button type="button" title="${esc(e)}">${esc(e)}</button>`).join("");
-    form.parentElement?.insertBefore(emojiTray, form);
-    $$('button', emojiTray).forEach(btn => btn.onclick = () => { input.value += btn.textContent; input.focus(); input.dispatchEvent(new Event("input", {bubbles:true})); });
 
     let resyncing = false;
     const resyncThread = async () => {
@@ -948,16 +968,51 @@
         : "Anyone with a Rivo account can message you.";
     const currentSetting = me.messageSettings?.whoCanMessage === "friends" ? "friends"
       : me.messageSettings?.whoCanMessage === "nobody" ? "nobody" : "everyone";
+    const applyScheme = mode => {
+      const v = mode === "light" ? "light" : "dark";
+      localStorage.setItem("rivo_color_scheme", v);
+      document.documentElement.dataset.colorScheme = v;
+      document.querySelector('meta[name="theme-color"]')?.setAttribute("content", v === "light" ? "#f3f6fb" : "#07090e");
+    };
     const mode = localStorage.getItem("rivo_color_scheme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    applyScheme(mode);
     $("#themeDark") && ($("#themeDark").checked = mode === "dark");
     $("#themeLight") && ($("#themeLight").checked = mode === "light");
-    $$('input[name="themeMode"]').forEach(r => r.addEventListener("change", () => { localStorage.setItem("rivo_color_scheme", r.value); document.documentElement.dataset.colorScheme = r.value; }));
+    $$('input[name="themeMode"]').forEach(r => r.addEventListener("change", () => applyScheme(r.value)));
+
     const nbtn = $("#enableNotifications"), nsupport = $("#notificationSupport");
     if (nbtn) {
       const supported = "Notification" in window;
-      nsupport.textContent = !supported ? "This browser does not support web notifications." : `Permission: ${Notification.permission}`;
-      nbtn.disabled = !supported;
-      nbtn.onclick = async () => { const result = await PF.requestBrowserNotifications(); nsupport.textContent = `Permission: ${result}`; nbtn.textContent = result === "granted" ? "Notifications enabled ✓" : "Enable browser notifications"; };
+      const syncNotificationUI = () => {
+        const permission = supported ? Notification.permission : "unsupported";
+        const enabled = supported && permission === "granted" && PF.browserNotificationsEnabled();
+        nbtn.disabled = !supported;
+        nbtn.setAttribute("aria-pressed", String(enabled));
+        nbtn.textContent = enabled ? "Notifications enabled ✓ — turn off" : "Enable notifications";
+        nsupport.textContent = !supported
+          ? "This browser does not support web notifications."
+          : permission === "denied"
+            ? "Notifications are blocked by the browser. Allow Rivo notifications in browser/site settings, then enable them here."
+            : enabled ? "Message and friend-request alerts are enabled on this device." : "Notifications are currently off on this device.";
+      };
+      syncNotificationUI();
+      nbtn.onclick = async () => {
+        try {
+          if (!supported) return;
+          const currentlyEnabled = Notification.permission === "granted" && PF.browserNotificationsEnabled();
+          if (currentlyEnabled) {
+            PF.setBrowserNotificationsEnabled(false);
+            syncNotificationUI();
+            notify("Browser notifications turned off", "success");
+            return;
+          }
+          const result = await PF.requestBrowserNotifications();
+          if (result === "granted") PF.setBrowserNotificationsEnabled(true);
+          else PF.setBrowserNotificationsEnabled(false);
+          syncNotificationUI();
+          notify(result === "granted" ? "Browser notifications enabled" : "Browser notifications not enabled", result === "granted" ? "success" : "error");
+        } catch (e) { notify(e.message || "Unable to change notification setting", "error"); }
+      };
     }
     try { const isAdmin = await PF.adminStatus(); $$("[data-admin-link]").forEach(a => a.classList.toggle("hidden", !isAdmin)); } catch {}
     if (select) select.value = currentSetting;

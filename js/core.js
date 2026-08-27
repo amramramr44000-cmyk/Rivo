@@ -414,6 +414,18 @@
     invalidateProfileCache(currentUsername());
     return v;
   }
+  async function canMessageProfile(username) {
+    const u = normalizeUsername(username);
+    if (!u) return false;
+    const target = await getProfile(u, { force: true });
+    if (!target) throw new Error("User not found.");
+    const rule = normalizeWhoCanMessage(target.messagePrivacy);
+    if (rule === "nobody") throw new Error("This user has closed their messages.");
+    if (rule === "everyone") return true;
+    const me = await currentProfile({ force: true });
+    if (!me) throw new Error("Please sign in again.");
+    return friendshipState(me, u) === "friends";
+  }
   async function sendMessage(username, content) {
     const u = normalizeUsername(username);
     // Normalize to NFC so the same word typed on different devices/keyboards
@@ -714,6 +726,13 @@
     return async () => { try { await sb.removeChannel(channel); } catch {} };
   }
 
+  function browserNotificationsEnabled() {
+    try { return localStorage.getItem("rivo_browser_notifications") === "on"; } catch { return false; }
+  }
+  function setBrowserNotificationsEnabled(enabled) {
+    try { localStorage.setItem("rivo_browser_notifications", enabled ? "on" : "off"); } catch {}
+    return !!enabled;
+  }
   async function requestBrowserNotifications() {
     if (!("Notification" in window)) return "unsupported";
     if (Notification.permission === "granted") return "granted";
@@ -721,6 +740,7 @@
   }
 
   async function notifyBrowser(title, options = {}) {
+    if (!browserNotificationsEnabled()) return false;
     try {
       if (!("Notification" in window) || Notification.permission !== "granted") return false;
       const reg = await navigator.serviceWorker?.getRegistration?.();
@@ -795,10 +815,10 @@
     defaults, badgeCatalog, templates, getProfile, listProfiles, putProfile: saveProfile, deleteProfile,
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
     updateProfile, saveProfile, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
-    removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, sendMessage,
+    removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, canMessageProfile, sendMessage,
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
-    subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, listProfileVisitors, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminGetUserDetails,
+    subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, browserNotificationsEnabled, setBrowserNotificationsEnabled, notifyBrowser, listProfileVisitors, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminGetUserDetails,
     setProfileViewPreference, initials, escapeHtml, safeUrl
   };
 })();
