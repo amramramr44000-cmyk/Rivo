@@ -115,7 +115,7 @@
     input = document.createElement("input");
     input.id = "rivoStoryPicker";
     input.type = "file";
-    input.accept = "image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime,video/x-m4v";
+    input.accept = "image/jpeg,image/png,image/webp";
     input.hidden = true;
     document.body.appendChild(input);
     input.addEventListener("change", async () => {
@@ -127,7 +127,7 @@
         const existing = await PF.getStory(PF.currentUsername(), { countView: false }).catch(() => null);
         if (existing?.active) { openStoryViewer(PF.currentUsername()); return; }
         document.body.classList.add("story-uploading");
-        notify("Preparing story…", "success");
+        notify("Preparing image…", "success");
         await PF.createStoryFromFile(file);
         notify("Story added for 12 hours", "success");
         updateStoryTriggers(PF.currentUsername(), true);
@@ -159,167 +159,65 @@
     clearTimeout(modal._storyTimer);
     modal._storyTimer = null;
     modal.classList.remove("open");
-    document.documentElement.classList.remove("story-open");
-    document.body.classList.remove("story-open");
-    try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
+    const progress = $("[data-story-progress]", modal);
+    if (progress) { progress.style.animation = "none"; progress.style.animationPlayState = "paused"; }
     const media = $("[data-story-media]", modal);
-    if (media?.tagName === "VIDEO") {
-      try {
-        media.pause();
-        media.removeAttribute("src");
-        media.load();
-      } catch {}
-    }
-  }
-
-  const storyMemoryCache = new Map();
-  const STORY_CACHE_MS = 90 * 1000;
-
-  function getCachedStory(username) {
-    const item = storyMemoryCache.get(PF.normalizeUsername(username));
-    if (!item || Date.now() - item.cachedAt > STORY_CACHE_MS) return null;
-    return item.story;
-  }
-
-  function cacheStory(username, story) {
-    const u = PF.normalizeUsername(username);
-    if (u) storyMemoryCache.set(u, { cachedAt: Date.now(), story });
-    return story;
+    if (media?.tagName === "IMG") { try { media.removeAttribute("src"); } catch {} }
   }
 
   async function openStoryViewer(username) {
     const u = PF.normalizeUsername(username);
     if (!u) return;
-
     let modal = $("#rivoStoryViewer");
     if (!modal) {
       modal = document.createElement("div");
       modal.id = "rivoStoryViewer";
       modal.className = "story-viewer-backdrop";
-      modal.innerHTML = `
-        <div class="story-viewer" role="dialog" aria-modal="true" aria-label="Story">
-          <div class="story-progress" aria-hidden="true"><span data-story-progress></span></div>
-          <button type="button" class="story-close icon-btn" data-story-close aria-label="Close story">×</button>
-          <div class="story-head">
-            <span class="avatar-story-head" data-story-avatar></span>
-            <span class="story-owner-copy"><b data-story-name>Story</b><small data-story-time></small></span>
-            <button type="button" class="story-delete btn btn-sm btn-danger hidden" data-story-delete>Delete</button>
-          </div>
-          <div class="story-media-wrap" data-story-media-wrap>
-            <div class="story-loading"><span class="story-spinner"></span><span>Loading story…</span></div>
-          </div>
-          <div class="story-controls" data-story-controls>
-            <button type="button" class="story-tool story-sound hidden" data-story-sound aria-label="Turn sound on"><span data-story-sound-icon>🔇</span><span data-story-sound-label>Sound off</span></button>
-            <button type="button" class="story-tool" data-story-fullscreen aria-label="Open fullscreen"><span>⛶</span><span>Fullscreen</span></button>
-          </div>
-          <div class="story-bottom">
-            <button type="button" class="story-like-btn" data-story-like aria-label="Like story"><span data-story-like-icon>♡</span><span data-story-like-count>0</span></button>
-            <span class="story-views" data-story-owner-stats></span>
-          </div>
-          <div class="story-error hidden" data-story-error></div>
-        </div>`;
+      modal.innerHTML = `<div class="story-viewer" role="dialog" aria-modal="true" aria-label="Story"><button type="button" class="story-close icon-btn" data-story-close aria-label="Close">×</button><div class="story-progress"><span data-story-progress></span></div><div class="story-head"><span class="avatar-story-head" data-story-avatar></span><span class="story-owner-copy"><b data-story-name>Story</b><small data-story-time></small></span><button type="button" class="story-delete btn btn-sm btn-danger hidden" data-story-delete>Delete</button></div><div class="story-media-wrap" data-story-media-wrap></div><div class="story-bottom"><button type="button" class="story-like-btn" data-story-like><span data-story-like-icon>♡</span><span data-story-like-count>0</span></button><span class="story-views" data-story-owner-stats></span></div><div class="story-error hidden" data-story-error></div></div>`;
       document.body.appendChild(modal);
-
-      modal.addEventListener("click", e => {
-        if (e.target === modal || e.target.closest("[data-story-close]")) closeStoryViewer();
-      });
-
+      modal.addEventListener("click", e => { if (e.target === modal || e.target.closest("[data-story-close]")) closeStoryViewer(); });
       $("[data-story-delete]", modal).addEventListener("click", async () => {
         const id = Number(modal.dataset.storyId || 0);
         if (!id || !confirm("Delete this story?")) return;
         try {
           await PF.deleteStory(id);
-          storyMemoryCache.delete(PF.currentUsername());
           notify("Story deleted", "success");
           updateStoryTriggers(PF.currentUsername(), false);
-          window.dispatchEvent(new CustomEvent("rivo-story-changed"));
           closeStoryViewer();
-        } catch (e) {
-          notify(e.message || "Could not delete story", "error");
-        }
+        } catch (e) { notify(e.message || "Could not delete story", "error"); }
       });
-
       $("[data-story-like]", modal).addEventListener("click", async () => {
         const id = Number(modal.dataset.storyId || 0);
-        if (!id || !PF.currentUsername()) return notify("Sign in to like stories.", "error");
+        if (!id) return;
+        if (!PF.currentUsername()) return notify("Sign in to like stories.", "error");
         try {
           const result = await PF.toggleStoryLike(id);
           $("[data-story-like-icon]", modal).textContent = result.liked ? "♥" : "♡";
           $("[data-story-like-count]", modal).textContent = String(result.likes_count ?? 0);
-          const cached = getCachedStory(modal.dataset.storyUser || "");
-          if (cached) cacheStory(modal.dataset.storyUser, { ...cached, liked: !!result.liked, likes_count: Number(result.likes_count ?? 0) });
-        } catch (e) {
-          notify(e.message || "Could not update story like", "error");
-        }
-      });
-
-      $("[data-story-sound]", modal).addEventListener("click", async () => {
-        const media = $("[data-story-media]", modal);
-        if (!media || media.tagName !== "VIDEO") return;
-        media.muted = !media.muted;
-        if (!media.muted) {
-          try { await media.play(); } catch {}
-        }
-        $("[data-story-sound-icon]", modal).textContent = media.muted ? "🔇" : "🔊";
-        $("[data-story-sound-label]", modal).textContent = media.muted ? "Sound off" : "Sound on";
-      });
-
-      $("[data-story-fullscreen]", modal).addEventListener("click", async () => {
-        const viewer = $(".story-viewer", modal);
-        try {
-          if (document.fullscreenElement) await document.exitFullscreen?.();
-          else if (viewer?.requestFullscreen) await viewer.requestFullscreen();
-        } catch {}
-      });
-
-      modal.addEventListener("dblclick", e => {
-        const media = e.target.closest?.("[data-story-media]");
-        if (!media) return;
-        if (media.tagName === "IMG") media.classList.toggle("zoomed");
-        if (media.tagName === "VIDEO" && media.paused) media.play().catch(() => {});
-      });
-
-      modal.addEventListener("pointerdown", e => {
-        const media = e.target.closest?.("[data-story-media]");
-        if (!media || media.tagName !== "IMG" || e.pointerType === "mouse") return;
-        const rect = media.getBoundingClientRect();
-        if (!rect.width || !rect.height) return;
-        media.style.transformOrigin = `${Math.round(((e.clientX - rect.left) / rect.width) * 100)}% ${Math.round(((e.clientY - rect.top) / rect.height) * 100)}%`;
+        } catch (e) { notify(e.message || "Could not update story like", "error"); }
       });
     }
 
     clearTimeout(modal._storyTimer);
     modal._storyTimer = null;
     modal.classList.add("open");
-    document.documentElement.classList.add("story-open");
-    document.body.classList.add("story-open");
     modal.dataset.storyId = "";
-    modal.dataset.storyUser = u;
     $("[data-story-error]", modal).classList.add("hidden");
     $("[data-story-delete]", modal).classList.add("hidden");
     $("[data-story-like]", modal).classList.remove("hidden");
-    $("[data-story-sound]", modal).classList.add("hidden");
-    $("[data-story-sound-icon]", modal).textContent = "🔇";
-    $("[data-story-sound-label]", modal).textContent = "Sound off";
-    $("[data-story-media-wrap]", modal).innerHTML = `<div class="story-loading"><span class="story-spinner"></span><span>Loading story…</span></div>`;
-    const progress = $("[data-story-progress]", modal);
-    progress.style.animation = "none";
-    progress.style.width = "0%";
-
+    $("[data-story-media-wrap]", modal).innerHTML = `<div class="story-loading">Loading story…</div>`;
     try {
-      let story = getCachedStory(u);
-      if (!story) {
-        story = await PF.getStory(u, { countView: true });
-        cacheStory(u, story);
-      }
-
+      const story = await PF.getStory(u, { countView: true });
       if (!story?.active) {
         closeStoryViewer();
-        storyMemoryCache.delete(u);
         updateStoryTriggers(u, false);
         return notify("This story has expired.", "error");
       }
-
+      if (!String(story.media_type || "").startsWith("image/")) {
+        closeStoryViewer();
+        updateStoryTriggers(u, false);
+        return notify("This story format is no longer supported. Please add an image story.", "error");
+      }
       const owner = story.username === PF.currentUsername();
       modal.dataset.storyId = String(story.id);
       $("[data-story-name]", modal).textContent = story.display_name || story.username;
@@ -330,56 +228,28 @@
       $("[data-story-like-icon]", modal).textContent = story.liked ? "♥" : "♡";
       $("[data-story-like-count]", modal).textContent = String(story.likes_count ?? 0);
       $("[data-story-owner-stats]", modal).textContent = owner ? `👁 ${story.views_count ?? 0} views` : "";
-
-      const durationForTimer = Math.max(3, Math.min(Number(story.duration_seconds || (story.media_type.startsWith("image/") ? 12 : 30)), 30));
+      const durationForTimer = 12;
+      const progress = $("[data-story-progress]", modal);
+      progress.style.animation = "none";
+      void progress.offsetWidth;
+      progress.style.animation = `storyProgress ${durationForTimer}s linear forwards`;
+      clearTimeout(modal._storyTimer);
       const mediaWrap = $("[data-story-media-wrap]", modal);
-      const isVideo = story.media_type.startsWith("video/");
-
-      const startProgressAndTimer = () => {
-        progress.style.animation = "none";
-        void progress.offsetWidth;
-        progress.style.animation = `storyProgress ${durationForTimer}s linear forwards`;
+      mediaWrap.innerHTML = `<img data-story-media src="${esc(story.media_url)}" alt="Story" decoding="async" fetchpriority="high">`;
+      const media = $("[data-story-media]", modal);
+      const startTimer = () => {
         clearTimeout(modal._storyTimer);
+        progress.style.animationPlayState = "running";
         modal._storyTimer = setTimeout(() => closeStoryViewer(), durationForTimer * 1000);
       };
-
-      if (isVideo) {
-        mediaWrap.innerHTML = `<video data-story-media class="story-media-video" playsinline autoplay muted controls preload="auto" fetchpriority="high" src="${esc(story.media_url)}"></video>`;
-        const media = $("[data-story-media]", modal);
-        const sound = $("[data-story-sound]", modal);
-        sound.classList.remove("hidden");
-        media.muted = true;
-        media.defaultMuted = true;
-        media.volume = .9;
-
-        media.addEventListener("loadedmetadata", () => {
-          media.classList.add("is-ready");
-          startProgressAndTimer();
-        }, { once: true });
-        media.addEventListener("canplay", () => media.classList.add("is-ready"), { once: true });
-        media.addEventListener("ended", () => closeStoryViewer());
-        media.addEventListener("error", () => {
-          $("[data-story-error]", modal).textContent = "This video could not be played. Try again or refresh.";
-          $("[data-story-error]", modal).classList.remove("hidden");
-        }, { once: true });
-        media.play().catch(() => {});
-      } else {
-        mediaWrap.innerHTML = `<img data-story-media decoding="async" loading="eager" fetchpriority="high" src="${esc(story.media_url)}" alt="Story">`;
-        const media = $("[data-story-media]", modal);
-        media.addEventListener("load", () => {
-          media.classList.add("is-ready");
-          startProgressAndTimer();
-        }, { once: true });
-        media.addEventListener("error", () => {
-          $("[data-story-error]", modal).textContent = "This story image could not be loaded.";
-          $("[data-story-error]", modal).classList.remove("hidden");
-        }, { once: true });
-        if (media.complete) {
-          media.classList.add("is-ready");
-          startProgressAndTimer();
-        }
-      }
-
+      progress.style.animationPlayState = "paused";
+      if (media?.complete) startTimer();
+      else media?.addEventListener("load", startTimer, { once: true });
+      media?.addEventListener("error", () => {
+        clearTimeout(modal._storyTimer);
+        $$("[data-story-progress]", modal).forEach(el => { el.style.animation = "none"; });
+        $$("[data-story-media-wrap]", modal).forEach(el => { el.innerHTML = `<div class="story-error">Unable to load this image.</div>`; });
+      }, { once: true });
       updateStoryTriggers(u, true);
     } catch (e) {
       $("[data-story-error]", modal).textContent = e.message || "Could not load story";
@@ -387,6 +257,7 @@
       $("[data-story-media-wrap]", modal).innerHTML = "";
     }
   }
+
   function initStorySystem() {
     ensureStoryPicker();
     document.addEventListener("click", e => {
@@ -410,14 +281,6 @@
   }
 
   document.addEventListener("DOMContentLoaded", async () => {
-    if (!document.querySelector('link[data-rivo-preconnect]')) {
-      const preconnect = document.createElement("link");
-      preconnect.rel = "preconnect";
-      preconnect.href = "https://stfjcrcualeggmiygqur.supabase.co";
-      preconnect.crossOrigin = "";
-      preconnect.dataset.rivoPreconnect = "1";
-      document.head.appendChild(preconnect);
-    }
     nav(); initMenu(); initStorySystem();
     $$('[data-profile-link]').forEach(a => { const me = PF.currentUsername(); if (me) a.href = `profile.html?u=${encodeURIComponent(me)}`; });
     $("[data-logout]")?.addEventListener("click", e => { e.preventDefault(); PF.clearSession(); location.href = "../index.html"; });
