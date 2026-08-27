@@ -402,3 +402,61 @@ html[data-color-scheme="light"] .feature-card p,html[data-color-scheme="light"] 
 .story-error{position:absolute;left:20px;right:20px;bottom:78px;padding:12px;border-radius:14px;background:rgba(255,75,100,.12);border:1px solid rgba(255,75,100,.24);font-size:11px;color:#ffd4da;z-index:13}
 .story-uploading::after{content:"Preparing story…";position:fixed;left:50%;bottom:78px;transform:translateX(-50%);z-index:2500;padding:9px 13px;border-radius:999px;background:rgba(8,10,15,.92);border:1px solid rgba(255,255,255,.1);color:#fff;font-size:10px;box-shadow:0 15px 40px rgba(0,0,0,.28)}
 @media(max-width:760px){.story-viewer-backdrop{padding:0}.story-viewer{width:100vw;height:100vh;max-height:none;border-radius:0;border:0}.story-close{top:14px;right:12px}.story-head{top:26px}.story-bottom{padding-bottom:calc(18px + env(safe-area-inset-bottom))}}
+
+
+/* Rivo Stories V8 polish — circular rings, faster/cleaner viewer, mobile media controls */
+.story-open{overflow:hidden!important;overscroll-behavior:none!important}
+.avatar-story-trigger{box-sizing:border-box;aspect-ratio:1/1;vertical-align:middle}
+.avatar-story-trigger.has-story>.avatar-xs,
+.avatar-story-trigger.has-story>.avatar-sm{border-radius:50%!important;overflow:hidden}
+.avatar-story-trigger.has-story{box-shadow:0 0 0 1px rgba(255,255,255,.08),0 8px 24px rgba(0,0,0,.10)}
+.profile-avatar-button{box-sizing:border-box;aspect-ratio:1/1}
+.profile-avatar-button.has-story{box-shadow:0 0 0 1px rgba(255,255,255,.10),0 12px 34px rgba(0,0,0,.14)}
+.profile-avatar-button.has-story .profile-avatar{border-radius:50%!important}
+
+.story-viewer-backdrop{padding:12px;touch-action:manipulation}
+.story-viewer{width:min(460px,96vw);height:min(860px,94vh);min-height:520px;background:#05070b;contain:layout paint;isolation:isolate}
+.story-progress{top:max(8px,env(safe-area-inset-top));height:4px;background:rgba(255,255,255,.18)}
+.story-progress>span{background:linear-gradient(90deg,#fff,#dce8ff);box-shadow:0 0 10px rgba(255,255,255,.35)}
+.story-head{left:14px;right:104px;top:calc(24px + env(safe-area-inset-top));min-height:38px}
+.avatar-story-head{width:40px;height:40px;flex:0 0 40px}
+.story-owner-copy b{font-size:13px}.story-owner-copy small{font-size:10px}
+.story-delete{white-space:nowrap;min-width:60px}
+.story-media-wrap{position:relative;overflow:hidden;background:
+  radial-gradient(circle at 50% 15%,rgba(120,145,255,.15),transparent 35%),
+  linear-gradient(180deg,#080a0f,#030407)}
+.story-media-wrap img,.story-media-wrap video{width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity .16s ease,transform .25s cubic-bezier(.2,.7,.2,1);will-change:opacity,transform}
+.story-media-wrap img.is-ready,.story-media-wrap video.is-ready{opacity:1}
+.story-media-wrap img.zoomed{transform:scale(1.65);cursor:zoom-out}
+.story-media-video{background:#020307}
+.story-loading{display:flex;align-items:center;justify-content:center;gap:9px;color:rgba(255,255,255,.78);font-size:12px}
+.story-spinner{width:18px;height:18px;border:2px solid rgba(255,255,255,.18);border-top-color:#fff;border-radius:50%;animation:storySpin .7s linear infinite}
+@keyframes storySpin{to{transform:rotate(360deg)}}
+.story-controls{position:absolute;right:12px;bottom:82px;z-index:14;display:flex;align-items:center;gap:7px;pointer-events:auto}
+.story-tool{min-height:36px;padding:0 10px;border:1px solid rgba(255,255,255,.18);border-radius:999px;background:rgba(3,5,9,.55);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:#fff;display:inline-flex;align-items:center;gap:6px;font:700 10px/1 system-ui,sans-serif;cursor:pointer}
+.story-tool span:first-child{font-size:15px;line-height:1}
+.story-tool:active{transform:scale(.97)}
+.story-bottom{padding:54px 16px calc(16px + env(safe-area-inset-bottom));background:linear-gradient(transparent,rgba(0,0,0,.80))}
+.story-like-btn{min-height:42px;padding:0 14px}
+.story-like-btn span:first-child{font-size:21px}
+.story-views{font-size:11px}
+.story-error{bottom:92px}
+@media (max-width:760px){
+  .avatar-story-trigger.has-story>.avatar-xs,.avatar-story-trigger.has-story>.avatar-sm{border-width:2px!important}
+  .profile-avatar-button.has-story{padding:3px}
+  .profile-avatar-button.has-story .profile-avatar{border-width:4px!important}
+  .story-viewer-backdrop{padding:0;align-items:stretch}
+  .story-viewer{width:100vw;height:100dvh;min-height:0;max-height:none;border-radius:0;border:0}
+  .story-close{top:calc(12px + env(safe-area-inset-top));right:10px;width:40px;height:40px}
+  .story-head{top:calc(22px + env(safe-area-inset-top));left:12px;right:102px}
+  .story-controls{right:10px;bottom:calc(86px + env(safe-area-inset-bottom));flex-direction:column;align-items:flex-end}
+  .story-tool{min-height:40px;padding:0 11px;font-size:10px}
+  .story-bottom{padding-left:13px;padding-right:13px}
+  .story-media-wrap img.zoomed{transform:scale(1.45)}
+}
+@media (max-width:380px){
+  .story-tool span:last-child{display:none}
+  .story-tool{width:40px;justify-content:center;padding:0}
+  .story-controls{bottom:calc(84px + env(safe-area-inset-bottom))}
+}
+
