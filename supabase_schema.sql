@@ -107,6 +107,10 @@ begin
     'likes', jsonb_build_object(
       'count', coalesce((r.public_data->'likes'->>'count')::int,0)
     ),
+    -- Only the privacy *choice* is exposed publicly (never the friend list or
+    -- requests) so a viewer's profile page can show a "Messages closed"
+    -- state instead of a Message button that would just fail on send.
+    'messagePrivacy', coalesce(r.private_data->'messageSettings'->>'whoCanMessage','everyone'),
     'createdAt', r.created_at,
     'updatedAt', r.updated_at
   );
@@ -433,13 +437,19 @@ drop policy if exists "rivo_messages_insert_sender" on public.rivo_messages;
 
 -- Store messaging preference privately inside the existing private_data JSON.
 -- Default is everyone, so existing users keep their current behavior.
+-- 'nobody' fully closes messages: nobody at all can message this user,
+-- friends included.
 create or replace function public.rivo_set_message_setting(p_who_can_message text)
 returns text
 language plpgsql
 security definer
 set search_path = public
 as $$
-declare v text := case when p_who_can_message = 'friends' then 'friends' else 'everyone' end;
+declare v text := case
+  when p_who_can_message = 'friends' then 'friends'
+  when p_who_can_message = 'nobody' then 'nobody'
+  else 'everyone'
+end;
 begin
   update public.profiles
   set private_data = jsonb_set(
@@ -481,7 +491,15 @@ begin
   if me.id = target.id then raise exception 'You cannot message yourself'; end if;
 
   can_receive := coalesce(target.private_data->'messageSettings'->>'whoCanMessage','everyone');
-  are_friends := coalesce(me.public_data->'friends','[]'::jsonb) ? target.username;
+  if can_receive = 'nobody' then
+    raise exception 'This user has closed their messages';
+  end if;
+  -- Friendship must be verified against the *receiver's* own friend list,
+  -- not the sender's. Reading it off `me` meant a stale/one-sided friends
+  -- entry on the sender's side could let a non-friend slip past a
+  -- "friends only" setting; checking `target` is the actual source of
+  -- truth for who target has accepted.
+  are_friends := coalesce(target.public_data->'friends','[]'::jsonb) ? me.username;
   if can_receive = 'friends' and not are_friends then
     raise exception 'This user accepts messages from friends only';
   end if;
