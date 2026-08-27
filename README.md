@@ -49,3 +49,22 @@ Rivo uploads selected images/audio to the `rivo-media` Storage bucket on profile
 Supabase Auth handles passwords. Database Row Level Security limits direct profile-row access to the signed-in owner. Public profile/search/social actions are exposed through controlled PostgreSQL functions.
 
 For a real production launch, add email verification, password reset and a custom server-side username/login flow instead of relying on synthetic auth email addresses.
+
+
+## Performance + messaging
+
+The newer build keeps the existing profile schema/data intact and adds: cached profile reads, batched friend/profile loading, debounced search, parallel media uploads, and a dedicated text-only messaging system.
+
+After deploying the code, run the latest `supabase_schema.sql` once in Supabase SQL Editor. The migration only adds the `rivo_messages` table/functions and messaging preference data under each profile's existing `private_data`.
+
+
+## Rivo v5 upgrade
+This build adds PWA installation, light/dark mode, realtime notification center, browser notifications, five message reactions, emoji-only message styling, profile visitor tracking, and a protected admin dashboard.
+
+### One-time Supabase admin bootstrap
+After applying the full `supabase_schema.sql`, make your own account an admin once from the Supabase SQL Editor:
+```sql
+insert into public.rivo_admin_users(user_id)
+select id from public.profiles where username='YOUR_USERNAME';
+```
+The dashboard is at `pages/admin.html`. Never expose a service-role key in the website.
