@@ -22,6 +22,33 @@
 
   const CACHE_KEY = "rivo_username";
   const MEDIA_BUCKET = "rivo-media";
+  const PROFILE_CACHE_PREFIX = "rivo_profile_v2:";
+  // Shortened from the previous 45s/20s: long TTLs made message-privacy
+  // changes, new avatars, etc. feel like they "didn't save" because a
+  // stale cached copy kept getting served. Short TTLs + the explicit
+  // invalidateProfileCache() calls after every write keep things both
+  // fast (still cached for rapid repeat reads) and accurate.
+  const PROFILE_CACHE_TTL = 20 * 1000;
+  const CURRENT_PROFILE_CACHE_KEY = "rivo_current_profile_v2";
+  const CURRENT_PROFILE_CACHE_TTL = 8 * 1000;
+
+  function cacheRead(key, ttl) {
+    try {
+      const raw = sessionStorage.getItem(key);
+      if (!raw) return null;
+      const item = JSON.parse(raw);
+      if (!item || Date.now() - Number(item.t) > ttl) { sessionStorage.removeItem(key); return null; }
+      return item.v ?? null;
+    } catch { return null; }
+  }
+  function cacheWrite(key, value) {
+    try { sessionStorage.setItem(key, JSON.stringify({ t: Date.now(), v: value })); } catch {}
+  }
+  function cacheDelete(key) { try { sessionStorage.removeItem(key); } catch {} }
+  function invalidateProfileCache(username = "") {
+    if (username) cacheDelete(PROFILE_CACHE_PREFIX + normalizeUsername(username));
+    cacheDelete(CURRENT_PROFILE_CACHE_KEY);
+  }
 
   const defaults = {
     username: "", displayName: "", bio: "", description: "", location: "", website: "",
@@ -99,38 +126,77 @@
     if (includePrivate) {
       const priv = row?.private_data || {};
       p.friendRequests = priv.friendRequests || { incoming: [], outgoing: [] };
+      p.messageSettings = { whoCanMessage: ["friends","nobody"].includes(priv.messageSettings?.whoCanMessage) ? priv.messageSettings.whoCanMessage : "everyone" };
     }
     return p;
   }
 
-  async function currentProfile() {
+  async function currentProfile(options = {}) {
     requireClient();
-    const { data: { user }, error: userError } = await sb.auth.getUser();
-    if (userError || !user) return null;
+    const force = !!options.force;
+    if (!force) {
+      const cached = cacheRead(CURRENT_PROFILE_CACHE_KEY, CURRENT_PROFILE_CACHE_TTL);
+      if (cached?.id) return cached;
+    }
+    const { data: { session }, error: sessionError } = await sb.auth.getSession();
+    if (sessionError || !session?.user) return null;
     const { data, error } = await sb.from("profiles")
       .select("id,username,public_data,private_data,created_at,updated_at")
-      .eq("id", user.id).maybeSingle();
+      .eq("id", session.user.id).maybeSingle();
     if (error) throw error;
     if (!data) return null;
     cacheUsername(data.username);
-    return mergeProfile(data, true);
+    const merged = mergeProfile(data, true);
+    merged.id = data.id;
+    cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
+    return merged;
   }
 
-  async function getProfile(username) {
+  async function getProfile(username, options = {}) {
     requireClient();
     const u = normalizeUsername(username);
     if (!u) return null;
+    if (!options.force) {
+      const cached = cacheRead(PROFILE_CACHE_PREFIX + u, PROFILE_CACHE_TTL);
+      if (cached) return cached;
+    }
     const { data, error } = await sb.rpc("rivo_get_public_profile", { p_username: u });
     if (error) throw error;
     if (!data) return null;
+    cacheWrite(PROFILE_CACHE_PREFIX + u, data);
     return data;
+  }
+
+  async function getProfiles(usernames) {
+    requireClient();
+    const names = [...new Set((usernames || []).map(normalizeUsername).filter(Boolean))];
+    if (!names.length) return [];
+    const missing = [];
+    const ready = [];
+    for (const u of names) {
+      const cached = cacheRead(PROFILE_CACHE_PREFIX + u, PROFILE_CACHE_TTL);
+      if (cached) ready.push(cached); else missing.push(u);
+    }
+    if (missing.length) {
+      const { data, error } = await sb.rpc("rivo_get_public_profiles", { p_usernames: missing });
+      if (error) throw error;
+      for (const p of (Array.isArray(data) ? data : [])) { cacheWrite(PROFILE_CACHE_PREFIX + p.username, p); ready.push(p); }
+    }
+    const byName = new Map(ready.map(p => [p.username, p]));
+    return names.map(u => byName.get(u)).filter(Boolean);
   }
 
   async function listProfiles() {
     requireClient();
+    const key = "rivo_profiles_list_v2";
+    const cached = cacheRead(key, 30 * 1000);
+    if (cached) return cached;
     const { data, error } = await sb.rpc("rivo_list_public_profiles", { p_limit: 24 });
     if (error) throw error;
-    return Array.isArray(data) ? data : [];
+    const list = Array.isArray(data) ? data : [];
+    list.forEach(p => cacheWrite(PROFILE_CACHE_PREFIX + p.username, p));
+    cacheWrite(key, list);
+    return list;
   }
 
   async function searchUsers(query) {
@@ -156,6 +222,7 @@
     const blob = dataUrlToBlob(dataUrl);
     const { error } = await sb.storage.from(MEDIA_BUCKET).upload(path, blob, {
       contentType: blob.type || mime || "application/octet-stream",
+      cacheControl: "31536000",
       upsert: false
     });
     if (error) throw error;
@@ -163,7 +230,8 @@
   }
 
   async function persistMedia(profile) {
-    const uid = (await sb.auth.getUser()).data.user?.id;
+    const { data: { session } } = await sb.auth.getSession();
+    const uid = session?.user?.id;
     if (!uid) throw new Error("Your session expired. Please sign in again.");
     const out = structuredClone(profile);
     const stamp = `${Date.now()}-${crypto.randomUUID()}`;
@@ -171,17 +239,17 @@
       ["avatar", "image/webp"], ["banner", "image/webp"], ["miniImage", "image/webp"],
       ["music.cover", "image/webp"], ["music.audio", out.music?.mime || "audio/mpeg"]
     ];
-    for (const [key, fallbackMime] of media) {
+    await Promise.all(media.map(async ([key, fallbackMime]) => {
       const parts = key.split(".");
       const value = parts.length === 1 ? out[key] : out[parts[0]]?.[parts[1]];
-      if (!String(value || "").startsWith("data:")) continue;
+      if (!String(value || "").startsWith("data:")) return;
       const ext = fallbackMime.startsWith("image/") ? "webp" :
-        (fallbackMime.includes("ogg") ? "ogg" : fallbackMime.includes("wav") ? "wav" : "mp3");
+        (fallbackMime.includes("ogg") ? "ogg" : fallbackMime.includes("wav") ? "wav" : fallbackMime.includes("mp4") ? "m4a" : "mp3");
       const path = `${uid}/${stamp}-${parts.join("-")}.${ext}`;
       const url = await uploadDataUrl(value, path, fallbackMime);
       if (parts.length === 1) out[key] = url;
       else { out[parts[0]] ||= {}; out[parts[0]][parts[1]] = url; }
-    }
+    }));
     return out;
   }
 
@@ -198,12 +266,19 @@
       public_data: publicData(row),
       updated_at: new Date().toISOString()
     };
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session?.user?.id) throw new Error("Your session expired. Please sign in again.");
     const { data, error } = await sb.from("profiles")
-      .update(payload).eq("id", (await sb.auth.getUser()).data.user.id)
+      .update(payload).eq("id", session.user.id)
       .select("username,public_data,private_data,created_at,updated_at").single();
     if (error) throw error;
     cacheUsername(data.username);
-    return mergeProfile(data, true);
+    invalidateProfileCache(data.username);
+    const merged = mergeProfile(data, true);
+    merged.id = data.id;
+    cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
+    cacheWrite(PROFILE_CACHE_PREFIX + data.username, merged);
+    return merged;
   }
 
   async function updateProfile(patch) {
@@ -282,19 +357,34 @@
   }
 
   async function sendFriendRequest(targetUsername) {
-    return callRpc("rivo_send_friend_request", { p_target_username: normalizeUsername(targetUsername) });
+    const u = normalizeUsername(targetUsername);
+    const result = await callRpc("rivo_send_friend_request", { p_target_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   async function acceptFriendRequest(fromUsername) {
-    return callRpc("rivo_accept_friend_request", { p_from_username: normalizeUsername(fromUsername) });
+    const u = normalizeUsername(fromUsername);
+    const result = await callRpc("rivo_accept_friend_request", { p_from_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   async function rejectFriendRequest(fromUsername) {
-    return callRpc("rivo_reject_friend_request", { p_from_username: normalizeUsername(fromUsername) });
+    const u = normalizeUsername(fromUsername);
+    const result = await callRpc("rivo_reject_friend_request", { p_from_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   async function removeFriend(username) {
-    return callRpc("rivo_remove_friend", { p_username: normalizeUsername(username) });
+    const u = normalizeUsername(username);
+    const result = await callRpc("rivo_remove_friend", { p_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   async function toggleLike(username) {
-    return callRpc("rivo_toggle_like", { p_username: normalizeUsername(username) });
+    const u = normalizeUsername(username);
+    const result = await callRpc("rivo_toggle_like", { p_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   function friendshipState(profile, targetUsername) {
     const u = normalizeUsername(targetUsername);
@@ -308,9 +398,160 @@
     return callRpc("rivo_add_view", { p_username: normalizeUsername(username) });
   }
 
+  function normalizeWhoCanMessage(value) {
+    return value === "friends" ? "friends" : value === "nobody" ? "nobody" : "everyone";
+  }
+  async function getMessageSettings() {
+    const me = await currentProfile();
+    return { whoCanMessage: normalizeWhoCanMessage(me?.messageSettings?.whoCanMessage) };
+  }
+  async function setMessageSetting(value) {
+    const v = normalizeWhoCanMessage(value);
+    await callRpc("rivo_set_message_setting", { p_who_can_message: v });
+    // Invalidate both the private (own) cache and the public-profile cache so
+    // the "Messages closed" state shows up immediately on anyone viewing this
+    // profile, instead of waiting out the old cached copy.
+    invalidateProfileCache(currentUsername());
+    return v;
+  }
+  async function sendMessage(username, content) {
+    const u = normalizeUsername(username);
+    // Normalize to NFC so the same word typed on different devices/keyboards
+    // (phones in particular often produce differently-composed Unicode for
+    // the same visible Arabic text) is always stored and compared consistently.
+    const text = String(content || "").trim().normalize("NFC");
+    if (!u || !text) throw new Error("Message and recipient are required.");
+    if (text.length > 2000) throw new Error("Message is too long (max 2000 characters).");
+    return callRpc("rivo_send_message", { p_receiver_username: u, p_content: text });
+  }
+  async function listConversations() {
+    return callRpc("rivo_list_conversations");
+  }
+  async function getMessages(username, limit = 80) {
+    return callRpc("rivo_get_messages", { p_other_username: normalizeUsername(username), p_limit: Math.max(1, Math.min(Number(limit) || 80, 200)) });
+  }
+
+  // Live message delivery. Rebuilt to be self-healing: it keeps the Realtime
+  // websocket authenticated with the current session, listens with a tight
+  // per-user filter (instead of the whole table) for speed and accuracy,
+  // automatically reconnects if the socket drops or errors out, and
+  // resyncs whenever the tab/app comes back to the foreground so nothing
+  // requires a manual page reload to show up.
+  async function subscribeMessages(callback, onResync) {
+    requireClient();
+    let stopped = false;
+    let channel = null;
+    let retryDelay = 1000;
+    let retryTimer = null;
+    let heartbeatTimer = null;
+
+    const seen = new Set(); // de-dupe: INSERT can be delivered by both filtered channels below
+    const emit = row => {
+      if (!row || !row.id) return;
+      const key = String(row.id);
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (seen.size > 500) { const first = seen.values().next().value; seen.delete(first); }
+      callback?.(row);
+    };
+
+    async function connect() {
+      if (stopped) return;
+      const { data: { session } } = await sb.auth.getSession();
+      const myId = session?.user?.id || null;
+      if (!myId) return;
+      await syncRealtimeAuth(session);
+
+      if (channel) { try { await sb.removeChannel(channel); } catch {} channel = null; }
+
+      channel = sb.channel(`rivo-messages-${myId}`)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_messages", filter: `sender_id=eq.${myId}` }, payload => emit(payload?.new))
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_messages", filter: `receiver_id=eq.${myId}` }, payload => emit(payload?.new))
+        .subscribe(status => {
+          if (stopped) return;
+          if (status === "SUBSCRIBED") {
+            retryDelay = 1000;
+            onResync?.();
+          } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            scheduleReconnect();
+          }
+        });
+    }
+
+    function scheduleReconnect() {
+      if (stopped || retryTimer) return;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        retryDelay = Math.min(retryDelay * 2, 15000);
+        connect();
+      }, retryDelay);
+    }
+
+    const onVisible = () => {
+      if (document.visibilityState !== "visible" || stopped) return;
+      // Coming back from background: make sure the socket is alive and
+      // pull anything that may have been missed while it was suspended.
+      connect();
+      onResync?.();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    window.addEventListener("online", onVisible);
+
+    // Safety-net poll: if for any reason the socket silently stalls
+    // (some mobile browsers suspend websockets without firing a close
+    // event), this nudges a resync every 20s so messages never sit
+    // unseen for more than a few seconds.
+    heartbeatTimer = setInterval(() => { onResync?.(); }, 12000);
+
+    await connect();
+
+    return async () => {
+      stopped = true;
+      clearTimeout(retryTimer);
+      clearInterval(heartbeatTimer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+      window.removeEventListener("online", onVisible);
+      if (channel) { try { await sb.removeChannel(channel); } catch {} }
+    };
+  }
+  async function subscribePresence(username, onChange) {
+    requireClient();
+    const me = normalizeUsername(username);
+    if (!me) return { unsubscribe: async () => {}, update: async () => {} };
+    const channel = sb.channel("rivo-presence", {
+      config: { presence: { key: me } }
+    });
+    const state = { username: me, online: true, typingTo: "" };
+    const api = { state: {}, update: async () => {}, unsubscribe: async () => {} };
+    const emit = (event = "sync") => {
+      api.state = channel.presenceState();
+      onChange?.({ event, state: api.state });
+    };
+    channel.on("presence", { event: "sync" }, () => emit("sync"));
+    channel.on("presence", { event: "join" }, () => emit("join"));
+    channel.on("presence", { event: "leave" }, ({ key }) => onChange?.({ event: "leave", key, state: channel.presenceState() }));
+    await channel.subscribe(async s => {
+      if (s === "SUBSCRIBED") {
+        await channel.track(state);
+        emit("sync");
+      }
+    });
+    api.update = async patch => {
+      Object.assign(state, patch || {});
+      try { await channel.track(state); } catch {}
+    };
+    api.unsubscribe = async () => {
+      try { await channel.untrack(); } catch {}
+      await sb.removeChannel(channel);
+    };
+    return api;
+  }
+
   async function ensureDemoAccount() { return false; }
 
-  async function compressImage(file, maxW=1400, quality=.82) {
+  async function compressImage(file, maxW=1280, quality=.8) {
     if (!file || !file.type.startsWith("image/")) throw new Error("Please choose a valid image.");
     if (file.size > 10 * 1024 * 1024) throw new Error("Image must be 10 MB or smaller.");
     if (file.type === "image/gif") {
@@ -360,8 +601,34 @@
     return String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
+  // Keep Realtime's websocket auth in sync with the current session at all times.
+  // Without this, a channel opened before the session token is (re)applied will be
+  // treated as unauthenticated by the RLS-protected `rivo_messages` table, silently
+  // dropping every postgres_changes event until the page is fully reloaded.
+  async function syncRealtimeAuth(session) {
+    if (!sb) return;
+    try { await sb.realtime.setAuth(session?.access_token || null); } catch {}
+  }
+
+
+  function applySavedColorScheme() {
+    const saved = localStorage.getItem("rivo_color_scheme");
+    const mode = saved === "light" || saved === "dark" ? saved : (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    document.documentElement.dataset.colorScheme = mode;
+  }
+  applySavedColorScheme();
+
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      const onPages = /\/pages\//.test(location.pathname);
+      const swPath = onPages ? "../sw.js" : "sw.js";
+      navigator.serviceWorker.register(swPath, { scope: onPages ? "../" : "./" }).catch(err => console.warn("[Rivo] Service worker registration failed", err));
+    });
+  }
+
   if (sb) {
     sb.auth.onAuthStateChange((_event, session) => {
+      syncRealtimeAuth(session);
       if (session?.user) {
         sb.from("profiles").select("username").eq("id", session.user.id).maybeSingle()
           .then(({data}) => { if (data?.username) cacheUsername(data.username); });
@@ -370,6 +637,7 @@
       }
     });
     sb.auth.getSession().then(({ data }) => {
+      syncRealtimeAuth(data?.session || null);
       if (data?.session?.user) {
         sb.from("profiles").select("username").eq("id", data.session.user.id).maybeSingle()
           .then(({data: row}) => { if (row?.username) cacheUsername(row.username); });
@@ -377,11 +645,180 @@
     });
   }
 
+
+  const REACTION_SET = ["❤️","😂","👍","😮","😢"];
+
+  function normalizeMessageText(value) {
+    return String(value ?? "").replace(/\r\n?/g, "\n").normalize("NFC").trim();
+  }
+
+  function isEmojiOnly(text) {
+    const value = normalizeMessageText(text).replace(/[\s\u200d\ufe0f]/gu, "");
+    if (!value) return false;
+    try {
+      return [...value].every(ch => /\p{Extended_Pictographic}|\p{Emoji_Presentation}|\p{Emoji_Modifier}/u.test(ch));
+    } catch {
+      return /^(?:[\u2600-\u27ff]|[\ud800-\udbff][\udc00-\udfff])+$/u.test(value);
+    }
+  }
+
+  async function toggleMessageReaction(messageId, reaction) {
+    requireClient();
+    const r = String(reaction || "");
+    if (!REACTION_SET.includes(r)) throw new Error("Unsupported reaction");
+    const { data, error } = await sb.rpc("rivo_toggle_message_reaction", { p_message_id: Number(messageId), p_reaction: r });
+    if (error) throw error;
+    return data;
+  }
+
+  async function listNotifications(limit = 40) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_list_notifications", { p_limit: Math.max(1, Math.min(Number(limit)||40,100)) });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  }
+
+  async function markNotificationRead(id) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_mark_notification_read", { p_notification_id: Number(id) });
+    if (error) throw error;
+    return data;
+  }
+
+  async function markAllNotificationsRead() {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_mark_notifications_read", {});
+    if (error) throw error;
+    return data;
+  }
+
+  async function subscribeMessageReactions(callback) {
+    requireClient();
+    const session = (await sb.auth.getSession()).data?.session;
+    if (!session?.user?.id) return async () => {};
+    await syncRealtimeAuth(session);
+    const channel = sb.channel(`rivo-reactions-${session.user.id}-${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "rivo_message_reactions" }, payload => callback?.(payload || null))
+      .subscribe();
+    return async () => { try { await sb.removeChannel(channel); } catch {} };
+  }
+
+  async function subscribeNotifications(callback) {
+    requireClient();
+    const session = (await sb.auth.getSession()).data?.session;
+    if (!session?.user?.id) return async () => {};
+    await syncRealtimeAuth(session);
+    const channel = sb.channel(`rivo-notifications-${session.user.id}-${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_notifications", filter: `recipient_id=eq.${session.user.id}` }, payload => callback?.(payload?.new || null))
+      .subscribe();
+    return async () => { try { await sb.removeChannel(channel); } catch {} };
+  }
+
+  async function requestBrowserNotifications() {
+    if (!("Notification" in window)) return "unsupported";
+    if (Notification.permission === "granted") { setNotificationsEnabled(true); return "granted"; }
+    const result = await Notification.requestPermission();
+    if (result === "granted") setNotificationsEnabled(true);
+    return result;
+  }
+
+  // Browser permission is one-way: once granted, a site can never revoke it
+  // itself (only the user can, from the browser's own settings), so a
+  // second click on "Enable" always just reported "granted" again with no
+  // way to turn notifications back off. This adds a real app-level on/off
+  // switch on top of the browser permission: notifyBrowser() checks both,
+  // so turning it "off" here reliably stops notifications regardless of
+  // what the browser permission still says.
+  const NOTIFICATIONS_PREF_KEY = "rivo_notifications_enabled";
+  function notificationsEnabled() {
+    const v = localStorage.getItem(NOTIFICATIONS_PREF_KEY);
+    return v === null ? true : v === "1";
+  }
+  function setNotificationsEnabled(on) {
+    localStorage.setItem(NOTIFICATIONS_PREF_KEY, on ? "1" : "0");
+    return on;
+  }
+
+  async function notifyBrowser(title, options = {}) {
+    try {
+      if (!notificationsEnabled()) return false;
+      if (!("Notification" in window) || Notification.permission !== "granted") return false;
+      const reg = await navigator.serviceWorker?.getRegistration?.();
+      if (reg?.showNotification) {
+        await reg.showNotification(title, { icon: options.icon || undefined, badge: options.badge || undefined, body: options.body || "", tag: options.tag || "rivo", data: options.data || {}, renotify: true });
+        return true;
+      }
+      new Notification(title, options);
+      return true;
+    } catch { return false; }
+  }
+
+  async function listProfileVisitors(username, limit = 50) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_get_profile_visitors", { p_username: normalizeUsername(username), p_limit: Math.max(1, Math.min(Number(limit)||50,100)) });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  }
+
+  async function adminStatus() {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_admin_is_admin", {});
+    if (error) throw error;
+    return !!data;
+  }
+
+  async function adminListUsers(query = "", limit = 100) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_admin_list_users", { p_query: String(query||""), p_limit: Math.max(1, Math.min(Number(limit)||100,200)) });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  }
+
+  async function adminSetBanned(username, banned) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_admin_set_banned", { p_username: normalizeUsername(username), p_banned: !!banned });
+    if (error) throw error;
+    return data;
+  }
+
+  async function adminSetStats(username, views, likes) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_admin_set_stats", { p_username: normalizeUsername(username), p_views: Math.max(0, Math.floor(Number(views)||0)), p_likes: Math.max(0, Math.floor(Number(likes)||0)) });
+    if (error) throw error;
+    invalidateProfileCache(username);
+    return data;
+  }
+
+  async function adminDeleteUser(username) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_admin_delete_user", { p_username: normalizeUsername(username) });
+    if (error) throw error;
+    invalidateProfileCache(username);
+    return data;
+  }
+
+  async function adminGetUserDetails(username) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_admin_get_user_details", { p_username: normalizeUsername(username) });
+    if (error) throw error;
+    return data;
+  }
+
+  async function setProfileViewPreference(enabled) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_set_profile_view_preference", { p_enabled: !!enabled });
+    if (error) throw error;
+    return data;
+  }
+
   window.PF = {
     defaults, badgeCatalog, templates, getProfile, listProfiles, putProfile: saveProfile, deleteProfile,
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
-    updateProfile, saveProfile, searchUsers, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
-    removeFriend, toggleLike, friendshipState, addView, ensureDemoAccount, compressImage, readAudio,
-    initials, escapeHtml, safeUrl
+    updateProfile, saveProfile, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
+    removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, sendMessage,
+    listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
+    REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
+    subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminGetUserDetails,
+    setProfileViewPreference, initials, escapeHtml, safeUrl
   };
 })();
