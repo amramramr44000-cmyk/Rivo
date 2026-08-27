@@ -42,22 +42,8 @@
     $$(".guest-only").forEach(el => el.classList.toggle("hidden", logged));
   }
 
-  function initLanguage() {
-    const saved = localStorage.getItem("pf_lang") || "en";
-    const set = lang => {
-      document.documentElement.lang = lang;
-      document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
-      localStorage.setItem("pf_lang", lang);
-      $$('[data-lang-label]').forEach(el => el.textContent = lang === "ar" ? "EN" : "ع" );
-    };
-    set(saved);
-    $("[data-lang]")?.addEventListener("click", e => {
-      e.preventDefault(); set(document.documentElement.lang === "ar" ? "en" : "ar");
-    });
-  }
-
   document.addEventListener("DOMContentLoaded", async () => {
-    nav(); initMenu(); initLanguage();
+    nav(); initMenu();
     $$('[data-profile-link]').forEach(a => { const me = PF.currentUsername(); if (me) a.href = `profile.html?u=${encodeURIComponent(me)}`; });
     $("[data-logout]")?.addEventListener("click", e => { e.preventDefault(); PF.clearSession(); location.href = "../index.html"; });
     const path = location.pathname.split("/").pop();
@@ -232,8 +218,13 @@
     renderSections(state); renderSocials(state); renderBadges(state);
     $("#addSocial")?.addEventListener("click", () => { state.socials.push({label:"Website", url:""}); renderSocials(state); });
 
-    $("#saveBtn")?.addEventListener("click", async () => {
+    $("#saveBtn")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      if (btn.disabled) return; // guard against double-tap firing two uploads/saves at once
+      const originalLabel = btn.textContent;
       try {
+        btn.disabled = true;
+        btn.textContent = "Saving…";
         const oldUsername = me.username;
         const u = PF.normalizeUsername(state.username);
         if (!PF.validUsername(u)) throw new Error("Invalid username format.");
@@ -245,7 +236,11 @@
         await PF.saveProfile(state); localStorage.setItem("pf_session", u);
         notify("Profile saved", "success");
         setTimeout(() => location.href = `profile.html?u=${encodeURIComponent(u)}`, 380);
-      } catch (err) { notify(err.message, "error"); }
+      } catch (err) {
+        notify(err.message, "error");
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+      }
     });
 
     const t = templates[state.template];
@@ -360,8 +355,11 @@
       else action = `<button class="btn btn-primary" data-add-friend>+ Add Friend</button>`;
     }
     const quickLike = canInteract ? `<button class="like-btn ${liked ? "liked" : ""}" data-like-profile aria-label="${liked ? "Unlike" : "Like"}"><span class="heart">${liked ? "♥" : "♡"}</span><span class="like-count">${displayViews(likeCount)}</span></button>` : "";
+    const messagesClosed = p.messagePrivacy === "nobody";
     const messageAction = canInteract
-      ? `<a class="btn" href="messages.html?u=${encodeURIComponent(p.username)}">Message</a>`
+      ? (messagesClosed
+        ? `<span class="btn btn-ghost messages-closed-badge" role="note" aria-label="This user has closed their messages">🔒 Messages closed</span>`
+        : `<a class="btn" href="messages.html?u=${encodeURIComponent(p.username)}">Message</a>`)
       : "";
     const friendActionWrap = canInteract
       ? `<div class="profile-head-actions profile-social-actions">${quickLike}${messageAction}${action}${mini}</div>`
@@ -667,12 +665,26 @@
       e.preventDefault();
       const text = String(input.value || "").trim();
       if (!activeUser || !text) return;
-      input.disabled = true;
       clearTimeout(typingStopTimer);
+
+      // Optimistic send: show the bubble instantly instead of waiting on the
+      // round trip, so sending *feels* fast even on a slow connection. It's
+      // marked .pending until the server confirms, then swapped for the
+      // real row; on failure it's removed and the text is handed back.
+      input.value = "";
+      const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      appendMessage({ id: tempId, sender_username: me.username, receiver_username: activeUser, content: text, created_at: new Date().toISOString() });
+      thread.querySelector(`[data-message-id="${tempId}"]`)?.classList.add("pending");
+
+      const dropTemp = () => {
+        renderedMessageIds.delete(tempId);
+        thread.querySelector(`[data-message-id="${tempId}"]`)?.closest(".message-row")?.remove();
+      };
+
       try {
         const sent = await PF.sendMessage(activeUser, text);
-        input.value = "";
         await presence?.update({ typingTo: "" });
+        dropTemp();
         if (sent) {
           appendMessage(sent);
           const idx = conversations.findIndex(c => c.username === activeUser);
@@ -684,8 +696,12 @@
           conversations.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
           renderConversations();
         }
-      } catch (e) { notify(e.message, "error"); }
-      finally { input.disabled = false; input.focus(); }
+      } catch (e) {
+        dropTemp();
+        input.value = text; // hand the text back so nothing typed is lost
+        notify(e.message, "error");
+      }
+      finally { input.focus(); }
     });
 
     input.addEventListener("input", () => {
@@ -789,15 +805,24 @@
     const select = $("#messagePrivacy");
     const save = $("#messagePrivacySave");
     const hint = $("#messagePrivacyHint");
-    if (select) select.value = me.messageSettings?.whoCanMessage === "friends" ? "friends" : "everyone";
+    const messageHint = v => v === "nobody"
+      ? "Nobody can message you — not even friends. Your profile shows a \u201cMessages closed\u201d badge instead of a Message button."
+      : v === "friends"
+        ? "Only your accepted friends can message you."
+        : "Anyone with a Rivo account can message you.";
+    const currentSetting = me.messageSettings?.whoCanMessage === "friends" ? "friends"
+      : me.messageSettings?.whoCanMessage === "nobody" ? "nobody" : "everyone";
+    if (select) select.value = currentSetting;
+    if (hint) hint.textContent = messageHint(currentSetting);
     save?.addEventListener("click", async () => {
       try {
         save.disabled = true;
+        save.textContent = "Saving…";
         const v = await PF.setMessageSetting(select.value);
-        hint.textContent = v === "friends" ? "Only your accepted friends can message you." : "Anyone with a Rivo account can message you.";
+        hint.textContent = messageHint(v);
         notify("Message privacy saved", "success");
       } catch (e) { notify(e.message, "error"); }
-      finally { save.disabled = false; }
+      finally { save.disabled = false; save.textContent = "Save message privacy"; }
     });
   }
 })();

@@ -23,9 +23,14 @@
   const CACHE_KEY = "rivo_username";
   const MEDIA_BUCKET = "rivo-media";
   const PROFILE_CACHE_PREFIX = "rivo_profile_v2:";
-  const PROFILE_CACHE_TTL = 45 * 1000;
+  // Shortened from the previous 45s/20s: long TTLs made message-privacy
+  // changes, new avatars, etc. feel like they "didn't save" because a
+  // stale cached copy kept getting served. Short TTLs + the explicit
+  // invalidateProfileCache() calls after every write keep things both
+  // fast (still cached for rapid repeat reads) and accurate.
+  const PROFILE_CACHE_TTL = 20 * 1000;
   const CURRENT_PROFILE_CACHE_KEY = "rivo_current_profile_v2";
-  const CURRENT_PROFILE_CACHE_TTL = 20 * 1000;
+  const CURRENT_PROFILE_CACHE_TTL = 8 * 1000;
 
   function cacheRead(key, ttl) {
     try {
@@ -393,13 +398,19 @@
     return callRpc("rivo_add_view", { p_username: normalizeUsername(username) });
   }
 
+  function normalizeWhoCanMessage(value) {
+    return value === "friends" ? "friends" : value === "nobody" ? "nobody" : "everyone";
+  }
   async function getMessageSettings() {
     const me = await currentProfile();
-    return { whoCanMessage: me?.messageSettings?.whoCanMessage === "friends" ? "friends" : "everyone" };
+    return { whoCanMessage: normalizeWhoCanMessage(me?.messageSettings?.whoCanMessage) };
   }
   async function setMessageSetting(value) {
-    const v = value === "friends" ? "friends" : "everyone";
+    const v = normalizeWhoCanMessage(value);
     await callRpc("rivo_set_message_setting", { p_who_can_message: v });
+    // Invalidate both the private (own) cache and the public-profile cache so
+    // the "Messages closed" state shows up immediately on anyone viewing this
+    // profile, instead of waiting out the old cached copy.
     invalidateProfileCache(currentUsername());
     return v;
   }
@@ -491,7 +502,7 @@
     // (some mobile browsers suspend websockets without firing a close
     // event), this nudges a resync every 20s so messages never sit
     // unseen for more than a few seconds.
-    heartbeatTimer = setInterval(() => { onResync?.(); }, 20000);
+    heartbeatTimer = setInterval(() => { onResync?.(); }, 12000);
 
     await connect();
 
@@ -540,7 +551,7 @@
 
   async function ensureDemoAccount() { return false; }
 
-  async function compressImage(file, maxW=1400, quality=.82) {
+  async function compressImage(file, maxW=1280, quality=.8) {
     if (!file || !file.type.startsWith("image/")) throw new Error("Please choose a valid image.");
     if (file.size > 10 * 1024 * 1024) throw new Error("Image must be 10 MB or smaller.");
     if (file.type === "image/gif") {
