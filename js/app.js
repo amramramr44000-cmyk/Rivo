@@ -572,7 +572,7 @@
       bubble.className = "message-bubble";
       bubble.dir = "auto";
       bubble.setAttribute("data-message-id", String(m.id));
-      bubble.textContent = String(m.content ?? "");
+      bubble.textContent = String(m.content ?? "").normalize("NFC");
       const time = document.createElement("time");
       time.textContent = new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       bubble.appendChild(time);
@@ -693,9 +693,36 @@
       typingTimer = setTimeout(() => updateTyping(input.value.trim()), 80);
     });
     input.addEventListener("keydown", e => {
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+      // Ignore Enter while a mobile keyboard's word-suggestion/composition
+      // is still in progress (e.isComposing / the legacy keyCode 229).
+      // Submitting mid-composition sends whatever text existed *before*
+      // the phone's predictive text finished swapping in the final word,
+      // which is what caused sent messages to not match what was typed.
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+        e.preventDefault();
+        form.requestSubmit();
+      }
     });
     search.addEventListener("input", renderConversations);
+
+    let resyncing = false;
+    const resyncThread = async () => {
+      // Fallback catch-up: re-pulls the open thread + conversation list from
+      // the server. Cheap (id-based de-dupe skips anything already shown) and
+      // guarantees delivery even if a push event was missed (tab backgrounded,
+      // socket hiccup, etc.) instead of requiring a manual page reload.
+      if (resyncing) return;
+      resyncing = true;
+      try {
+        await loadConversations();
+        const active = conversations.find(c => c.username === activeUser);
+        if (active?.userId) activeUserId = active.userId;
+        if (activeUser) {
+          const messages = await PF.getMessages(activeUser);
+          [...messages].reverse().forEach(m => appendMessage(m));
+        }
+      } catch {} finally { resyncing = false; }
+    };
 
     messageUnsubscribe = await PF.subscribeMessages(async msg => {
       if (!msg || (msg.sender_id !== me.id && msg.receiver_id !== me.id)) return;
@@ -719,7 +746,7 @@
         const active = conversations.find(c => c.username === activeUser);
         if (active?.userId) activeUserId = active.userId;
       } catch {}
-    });
+    }, resyncThread);
 
     presence = await PF.subscribePresence(me.username, evt => {
       if (presence) presence.state = evt?.state || {};

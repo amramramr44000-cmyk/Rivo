@@ -405,7 +405,10 @@
   }
   async function sendMessage(username, content) {
     const u = normalizeUsername(username);
-    const text = String(content || "").trim();
+    // Normalize to NFC so the same word typed on different devices/keyboards
+    // (phones in particular often produce differently-composed Unicode for
+    // the same visible Arabic text) is always stored and compared consistently.
+    const text = String(content || "").trim().normalize("NFC");
     if (!u || !text) throw new Error("Message and recipient are required.");
     if (text.length > 2000) throw new Error("Message is too long (max 2000 characters).");
     return callRpc("rivo_send_message", { p_receiver_username: u, p_content: text });
@@ -416,19 +419,91 @@
   async function getMessages(username, limit = 80) {
     return callRpc("rivo_get_messages", { p_other_username: normalizeUsername(username), p_limit: Math.max(1, Math.min(Number(limit) || 80, 200)) });
   }
-  async function subscribeMessages(callback) {
+
+  // Live message delivery. Rebuilt to be self-healing: it keeps the Realtime
+  // websocket authenticated with the current session, listens with a tight
+  // per-user filter (instead of the whole table) for speed and accuracy,
+  // automatically reconnects if the socket drops or errors out, and
+  // resyncs whenever the tab/app comes back to the foreground so nothing
+  // requires a manual page reload to show up.
+  async function subscribeMessages(callback, onResync) {
     requireClient();
-    const { data: { session } } = await sb.auth.getSession();
-    const myId = session?.user?.id || null;
-    if (!myId) return () => {};
-    const channel = sb.channel(`rivo-messages-${myId}-${Math.random().toString(36).slice(2)}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_messages" }, payload => {
-        const row = payload?.new;
-        if (!row || (row.sender_id !== myId && row.receiver_id !== myId)) return;
-        callback?.(row);
-      })
-      .subscribe();
-    return () => { sb.removeChannel(channel); };
+    let stopped = false;
+    let channel = null;
+    let retryDelay = 1000;
+    let retryTimer = null;
+    let heartbeatTimer = null;
+
+    const seen = new Set(); // de-dupe: INSERT can be delivered by both filtered channels below
+    const emit = row => {
+      if (!row || !row.id) return;
+      const key = String(row.id);
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (seen.size > 500) { const first = seen.values().next().value; seen.delete(first); }
+      callback?.(row);
+    };
+
+    async function connect() {
+      if (stopped) return;
+      const { data: { session } } = await sb.auth.getSession();
+      const myId = session?.user?.id || null;
+      if (!myId) return;
+      await syncRealtimeAuth(session);
+
+      if (channel) { try { await sb.removeChannel(channel); } catch {} channel = null; }
+
+      channel = sb.channel(`rivo-messages-${myId}`)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_messages", filter: `sender_id=eq.${myId}` }, payload => emit(payload?.new))
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_messages", filter: `receiver_id=eq.${myId}` }, payload => emit(payload?.new))
+        .subscribe(status => {
+          if (stopped) return;
+          if (status === "SUBSCRIBED") {
+            retryDelay = 1000;
+            onResync?.();
+          } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            scheduleReconnect();
+          }
+        });
+    }
+
+    function scheduleReconnect() {
+      if (stopped || retryTimer) return;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        retryDelay = Math.min(retryDelay * 2, 15000);
+        connect();
+      }, retryDelay);
+    }
+
+    const onVisible = () => {
+      if (document.visibilityState !== "visible" || stopped) return;
+      // Coming back from background: make sure the socket is alive and
+      // pull anything that may have been missed while it was suspended.
+      connect();
+      onResync?.();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    window.addEventListener("online", onVisible);
+
+    // Safety-net poll: if for any reason the socket silently stalls
+    // (some mobile browsers suspend websockets without firing a close
+    // event), this nudges a resync every 20s so messages never sit
+    // unseen for more than a few seconds.
+    heartbeatTimer = setInterval(() => { onResync?.(); }, 20000);
+
+    await connect();
+
+    return async () => {
+      stopped = true;
+      clearTimeout(retryTimer);
+      clearInterval(heartbeatTimer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+      window.removeEventListener("online", onVisible);
+      if (channel) { try { await sb.removeChannel(channel); } catch {} }
+    };
   }
   async function subscribePresence(username, onChange) {
     requireClient();
@@ -515,8 +590,18 @@
     return String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
+  // Keep Realtime's websocket auth in sync with the current session at all times.
+  // Without this, a channel opened before the session token is (re)applied will be
+  // treated as unauthenticated by the RLS-protected `rivo_messages` table, silently
+  // dropping every postgres_changes event until the page is fully reloaded.
+  async function syncRealtimeAuth(session) {
+    if (!sb) return;
+    try { await sb.realtime.setAuth(session?.access_token || null); } catch {}
+  }
+
   if (sb) {
     sb.auth.onAuthStateChange((_event, session) => {
+      syncRealtimeAuth(session);
       if (session?.user) {
         sb.from("profiles").select("username").eq("id", session.user.id).maybeSingle()
           .then(({data}) => { if (data?.username) cacheUsername(data.username); });
@@ -525,6 +610,7 @@
       }
     });
     sb.auth.getSession().then(({ data }) => {
+      syncRealtimeAuth(data?.session || null);
       if (data?.session?.user) {
         sb.from("profiles").select("username").eq("id", data.session.user.id).maybeSingle()
           .then(({data: row}) => { if (row?.username) cacheUsername(row.username); });
