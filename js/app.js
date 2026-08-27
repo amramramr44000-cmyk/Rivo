@@ -635,7 +635,11 @@
           <div><span>Friends</span><b>${friends.length}</b></div>
           <div class="online-stat"><span><i class="status-dot"></i> Online</span><b>Active</b></div>
           <div class="view-stat"><span><span class="eye-mini">◉</span> Views</span><b>${views}</b></div>
-          <div class="like-stat"><span><span class="heart-mini">♥</span> Likes</span><b>${displayViews(likeCount)}</b></div>
+          <div class="like-stat ${!isMe && !!PF.currentUsername() ? "has-like-action" : ""}">
+            ${!isMe && !!PF.currentUsername()
+              ? `<button type="button" class="profile-stat-like ${liked ? "liked" : ""}" data-like-profile aria-label="${liked ? "Unlike profile" : "Like profile"}"><span class="profile-stat-like-label"><span class="heart-mini">${liked ? "♥" : "♡"}</span> Likes</span><b class="profile-stat-like-count">${displayViews(likeCount)}</b></button>`
+              : `<span><span class="heart-mini">♥</span> Likes</span><b>${displayViews(likeCount)}</b>`}
+          </div>
         </div>
         <div class="social-row">${social}</div>
         <div class="profile-sections">${sectionHtml || `<section class="section-block"><div class="section-kicker">ABOUT</div><p class="profile-description">${esc(p.description || p.bio || "No profile content yet.")}</p></section>`}</div>
