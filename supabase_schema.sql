@@ -105,7 +105,8 @@ begin
     'avatarFrameWidth', coalesce((r.public_data->>'avatarFrameWidth')::numeric,3),
     'stats', coalesce(r.public_data->'stats', jsonb_build_object('views',0)),
     'likes', jsonb_build_object(
-      'count', coalesce((r.public_data->'likes'->>'count')::int,0)
+      'count', coalesce((r.public_data->'likes'->>'count')::int,0),
+      'viewerLiked', case when auth.uid() is null then false else coalesce(r.public_data->'likes'->'users','[]'::jsonb) ? (select username from public.profiles where id=auth.uid()) end
     ),
     -- Only the privacy *choice* is exposed publicly (never the friend list or
     -- requests) so a viewer's profile page can show a "Messages closed"

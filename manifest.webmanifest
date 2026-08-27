@@ -1,7 +1,7 @@
 {
   "name": "Rivo",
   "short_name": "Rivo",
-  "description": "Rivo \u2014 interactive identity profiles and real-time connections.",
+  "description": "Rivo — interactive identity profiles and real-time connections.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
