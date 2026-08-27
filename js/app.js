@@ -23,7 +23,7 @@
     const inner = p?.avatar
       ? `<span class="${cls}"><img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}"></span>`
       : `<span class="${cls}">${esc(initials(p))}</span>`;
-    return `<span class="avatar-story-trigger ${active ? "has-story" : ""} ${own ? "is-own-story-avatar" : ""}" data-story-user="${esc(username)}" data-story-active="${active ? "1" : "0"}" data-story-own="${own ? "1" : "0"}" title="${active ? `View ${esc(p?.displayName || username)} story` : own ? "Add a story" : ""}">${inner}${own && !active ? `<b class="story-add-dot" aria-hidden="true">+</b>` : ""}</span>`;
+    return `<span class="avatar-story-trigger ${active ? "has-story" : ""} ${own ? "is-own-story-avatar" : ""}" data-story-user="${esc(username)}" data-story-active="${active ? "1" : "0"}" data-story-own="${own ? "1" : "0"}" title="${active ? `View ${esc(p?.displayName || username)} story` : own ? "Add a story" : ""}">${active ? `<span class="story-ring-frame" aria-hidden="true"></span>` : ""}${inner}${own && !active ? `<b class="story-add-dot" aria-hidden="true">+</b>` : ""}</span>`;
   };
 
   window.PFUI = { $, $$, notify };
@@ -223,11 +223,11 @@
       $("[data-story-name]", modal).textContent = story.display_name || story.username;
       $("[data-story-time]", modal).textContent = storyTimeLabel(story.expires_at);
       $("[data-story-avatar]", modal).innerHTML = story.avatar ? `<img src="${esc(story.avatar)}" alt="">` : esc(initials(story));
-      $("[data-story-delete]", modal).classList.toggle("hidden", !owner);
-      $("[data-story-like]", modal).classList.toggle("hidden", owner);
+      $(`[data-story-delete]`, modal).classList.toggle("hidden", !owner);
+      $(`[data-story-like]`, modal).classList.remove("hidden");
       $("[data-story-like-icon]", modal).textContent = story.liked ? "♥" : "♡";
       $("[data-story-like-count]", modal).textContent = String(story.likes_count ?? 0);
-      $("[data-story-owner-stats]", modal).textContent = owner ? `👁 ${story.views_count ?? 0} views` : "";
+      $("[data-story-owner-stats]", modal).textContent = owner ? `👁 ${story.views_count ?? 0} views · ♥ ${story.likes_count ?? 0} likes` : "";
       const durationForTimer = 12;
       const progress = $("[data-story-progress]", modal);
       progress.style.animation = "none";
@@ -618,7 +618,7 @@
       <div class="profile-content">
         <div class="profile-head">
           <div class="profile-avatar-wrap">
-            <button type="button" class="profile-avatar-button ${p.story?.active ? "has-story" : ""}" data-story-user="${esc(p.username)}" data-story-active="${p.story?.active ? "1" : "0"}" data-story-own="${isMe ? "1" : "0"}" aria-label="${p.story?.active ? "View story" : isMe ? "Add a story" : "Profile avatar"}"><span class="profile-avatar ${frame}">${p.avatar ? `<img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}">` : esc(initials(p))}</span>${isMe && !p.story?.active ? `<b class="story-add-dot profile-story-plus" aria-hidden="true">+</b>` : ""}</button>
+            <button type="button" class="profile-avatar-button ${p.story?.active ? "has-story" : ""}" data-story-user="${esc(p.username)}" data-story-active="${p.story?.active ? "1" : "0"}" data-story-own="${isMe ? "1" : "0"}" aria-label="${p.story?.active ? "View story" : isMe ? "Add a story" : "Profile avatar"}">${p.story?.active ? `<span class="story-ring-frame" aria-hidden="true"></span>` : ""}<span class="profile-avatar ${frame}">${p.avatar ? `<img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}">` : esc(initials(p))}</span>${isMe && !p.story?.active ? `<b class="story-add-dot profile-story-plus" aria-hidden="true">+</b>` : ""}</button>
           </div>
           <div class="profile-identity">
             <div class="profile-topline"><span class="status-dot ${p.status === "Offline" ? "offline" : ""}"></span><span>${esc(p.status === "Custom" ? (p.customStatus || "Online") : (p.status || "Online"))}</span>${isMe ? `<span class="you-label">YOUR PROFILE</span>` : ""}</div>
@@ -635,6 +635,7 @@
           <div><span>Friends</span><b>${friends.length}</b></div>
           <div class="online-stat"><span><i class="status-dot"></i> Online</span><b>Active</b></div>
           <div class="view-stat"><span><span class="eye-mini">◉</span> Views</span><b>${views}</b></div>
+          <div class="like-stat"><span><span class="heart-mini">♥</span> Likes</span><b>${displayViews(likeCount)}</b></div>
         </div>
         <div class="social-row">${social}</div>
         <div class="profile-sections">${sectionHtml || `<section class="section-block"><div class="section-kicker">ABOUT</div><p class="profile-description">${esc(p.description || p.bio || "No profile content yet.")}</p></section>`}</div>
@@ -658,11 +659,11 @@
     const friends = (p.friends || []);
     const friendProfiles = await PF.getProfiles(friends);
     if (!isMe) await PF.addView(username);
-    p = !isMe ? await PF.getProfile(username) : p;
+    p = !isMe ? await PF.getProfile(username, {force:true}) : await PF.currentProfile({force:true});
     try { p.story = (await PF.getStory(username, { countView:false })) || p.story || null; } catch {}
     p.likes ||= {count:0, users:[]};
     p.likes.users ||= [];
-    p.likes.count = p.likes.users.length;
+    p.likes.count = Number.isFinite(Number(p.likes.count)) ? Math.max(0, Number(p.likes.count)) : p.likes.users.length;
     root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship });
     bindPlayer(root);
     $(`[data-add-friend]`)?.addEventListener("click", async () => {
