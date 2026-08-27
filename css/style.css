@@ -505,15 +505,3 @@ html[data-color-scheme="light"] .feature-card p,html[data-color-scheme="light"] 
   .profile-owner-likes{min-height:32px;padding:0 8px;font-size:9px}
   .profile-owner-likes b{font-size:9px}
 }
-
-/* Rivo responsive story avatars: desktop and phone use separate fixed-square variants. */
-.profile-story-avatar-variants{position:relative;width:108px;height:108px;flex:0 0 108px;}
-.profile-story-avatar-desktop,.profile-story-avatar-mobile{position:absolute!important;left:50%;top:50%;transform:translate(-50%,-50%);width:108px!important;height:108px!important;min-width:108px;min-height:108px;aspect-ratio:1 / 1;display:flex!important;align-items:center;justify-content:center;}
-.profile-story-avatar-mobile{display:none!important;}
-.profile-story-avatar-desktop .story-ring-frame,.profile-story-avatar-mobile .story-ring-frame{width:calc(100% + 12px)!important;height:calc(100% + 12px)!important;aspect-ratio:1 / 1;}
-@media(max-width:760px){
-  .profile-story-avatar-variants{width:76px;height:76px;flex:0 0 76px;}
-  .profile-story-avatar-desktop{display:none!important;}
-  .profile-story-avatar-mobile{display:flex!important;width:76px!important;height:76px!important;min-width:76px;min-height:76px;}
-  .profile-story-avatar-mobile .story-ring-frame{width:calc(100% + 10px)!important;height:calc(100% + 10px)!important;}
-}
