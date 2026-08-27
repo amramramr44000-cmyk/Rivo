@@ -406,7 +406,7 @@ html[data-color-scheme="light"] .feature-card p,html[data-color-scheme="light"] 
 .story-views{margin-inline-start:auto;font-size:10px;color:rgba(255,255,255,.78)}
 .story-error{position:absolute;left:20px;right:20px;bottom:78px;padding:12px;border-radius:14px;background:rgba(255,75,100,.12);border:1px solid rgba(255,75,100,.24);font-size:11px;color:#ffd4da;z-index:13}
 .story-uploading::after{content:"Preparing story…";position:fixed;left:50%;bottom:78px;transform:translateX(-50%);z-index:2500;padding:9px 13px;border-radius:999px;background:rgba(8,10,15,.92);border:1px solid rgba(255,255,255,.1);color:#fff;font-size:10px;box-shadow:0 15px 40px rgba(0,0,0,.28)}
-@media(max-width:760px){.story-viewer-backdrop{padding:0}.story-viewer{width:100vw;height:100dvh;max-height:none;border-radius:0;border:0}.story-close{top:calc(12px + env(safe-area-inset-top));right:12px}.story-head{top:calc(24px + env(safe-area-inset-top))}.story-bottom{padding:42px 14px calc(18px + env(safe-area-inset-bottom))}}
+@media(max-width:760px){.story-viewer-backdrop{padding:8px}.story-viewer{width:min(430px,calc(100vw - 16px));height:min(820px,calc(100dvh - 16px));max-height:none;min-height:0;border-radius:28px;border:1px solid rgba(255,255,255,.08)}.story-close{top:calc(12px + env(safe-area-inset-top));right:12px}.story-head{top:calc(24px + env(safe-area-inset-top))}.story-bottom{padding:42px 14px calc(18px + env(safe-area-inset-bottom))}}
 
 /* Story avatar alignment: ring is an external layer, never part of avatar dimensions. */
 .avatar-story-trigger > .avatar-xs,.avatar-story-trigger > .avatar-sm,.profile-avatar-button > .profile-avatar{aspect-ratio:1 / 1;overflow:hidden;border-radius:50%;box-sizing:border-box}
@@ -446,11 +446,11 @@ html[data-color-scheme="light"] .feature-card p,html[data-color-scheme="light"] 
 .profile-avatar-button>.profile-avatar{position:relative;z-index:2;}
 .avatar-story-trigger .story-ring-frame{inset:-4px;}
 .profile-avatar-button .story-ring-frame{inset:-6px;}
-.profile-stats{grid-template-columns:repeat(4,minmax(0,1fr));}
+.profile-stats{grid-template-columns:repeat(3,minmax(0,1fr));}
 .profile-stats .like-stat span{display:inline-flex;align-items:center;gap:5px;}
 .heart-mini{font-size:11px;color:#ff667e;}
 @media(max-width:760px){
-  .profile-stats{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;}
+  .profile-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;}
   .profile-stats>div{min-width:0;padding:9px 4px;}
   .profile-stats span{font-size:7px;}
   .profile-stats b{font-size:10px;}
@@ -458,10 +458,19 @@ html[data-color-scheme="light"] .feature-card p,html[data-color-scheme="light"] 
   .profile-avatar-button .story-ring-frame{inset:-5px;}
 }
 @media(max-width:430px){
-  .profile-stats{grid-template-columns:repeat(4,minmax(0,1fr));}
+  .profile-stats{grid-template-columns:repeat(3,minmax(0,1fr));}
   .profile-stats>div{padding:8px 2px;}
   .profile-stats span{font-size:6.5px;}
   .profile-stats b{font-size:9px;}
   .avatar-story-trigger .story-ring-frame{inset:-3px;}
   .profile-avatar-button .story-ring-frame{inset:-5px;}
 }
+
+
+/* v9.1 — owner profile likes: count only, placed beside the floating image. */
+.profile-owner-likes{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:34px;padding:0 9px;border:1px solid var(--border);border-radius:999px;background:rgba(255,255,255,.035);color:#bfc7d3;font-size:10px;white-space:nowrap;}
+.profile-owner-likes b{font-size:10px;font-weight:800;}
+.profile-mini-standalone{display:flex;align-items:center;gap:8px;}
+.profile-owner-likes-only{min-height:34px;}
+.profile-mini-standalone .profile-mini-float{position:relative;right:auto;top:auto;bottom:auto;margin:0;flex:0 0 auto;}
+@media(max-width:760px){.profile-mini-standalone{gap:7px}.profile-owner-likes{min-height:32px;padding:0 8px;font-size:9px}.profile-owner-likes b{font-size:9px}}
