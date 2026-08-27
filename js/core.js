@@ -217,16 +217,20 @@
     return new Blob([bytes], { type: mime });
   }
 
-  async function uploadDataUrl(dataUrl, path, mime) {
+  async function uploadBlob(blob, path, mime) {
     requireClient();
-    const blob = dataUrlToBlob(dataUrl);
+    if (!(blob instanceof Blob)) throw new Error("Invalid media data.");
     const { error } = await sb.storage.from(MEDIA_BUCKET).upload(path, blob, {
       contentType: blob.type || mime || "application/octet-stream",
-      cacheControl: "31536000",
+      cacheControl: "3600",
       upsert: false
     });
     if (error) throw error;
     return sb.storage.from(MEDIA_BUCKET).getPublicUrl(path).data.publicUrl;
+  }
+
+  async function uploadDataUrl(dataUrl, path, mime) {
+    return uploadBlob(dataUrlToBlob(dataUrl), path, mime);
   }
 
   async function persistMedia(profile) {
@@ -573,6 +577,176 @@
     return canvas.toDataURL("image/webp", quality);
   }
 
+  // -----------------------------
+  // Rivo Stories (12-hour, one active story per account)
+  // -----------------------------
+  async function getStory(username, options = {}) {
+    requireClient();
+    const u = normalizeUsername(username);
+    if (!u) return null;
+    const { data, error } = await sb.rpc("rivo_get_story", {
+      p_username: u,
+      p_count_view: options.countView !== false
+    });
+    if (error) throw error;
+    return data || null;
+  }
+
+  async function listStoryStatuses(usernames) {
+    requireClient();
+    const names = [...new Set((usernames || []).map(normalizeUsername).filter(Boolean))];
+    if (!names.length) return [];
+    const { data, error } = await sb.rpc("rivo_get_story_statuses", { p_usernames: names });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  }
+
+  async function createStoryFromFile(file) {
+    requireClient();
+    if (!file) throw new Error("Choose an image or video first.");
+    const { data: { session } } = await sb.auth.getSession();
+    const uid = session?.user?.id;
+    const username = currentUsername();
+    if (!uid || !username) throw new Error("Your session expired. Please sign in again.");
+
+    const existing = await getStory(username, { countView: false });
+    if (existing?.active) throw new Error("You already have an active story. Open it and delete it before adding another.");
+
+    const stamp = `${Date.now()}-${crypto.randomUUID()}`;
+    let blob;
+    let mime;
+    let durationSeconds = 12;
+    let extension = "webp";
+
+    if (file.type.startsWith("image/")) {
+      if (file.size > 12 * 1024 * 1024) throw new Error("Story image must be 12 MB or smaller.");
+      const dataUrl = await compressImage(file, 1080, .84);
+      blob = dataUrlToBlob(dataUrl);
+      mime = "image/webp";
+    } else if (file.type.startsWith("video/")) {
+      if (file.size > 60 * 1024 * 1024) throw new Error("Story video must be 60 MB or smaller before compression.");
+      const compressed = await compressStoryVideo(file);
+      blob = compressed.blob;
+      mime = compressed.mime;
+      durationSeconds = Math.min(30, Math.max(1, Number(compressed.durationSeconds || 12)));
+      extension = mime.includes("webm") ? "webm" : (file.name.match(/\.[a-z0-9]+$/i)?.[0]?.slice(1) || "mp4");
+    } else {
+      throw new Error("Please choose an image or video.");
+    }
+
+    const storagePath = `${uid}/stories/${stamp}.${extension}`;
+    const publicUrl = await uploadBlob(blob, storagePath, mime);
+    try {
+      const { data, error } = await sb.rpc("rivo_create_story", {
+        p_media_url: publicUrl,
+        p_storage_path: storagePath,
+        p_media_type: mime,
+        p_duration_seconds: durationSeconds
+      });
+      if (error) throw error;
+      invalidateProfileCache(username);
+      return data;
+    } catch (e) {
+      try { await sb.storage.from(MEDIA_BUCKET).remove([storagePath]); } catch {}
+      throw e;
+    }
+  }
+
+  async function deleteStory(storyId) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_delete_story", { p_story_id: Number(storyId) });
+    if (error) throw error;
+    invalidateProfileCache(currentUsername());
+    return data;
+  }
+
+  async function toggleStoryLike(storyId) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_toggle_story_like", { p_story_id: Number(storyId) });
+    if (error) throw error;
+    return data || { liked: false, likes_count: 0 };
+  }
+
+  async function compressStoryVideo(file) {
+    if (!file?.type?.startsWith("video/")) throw new Error("Please choose a valid video.");
+    const objectUrl = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.playsInline = true;
+    video.src = objectUrl;
+    try {
+      await new Promise((resolve, reject) => {
+        video.onloadedmetadata = () => resolve();
+        video.onerror = () => reject(new Error("Could not read the video."));
+        video.load();
+      });
+      const duration = Number(video.duration);
+      if (!Number.isFinite(duration) || duration <= 0) throw new Error("Could not determine video duration.");
+      if (duration > 30.5) throw new Error("Story videos can be up to 30 seconds.");
+
+      const sourceWidth = video.videoWidth || 720;
+      const sourceHeight = video.videoHeight || 1280;
+      const scale = Math.min(1, 720 / sourceWidth, 1280 / sourceHeight);
+      const width = Math.max(2, Math.round(sourceWidth * scale / 2) * 2);
+      const height = Math.max(2, Math.round(sourceHeight * scale / 2) * 2);
+
+      const capture = video.captureStream || video.webkitCaptureStream;
+      const canRecord = typeof MediaRecorder !== "undefined";
+      if (!capture || !canRecord) {
+        if (file.size <= 8 * 1024 * 1024 && sourceWidth <= 720) return { blob: file, mime: file.type || "video/mp4", durationSeconds: duration };
+        throw new Error("Your browser cannot compress this video here. Choose a video up to 8 MB or use Chrome, Edge, or Firefox.");
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d", { alpha: false });
+      if (!ctx) throw new Error("Could not prepare video compression.");
+      const canvasStream = canvas.captureStream(24);
+      const sourceStream = capture.call(video);
+      sourceStream.getAudioTracks().forEach(track => canvasStream.addTrack(track));
+
+      const mimeCandidates = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"];
+      const supportedMime = mimeCandidates.find(x => typeof MediaRecorder.isTypeSupported === "function" && MediaRecorder.isTypeSupported(x)) || "";
+      const recorder = new MediaRecorder(canvasStream, {
+        ...(supportedMime ? { mimeType: supportedMime } : {}),
+        videoBitsPerSecond: 1400000,
+        audioBitsPerSecond: 96000
+      });
+      const chunks = [];
+      const finished = new Promise((resolve, reject) => {
+        recorder.ondataavailable = e => { if (e.data?.size) chunks.push(e.data); };
+        recorder.onerror = () => reject(new Error("Video compression failed."));
+        recorder.onstop = () => resolve(new Blob(chunks, { type: recorder.mimeType || "video/webm" }));
+      });
+
+      // Muted element playback avoids autoplay restrictions; the audio track is still copied from captureStream.
+      video.muted = true;
+      await video.play();
+      recorder.start(250);
+      const started = performance.now();
+      await new Promise(resolve => {
+        const draw = () => {
+          if (recorder.state === "inactive") return resolve();
+          ctx.drawImage(video, 0, 0, width, height);
+          if (video.ended || video.currentTime >= duration - 0.04 || performance.now() - started >= 30500) {
+            try { recorder.stop(); } catch {}
+            return resolve();
+          }
+          requestAnimationFrame(draw);
+        };
+        requestAnimationFrame(draw);
+      });
+      const blob = await finished;
+      if (!blob.size) throw new Error("Video compression returned an empty file.");
+      return { blob, mime: blob.type || "video/webm", durationSeconds: duration };
+    } finally {
+      try { video.pause(); } catch {}
+      try { video.src = ""; video.load(); } catch {}
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+
   async function readAudio(file) {
     if (!file || !file.type.startsWith("audio/")) throw new Error("Please choose a valid audio file.");
     if (file.size > 10 * 1024 * 1024) throw new Error("Audio must be 10 MB or smaller.");
@@ -819,6 +993,6 @@
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminGetUserDetails,
-    setProfileViewPreference, initials, escapeHtml, safeUrl
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, compressStoryVideo, initials, escapeHtml, safeUrl
   };
 })();

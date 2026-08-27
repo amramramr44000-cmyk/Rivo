@@ -16,9 +16,15 @@
     setTimeout(() => el.remove(), 2800);
   };
 
-  const avatarMarkup = (p, cls = "avatar-sm") => p?.avatar
-    ? `<div class="${cls}"><img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}"></div>`
-    : `<div class="${cls}">${esc(initials(p))}</div>`;
+  const avatarMarkup = (p, cls = "avatar-sm") => {
+    const username = PF.normalizeUsername(p?.username || "");
+    const active = !!p?.story?.active;
+    const own = !!username && username === PF.currentUsername();
+    const inner = p?.avatar
+      ? `<span class="${cls}"><img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}"></span>`
+      : `<span class="${cls}">${esc(initials(p))}</span>`;
+    return `<span class="avatar-story-trigger ${active ? "has-story" : ""} ${own ? "is-own-story-avatar" : ""}" data-story-user="${esc(username)}" data-story-active="${active ? "1" : "0"}" data-story-own="${own ? "1" : "0"}" title="${active ? `View ${esc(p?.displayName || username)} story` : own ? "Add a story" : ""}">${inner}${own && !active ? `<b class="story-add-dot" aria-hidden="true">+</b>` : ""}</span>`;
+  };
 
   window.PFUI = { $, $$, notify };
 
@@ -93,8 +99,173 @@
     load();
   }
 
+  // -----------------------------
+  // Rivo Stories UI
+  // -----------------------------
+  function storyTimeLabel(iso) {
+    const diff = Math.max(0, Date.parse(iso) - Date.now());
+    const minutes = Math.max(1, Math.ceil(diff / 60000));
+    if (minutes < 60) return `${minutes}m left`;
+    return `${Math.ceil(minutes / 60)}h left`;
+  }
+
+  function ensureStoryPicker() {
+    let input = $("#rivoStoryPicker");
+    if (input) return input;
+    input = document.createElement("input");
+    input.id = "rivoStoryPicker";
+    input.type = "file";
+    input.accept = "image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime,video/x-m4v";
+    input.hidden = true;
+    document.body.appendChild(input);
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      input.value = "";
+      if (!file) return;
+      if (document.body.classList.contains("story-uploading")) return;
+      try {
+        const existing = await PF.getStory(PF.currentUsername(), { countView: false }).catch(() => null);
+        if (existing?.active) { openStoryViewer(PF.currentUsername()); return; }
+        document.body.classList.add("story-uploading");
+        notify("Preparing story…", "success");
+        await PF.createStoryFromFile(file);
+        notify("Story added for 12 hours", "success");
+        updateStoryTriggers(PF.currentUsername(), true);
+        window.dispatchEvent(new CustomEvent("rivo-story-changed"));
+      } catch (e) {
+        notify(e.message || "Could not add story", "error");
+      } finally {
+        document.body.classList.remove("story-uploading");
+      }
+    });
+    return input;
+  }
+
+  function updateStoryTriggers(username, active) {
+    const u = PF.normalizeUsername(username);
+    $$(`[data-story-user="${CSS.escape(u)}"]`).forEach(el => {
+      el.dataset.storyActive = active ? "1" : "0";
+      el.classList.toggle("has-story", active);
+      let add = $(".story-add-dot", el);
+      const own = u === PF.currentUsername();
+      if (own && !active && !add) el.insertAdjacentHTML("beforeend", `<b class="story-add-dot" aria-hidden="true">+</b>`);
+      if (active && add) add.remove();
+    });
+  }
+
+  function closeStoryViewer() {
+    const modal = $("#rivoStoryViewer");
+    if (!modal) return;
+    clearTimeout(modal._storyTimer);
+    modal._storyTimer = null;
+    modal.classList.remove("open");
+    const media = $("[data-story-media]", modal);
+    if (media?.tagName === "VIDEO") { try { media.pause(); media.removeAttribute("src"); media.load(); } catch {} }
+  }
+
+  async function openStoryViewer(username) {
+    const u = PF.normalizeUsername(username);
+    if (!u) return;
+    let modal = $("#rivoStoryViewer");
+    if (!modal) {
+      modal = document.createElement("div");
+      modal.id = "rivoStoryViewer";
+      modal.className = "story-viewer-backdrop";
+      modal.innerHTML = `<div class="story-viewer" role="dialog" aria-modal="true" aria-label="Story"><button type="button" class="story-close icon-btn" data-story-close aria-label="Close">×</button><div class="story-progress"><span data-story-progress></span></div><div class="story-head"><span class="avatar-story-head" data-story-avatar></span><span class="story-owner-copy"><b data-story-name>Story</b><small data-story-time></small></span><button type="button" class="story-delete btn btn-sm btn-danger hidden" data-story-delete>Delete</button></div><div class="story-media-wrap" data-story-media-wrap></div><div class="story-bottom"><button type="button" class="story-like-btn" data-story-like><span data-story-like-icon>♡</span><span data-story-like-count>0</span></button><span class="story-views" data-story-owner-stats></span></div><div class="story-error hidden" data-story-error></div></div>`;
+      document.body.appendChild(modal);
+      modal.addEventListener("click", e => { if (e.target === modal || e.target.closest("[data-story-close]")) closeStoryViewer(); });
+      $("[data-story-delete]", modal).addEventListener("click", async () => {
+        const id = Number(modal.dataset.storyId || 0);
+        if (!id || !confirm("Delete this story?")) return;
+        try {
+          await PF.deleteStory(id);
+          notify("Story deleted", "success");
+          updateStoryTriggers(PF.currentUsername(), false);
+          closeStoryViewer();
+        } catch (e) { notify(e.message || "Could not delete story", "error"); }
+      });
+      $("[data-story-like]", modal).addEventListener("click", async () => {
+        const id = Number(modal.dataset.storyId || 0);
+        if (!id) return;
+        if (!PF.currentUsername()) return notify("Sign in to like stories.", "error");
+        try {
+          const result = await PF.toggleStoryLike(id);
+          $("[data-story-like-icon]", modal).textContent = result.liked ? "♥" : "♡";
+          $("[data-story-like-count]", modal).textContent = String(result.likes_count ?? 0);
+        } catch (e) { notify(e.message || "Could not update story like", "error"); }
+      });
+    }
+
+    clearTimeout(modal._storyTimer);
+    modal._storyTimer = null;
+    modal.classList.add("open");
+    modal.dataset.storyId = "";
+    $("[data-story-error]", modal).classList.add("hidden");
+    $("[data-story-delete]", modal).classList.add("hidden");
+    $("[data-story-like]", modal).classList.remove("hidden");
+    $("[data-story-media-wrap]", modal).innerHTML = `<div class="story-loading">Loading story…</div>`;
+    try {
+      const story = await PF.getStory(u, { countView: true });
+      if (!story?.active) {
+        closeStoryViewer();
+        updateStoryTriggers(u, false);
+        return notify("This story has expired.", "error");
+      }
+      const owner = story.username === PF.currentUsername();
+      modal.dataset.storyId = String(story.id);
+      $("[data-story-name]", modal).textContent = story.display_name || story.username;
+      $("[data-story-time]", modal).textContent = storyTimeLabel(story.expires_at);
+      $("[data-story-avatar]", modal).innerHTML = story.avatar ? `<img src="${esc(story.avatar)}" alt="">` : esc(initials(story));
+      $("[data-story-delete]", modal).classList.toggle("hidden", !owner);
+      $("[data-story-like]", modal).classList.toggle("hidden", owner);
+      $("[data-story-like-icon]", modal).textContent = story.liked ? "♥" : "♡";
+      $("[data-story-like-count]", modal).textContent = String(story.likes_count ?? 0);
+      $("[data-story-owner-stats]", modal).textContent = owner ? `👁 ${story.views_count ?? 0} views` : "";
+      const durationForTimer = Math.max(3, Math.min(Number(story.duration_seconds || (story.media_type.startsWith("image/") ? 12 : 30)), 30));
+      const progress = $("[data-story-progress]", modal);
+      progress.style.animation = "none";
+      void progress.offsetWidth;
+      progress.style.animation = `storyProgress ${durationForTimer}s linear forwards`;
+      clearTimeout(modal._storyTimer);
+      modal._storyTimer = setTimeout(() => closeStoryViewer(), durationForTimer * 1000);
+      const mediaWrap = $("[data-story-media-wrap]", modal);
+      mediaWrap.innerHTML = story.media_type.startsWith("video/")
+        ? `<video data-story-media playsinline controls autoplay muted src="${esc(story.media_url)}"></video>`
+        : `<img data-story-media src="${esc(story.media_url)}" alt="Story">`;
+      const media = $("[data-story-media]", modal);
+      if (media?.tagName === "VIDEO") { media.muted = true; media.volume = .9; media.play().catch(() => {}); }
+      updateStoryTriggers(u, true);
+    } catch (e) {
+      $("[data-story-error]", modal).textContent = e.message || "Could not load story";
+      $("[data-story-error]", modal).classList.remove("hidden");
+      $("[data-story-media-wrap]", modal).innerHTML = "";
+    }
+  }
+
+  function initStorySystem() {
+    ensureStoryPicker();
+    document.addEventListener("click", e => {
+      const trigger = e.target.closest?.("[data-story-user]");
+      if (!trigger) return;
+      const username = PF.normalizeUsername(trigger.dataset.storyUser || "");
+      if (!username) return;
+      const active = trigger.dataset.storyActive === "1";
+      const own = trigger.dataset.storyOwn === "1" || username === PF.currentUsername();
+      if (!active && !own) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (active) openStoryViewer(username);
+      else ensureStoryPicker().click();
+    }, true);
+    document.addEventListener("keydown", e => {
+      const target = e.target.closest?.("[data-story-user]");
+      if (target && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); target.click(); }
+      if (e.key === "Escape") closeStoryViewer();
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", async () => {
-    nav(); initMenu();
+    nav(); initMenu(); initStorySystem();
     $$('[data-profile-link]').forEach(a => { const me = PF.currentUsername(); if (me) a.href = `profile.html?u=${encodeURIComponent(me)}`; });
     $("[data-logout]")?.addEventListener("click", e => { e.preventDefault(); PF.clearSession(); location.href = "../index.html"; });
     const path = location.pathname.split("/").pop();
@@ -431,7 +602,7 @@
       <div class="profile-content">
         <div class="profile-head">
           <div class="profile-avatar-wrap">
-            <div class="profile-avatar ${frame}">${p.avatar ? `<img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}">` : esc(initials(p))}</div>
+            <button type="button" class="profile-avatar-button ${p.story?.active ? "has-story" : ""}" data-story-user="${esc(p.username)}" data-story-active="${p.story?.active ? "1" : "0"}" data-story-own="${isMe ? "1" : "0"}" aria-label="${p.story?.active ? "View story" : isMe ? "Add a story" : "Profile avatar"}"><span class="profile-avatar ${frame}">${p.avatar ? `<img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}">` : esc(initials(p))}</span>${isMe && !p.story?.active ? `<b class="story-add-dot profile-story-plus" aria-hidden="true">+</b>` : ""}</button>
           </div>
           <div class="profile-identity">
             <div class="profile-topline"><span class="status-dot ${p.status === "Offline" ? "offline" : ""}"></span><span>${esc(p.status === "Custom" ? (p.customStatus || "Online") : (p.status || "Online"))}</span>${isMe ? `<span class="you-label">YOUR PROFILE</span>` : ""}</div>
@@ -461,6 +632,7 @@
     if (!root || !username) { if (root) root.innerHTML = `<div class="empty-state glass"><h2>Profile not found</h2></div>`; return; }
     let p = await PF.getProfile(username);
     if (!p) { root.innerHTML = `<div class="empty-state glass"><h2>Profile not found</h2><p>This username does not exist on this device.</p></div>`; return; }
+    try { p.story = (await PF.getStory(username, { countView:false })) || p.story || null; } catch {}
     if (!templates[p.template]) p = {...p, template:"discord-noir"};
     p.sections = (p.sections || []).filter(s => !["skills", "projects"].includes(s.type));
     const me = PF.currentUsername();
@@ -471,6 +643,7 @@
     const friendProfiles = await PF.getProfiles(friends);
     if (!isMe) await PF.addView(username);
     p = !isMe ? await PF.getProfile(username) : p;
+    try { p.story = (await PF.getStory(username, { countView:false })) || p.story || null; } catch {}
     p.likes ||= {count:0, users:[]};
     p.likes.users ||= [];
     p.likes.count = p.likes.users.length;
