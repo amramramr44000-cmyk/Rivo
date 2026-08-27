@@ -656,8 +656,16 @@
     requireClient();
     const { data, error } = await sb.rpc("rivo_delete_story", { p_story_id: Number(storyId) });
     if (error) throw error;
+    const result = data || {};
+    // Supabase Storage objects must be removed through the Storage API, never by SQL.
+    if (result.deleted && result.storage_path) {
+      const { error: storageError } = await sb.storage.from(MEDIA_BUCKET).remove([result.storage_path]);
+      if (storageError) {
+        console.warn("Story row deleted but media cleanup failed:", storageError);
+      }
+    }
     invalidateProfileCache(currentUsername());
-    return data;
+    return result;
   }
 
   async function toggleStoryLike(storyId) {
