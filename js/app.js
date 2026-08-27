@@ -40,61 +40,24 @@
     const logged = !!PF.currentUsername();
     $$(".auth-required").forEach(el => el.classList.toggle("hidden", !logged));
     $$(".guest-only").forEach(el => el.classList.toggle("hidden", logged));
-    if (logged) initNotificationCenter();
   }
 
-  async function initNotificationCenter() {
-    if ($("[data-rivo-notifications]")) return;
-    const host = $(".topbar-right");
-    if (!host) return;
-    const wrap = document.createElement("div");
-    wrap.className = "rivo-notification-wrap";
-    wrap.innerHTML = `<button class="icon-btn notification-btn" type="button" data-rivo-notifications aria-label="Notifications"><span>🔔</span><i class="notification-badge hidden" data-notification-badge>0</i></button><div class="notification-popover glass" data-notification-popover><div class="notification-head"><div><b>Notifications</b><small data-notification-count>Loading…</small></div><button class="btn btn-sm btn-ghost" data-notification-readall>Mark all read</button></div><div class="notification-list" data-notification-list></div></div>`;
-    host.prepend(wrap);
-    const button = $("[data-rivo-notifications]", wrap);
-    const pop = $("[data-notification-popover]", wrap);
-    const list = $("[data-notification-list]", wrap);
-    const badge = $("[data-notification-badge]", wrap);
-    const count = $("[data-notification-count]", wrap);
-    let notifications = [];
-    const icon = type => type === "message" ? "✉️" : type === "friend_request" ? "👋" : type === "friend_accept" ? "🤝" : "🔔";
-    const label = n => {
-      const a = n.actor_display_name || n.actor_username || "Someone";
-      if (n.type === "message") return `${a} sent you a message`;
-      if (n.type === "friend_request") return `${a} sent you a friend request`;
-      if (n.type === "friend_accept") return `${a} accepted your friend request`;
-      return n.body || "You have a new notification";
+  function initLanguage() {
+    const saved = localStorage.getItem("pf_lang") || "en";
+    const set = lang => {
+      document.documentElement.lang = lang;
+      document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
+      localStorage.setItem("pf_lang", lang);
+      $$('[data-lang-label]').forEach(el => el.textContent = lang === "ar" ? "EN" : "ع" );
     };
-    const render = () => {
-      const unread = notifications.filter(n => !n.read_at).length;
-      badge.textContent = unread > 99 ? "99+" : String(unread);
-      badge.classList.toggle("hidden", unread === 0);
-      count.textContent = unread ? `${unread} unread` : `${notifications.length} total`;
-      list.innerHTML = notifications.length ? notifications.map(n => `<button type="button" class="notification-item ${n.read_at ? "read" : "unread"}" data-notification-id="${esc(n.id)}"><span class="notification-icon">${icon(n.type)}</span><span><b>${esc(label(n))}</b><small>${esc(new Date(n.created_at).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}))}</small></span></button>`).join("") : `<div class="notification-empty">Nothing new.</div>`;
-      $$('[data-notification-id]', wrap).forEach(btn => btn.onclick = async () => {
-        try { await PF.markNotificationRead(btn.dataset.notificationId); notifications = notifications.map(n => String(n.id) === String(btn.dataset.notificationId) ? {...n, read_at:new Date().toISOString()} : n); render(); } catch {}
-      });
-    };
-    const load = async () => { try { notifications = await PF.listNotifications(50); render(); } catch { count.textContent = "Unavailable"; } };
-    button.onclick = async e => { e.stopPropagation(); const open = !pop.classList.contains("open"); pop.classList.toggle("open", open); if (open) await load(); };
-    $("[data-notification-readall]", wrap).onclick = async () => { try { await PF.markAllNotificationsRead(); notifications = notifications.map(n => ({...n,read_at:new Date().toISOString()})); render(); } catch {} };
-    document.addEventListener("click", e => { if (!wrap.contains(e.target)) pop.classList.remove("open"); });
-    try {
-      const unsubscribe = await PF.subscribeNotifications(async n => {
-        if (!n) return;
-        notifications = [n, ...notifications.filter(x => String(x.id) !== String(n.id))].slice(0,50);
-        render();
-        const body = label(n);
-        notify(body, "success");
-        if (document.hidden && PF.browserNotificationsEnabled()) await PF.notifyBrowser("Rivo", {body, tag:`rivo-${n.id}`});
-      });
-      window.addEventListener("beforeunload", () => { try { unsubscribe?.(); } catch {} });
-    } catch {}
-    load();
+    set(saved);
+    $("[data-lang]")?.addEventListener("click", e => {
+      e.preventDefault(); set(document.documentElement.lang === "ar" ? "en" : "ar");
+    });
   }
 
   document.addEventListener("DOMContentLoaded", async () => {
-    nav(); initMenu();
+    nav(); initMenu(); initLanguage();
     $$('[data-profile-link]').forEach(a => { const me = PF.currentUsername(); if (me) a.href = `profile.html?u=${encodeURIComponent(me)}`; });
     $("[data-logout]")?.addEventListener("click", e => { e.preventDefault(); PF.clearSession(); location.href = "../index.html"; });
     const path = location.pathname.split("/").pop();
@@ -106,8 +69,6 @@
       if (path === "explore.html") await initExplore();
       if (path === "friends.html") await initFriends();
       if (path === "settings.html") await initSettings();
-      if (path === "admin.html") await initAdmin();
-      if (path === "messages.html") await initMessages();
     } catch (err) { console.error(err); notify(err.message || "Something went wrong", "error"); }
   });
 
@@ -270,13 +231,8 @@
     renderSections(state); renderSocials(state); renderBadges(state);
     $("#addSocial")?.addEventListener("click", () => { state.socials.push({label:"Website", url:""}); renderSocials(state); });
 
-    $("#saveBtn")?.addEventListener("click", async (e) => {
-      const btn = e.currentTarget;
-      if (btn.disabled) return; // guard against double-tap firing two uploads/saves at once
-      const originalLabel = btn.textContent;
+    $("#saveBtn")?.addEventListener("click", async () => {
       try {
-        btn.disabled = true;
-        btn.textContent = "Saving…";
         const oldUsername = me.username;
         const u = PF.normalizeUsername(state.username);
         if (!PF.validUsername(u)) throw new Error("Invalid username format.");
@@ -288,11 +244,7 @@
         await PF.saveProfile(state); localStorage.setItem("pf_session", u);
         notify("Profile saved", "success");
         setTimeout(() => location.href = `profile.html?u=${encodeURIComponent(u)}`, 380);
-      } catch (err) {
-        notify(err.message, "error");
-        btn.disabled = false;
-        btn.textContent = originalLabel;
-      }
+      } catch (err) { notify(err.message, "error"); }
     });
 
     const t = templates[state.template];
@@ -381,9 +333,9 @@
     const friends = Array.isArray(p.friends) ? p.friends : [];
     const more = Math.max(0, friends.length - 5);
     const badges = badgePills(p);
-    const likedBy = Array.isArray(p.likes?.users) ? p.likes.users : [];
+    const likedBy = p.likes?.users || [];
     const meUsername = PF.currentUsername();
-    const liked = !!meUsername && (p.likes?.viewerLiked === true || likedBy.includes(meUsername));
+    const liked = !!meUsername && likedBy.includes(meUsername);
     const likeCount = Number(p.likes?.count ?? likedBy.length ?? 0);
     const mini = p.miniImage ? `<div class="profile-mini-float" title="Decorative image"><img src="${esc(p.miniImage)}" alt=""></div>` : "";
     const frame = `frame-${p.avatarFrame || "none"}`;
@@ -407,14 +359,8 @@
       else action = `<button class="btn btn-primary" data-add-friend>+ Add Friend</button>`;
     }
     const quickLike = canInteract ? `<button class="like-btn ${liked ? "liked" : ""}" data-like-profile aria-label="${liked ? "Unlike" : "Like"}"><span class="heart">${liked ? "♥" : "♡"}</span><span class="like-count">${displayViews(likeCount)}</span></button>` : "";
-    const messagesClosed = p.messagePrivacy === "nobody";
-    const messageAction = canInteract
-      ? (messagesClosed
-        ? `<span class="btn btn-ghost messages-closed-badge" role="note" aria-label="This user has closed their messages">🔒 Messages closed</span>`
-        : `<a class="btn" href="messages.html?u=${encodeURIComponent(p.username)}">Message</a>`)
-      : "";
     const friendActionWrap = canInteract
-      ? `<div class="profile-head-actions profile-social-actions">${quickLike}${messageAction}${action}${mini}</div>`
+      ? `<div class="profile-head-actions profile-social-actions">${quickLike}${action}${mini}</div>`
       : "";
     const standaloneMini = !canInteract && mini ? `<div class="profile-mini-standalone">${mini}</div>` : "";
 
@@ -460,12 +406,12 @@
     const viewer = !isMe ? await PF.currentProfile() : p;
     const relationship = isMe ? "self" : PF.friendshipState(viewer, p.username);
     const friends = (p.friends || []);
-    const friendProfiles = await PF.getProfiles(friends);
+    const friendProfiles = (await Promise.all(friends.map(PF.getProfile))).filter(Boolean);
     if (!isMe) await PF.addView(username);
     p = !isMe ? await PF.getProfile(username) : p;
-    p.likes ||= {count:0, users:[], viewerLiked:false};
-    p.likes.count = Number(p.likes.count || 0);
-    p.likes.viewerLiked = !!p.likes.viewerLiked;
+    p.likes ||= {count:0, users:[]};
+    p.likes.users ||= [];
+    p.likes.count = p.likes.users.length;
     root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship });
     bindPlayer(root);
     $(`[data-add-friend]`)?.addEventListener("click", async () => {
@@ -492,7 +438,7 @@
         const viewer = await PF.currentProfile();
         const rel = PF.friendshipState(viewer, profile.username);
         const friends = (fresh?.friends || []);
-        const friendProfiles = await PF.getProfiles(friends);
+        const friendProfiles = (await Promise.all(friends.map(PF.getProfile))).filter(Boolean);
         const root = $("#profileRoot");
         if (root && fresh) {
           root.innerHTML = renderProfileCard(fresh, { isMe:false, friendProfiles, relationship:rel });
@@ -527,14 +473,7 @@
     const draw = list => box.innerHTML = list.length ? list.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><p>${esc(p.bio || "No bio yet.")}</p><div class="badges-inline">${badgePills(p, 1)}</div><a class="btn btn-sm btn-primary" href="profile.html?u=${encodeURIComponent(p.username)}">View Profile</a></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1"><h2>No profiles found</h2><p>Search by username or display name.</p></div>`;
     const all = await PF.listProfiles(); draw(all.slice(0, 12));
     form?.addEventListener("submit", async e => { e.preventDefault(); draw(await PF.searchUsers(input.value)); });
-    let searchTimer = 0;
-    input?.addEventListener("input", () => {
-      clearTimeout(searchTimer);
-      const q = input.value.trim();
-      searchTimer = setTimeout(async () => {
-        try { draw(q ? await PF.searchUsers(q) : all.slice(0, 12)); } catch (e) { notify(e.message, "error"); }
-      }, 220);
-    });
+    input?.addEventListener("input", async () => { const q = input.value.trim(); draw(q ? await PF.searchUsers(q) : all.slice(0, 12)); });
   }
 
   async function initFriends() {
@@ -543,9 +482,8 @@
     const render = async query => {
       const fresh = await PF.currentProfile();
       const incoming = fresh.friendRequests?.incoming || [], friends = fresh.friends || [];
-      const requestProfiles = await PF.getProfiles(incoming);
-      const requests = requestProfiles.filter(Boolean);
-      let profiles = (await PF.getProfiles(friends)).filter(Boolean);
+      const requests = (await Promise.all(incoming.map(PF.getProfile))).filter(Boolean);
+      let profiles = (await Promise.all(friends.map(PF.getProfile))).filter(Boolean);
       const q = String(query || "").trim().toLowerCase().replace(/^@/, "");
       if (q) profiles = profiles.filter(p => p.username.includes(q) || (p.displayName || "").toLowerCase().includes(q));
       requestBox.innerHTML = requests.length ? requests.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><div class="hero-actions"><button class="btn btn-sm btn-primary" data-accept="${esc(p.username)}">Accept</button><button class="btn btn-sm btn-danger" data-reject="${esc(p.username)}">Decline</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No pending requests.</div>`;
@@ -557,475 +495,10 @@
     search?.addEventListener("input", () => render(search.value)); await render("");
   }
 
-  async function initMessages() {
-    const me = await PF.currentProfile();
-    if (!me) { location.href = "login.html"; return; }
-    const list = $("#conversationList");
-    const search = $("#messageSearch");
-    const thread = $("#messageThread");
-    const title = $("#messageThreadTitle");
-    const form = $("#messageForm");
-    const input = $("#messageInput");
-    const status = $("#messageStatus");
-    if (!list || !thread || !title || !form || !input || !status) return;
-
-    let activeUser = "";
-    let activeUserId = "";
-    let conversations = [];
-    let messageUnsubscribe = null;
-    let reactionUnsubscribe = null;
-    let presence = null;
-    let typingTimer = null;
-    let typingStopTimer = null;
-    const renderedMessageIds = new Set();
-
-    const scrollThread = () => { thread.scrollTop = thread.scrollHeight; };
-    const avatarMini = p => p?.avatar
-      ? `<img class="message-avatar" src="${esc(p.avatar)}" alt="">`
-      : `<span class="message-avatar message-avatar-fallback">${esc(PF.initials(p))}</span>`;
-
-    const getPresenceFor = username => {
-      const key = PF.normalizeUsername(username);
-      if (!presence || !key) return null;
-      const state = presence.state?.[key];
-      return Array.isArray(state) && state.length ? state[state.length - 1] : null;
-    };
-
-    const updateThreadPresence = () => {
-      if (!activeUser) { status.textContent = ""; return; }
-      const peer = getPresenceFor(activeUser);
-      if (!peer) {
-        status.innerHTML = `<span class="presence-dot offline"></span> Offline`;
-        return;
-      }
-      if (peer.typingTo === me.username) {
-        status.innerHTML = `<span class="presence-dot online"></span> Typing…`;
-      } else {
-        status.innerHTML = `<span class="presence-dot online"></span> Online`;
-      }
-    };
-
-    const renderConversations = () => {
-      const q = String(search.value || "").trim().toLowerCase().replace(/^@/, "");
-      const filtered = conversations.filter(c => !q || c.username.includes(q) || String(c.displayName || "").toLowerCase().includes(q));
-      list.innerHTML = filtered.length
-        ? filtered.map(c => `<button type="button" class="conversation-item ${activeUser === c.username ? "active" : ""}" data-conversation="${esc(c.username)}"><span class="conversation-avatar">${avatarMini(c)}</span><span class="conversation-copy"><b>${esc(c.displayName)}</b><small>@${esc(c.username)}</small><em>${esc(c.lastMessage || "No messages yet")}</em></span><time>${esc(c.updatedLabel || "")}</time></button>`).join("")
-        : `<div class="message-list-empty">${q ? "No matching conversations." : "No conversations yet."}</div>`;
-      $$('[data-conversation]').forEach(btn => btn.onclick = () => openConversation(btn.dataset.conversation));
-    };
-
-    const appendMessage = (m, keepBottom = true) => {
-      if (!m?.id || renderedMessageIds.has(String(m.id))) return;
-      renderedMessageIds.add(String(m.id));
-      const row = document.createElement("div");
-      row.className = `message-row ${m.sender_username === me.username ? "mine" : "theirs"}`;
-      const bubble = document.createElement("div");
-      bubble.className = "message-bubble";
-      bubble.dir = "auto";
-      bubble.setAttribute("data-message-id", String(m.id));
-      const content = document.createElement("span");
-      content.className = PF.isEmojiOnly(m.content) ? "message-content emoji-only" : "message-content";
-      content.textContent = PF.normalizeMessageText(m.content);
-      bubble.appendChild(content);
-      const time = document.createElement("time");
-      time.textContent = new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      bubble.appendChild(time);
-      if (!String(m.id).startsWith("pending-")) {
-        const reactionBar = document.createElement("div");
-        reactionBar.className = "message-reactions";
-        reactionBar.innerHTML = (Array.isArray(m.reactions) ? m.reactions : []).map(r => `<button type="button" class="reaction-chip ${r.me ? "mine" : ""}" data-reaction-message="${esc(m.id)}" data-reaction-value="${esc(r.reaction)}"><span>${esc(r.reaction)}</span><b>${esc(r.count)}</b></button>`).join("");
-        if (reactionBar.childElementCount) bubble.appendChild(reactionBar);
-        const reactionToggle = document.createElement("button");
-        reactionToggle.type = "button"; reactionToggle.className = "reaction-add"; reactionToggle.textContent = "＋"; reactionToggle.setAttribute("aria-label","Add reaction");
-        reactionToggle.onclick = ev => { ev.stopPropagation(); openReactionMenu(reactionToggle, m.id); };
-        bubble.appendChild(reactionToggle);
-      }
-      row.appendChild(bubble);
-      const placeholder = thread.querySelector(".message-empty");
-      if (placeholder) thread.innerHTML = "";
-      thread.appendChild(row);
-      if (keepBottom) scrollThread();
-    };
-
-    function openReactionMenu(anchorEl, messageId) {
-      document.querySelectorAll(".reaction-popover").forEach(x => x.remove());
-      const pop = document.createElement("div");
-      pop.className = "reaction-popover glass";
-      pop.innerHTML = PF.REACTION_SET.map(r => `<button type="button" data-quick-reaction="${esc(r)}">${esc(r)}</button>`).join("");
-      document.body.appendChild(pop);
-      const rect = anchorEl.getBoundingClientRect();
-      pop.style.left = `${Math.max(8, Math.min(window.innerWidth-210, rect.left))}px`;
-      pop.style.top = `${Math.max(8, rect.top - 54)}px`;
-      $$('[data-quick-reaction]', pop).forEach(btn => btn.onclick = async () => {
-        try { await PF.toggleMessageReaction(messageId, btn.dataset.quickReaction); await refreshOpenThread(); } catch (e) { notify(e.message, "error"); } finally { pop.remove(); }
-      });
-      setTimeout(() => document.addEventListener("click", () => pop.remove(), {once:true}), 0);
-    }
-
-    async function refreshOpenThread() {
-      if (!activeUser) return;
-      const messages = await PF.getMessages(activeUser);
-      renderThread(messages);
-    }
-
-    const renderThread = messages => {
-      renderedMessageIds.clear();
-      thread.innerHTML = "";
-      if (!activeUser) {
-        thread.innerHTML = `<div id="messageEmpty" class="message-empty"><div class="message-empty-icon">✉</div><h2>Choose a conversation</h2><p>Select someone from the left to start messaging.</p></div>`;
-        return;
-      }
-      const ordered = [...messages].reverse();
-      if (!ordered.length) {
-        thread.innerHTML = `<div class="message-empty"><div class="message-empty-icon">✉</div><h2>No messages yet</h2><p>Send the first text message.</p></div>`;
-        return;
-      }
-      ordered.forEach(m => appendMessage(m, false));
-      scrollThread();
-    };
-
-    async function loadConversations() {
-      conversations = await PF.listConversations();
-      const active = conversations.find(c => c.username === activeUser);
-      if (active?.userId) activeUserId = active.userId;
-      renderConversations();
-    }
-
-    async function openConversation(username) {
-      activeUser = PF.normalizeUsername(username);
-      const c = conversations.find(x => x.username === activeUser);
-      activeUserId = c?.userId || "";
-      clearTimeout(typingStopTimer);
-      if (presence) {
-        try { await presence.update({ typingTo: "" }); } catch {}
-      }
-
-      let conversation = c;
-      if (!conversation || !activeUserId) {
-        try {
-          const profile = await PF.getProfile(activeUser);
-          if (profile) {
-            activeUserId = profile.userId || activeUserId;
-            conversation = conversation || {
-              username: profile.username,
-              userId: profile.userId || "",
-              displayName: profile.displayName || profile.username,
-              avatar: profile.avatar || "",
-              lastMessage: "Start a new conversation",
-              updatedLabel: "",
-              createdAt: ""
-            };
-            if (!c) {
-              conversations.unshift(conversation);
-            } else if (c.userId !== activeUserId) {
-              const idx = conversations.indexOf(c);
-              if (idx >= 0) conversations[idx] = { ...c, userId: activeUserId };
-            }
-          }
-        } catch {}
-      }
-
-      title.innerHTML = conversation
-        ? `<span class="thread-user-avatar">${avatarMini(conversation)}</span><span><b>${esc(conversation.displayName)}</b><small>@${esc(conversation.username)}</small></span>`
-        : `<span><b>@${esc(activeUser)}</b></span>`;
-      renderConversations();
-      try {
-        const messages = await PF.getMessages(activeUser);
-        renderThread(messages);
-        updateThreadPresence();
-        await updateComposerAccess();
-        if (!input.disabled) input.focus();
-      } catch (e) { notify(e.message, "error"); }
-    }
-
-    async function updateComposerAccess() {
-      if (!activeUser) { input.disabled = true; return false; }
-      try {
-        const target = await PF.getProfile(activeUser, { force: true });
-        const rule = target?.messagePrivacy || "everyone";
-        const meFresh = await PF.currentProfile({ force: true });
-        const allowed = rule === "everyone" || (rule === "friends" && PF.friendshipState(meFresh, activeUser) === "friends");
-        input.disabled = !allowed;
-        if (!allowed) {
-          status.innerHTML = rule === "nobody"
-            ? '<span class="presence-dot offline"></span> Messages closed'
-            : '<span class="presence-dot offline"></span> Friends only';
-          form.querySelector('button[type="submit"]')?.setAttribute("disabled", "disabled");
-        } else {
-          form.querySelector('button[type="submit"]')?.removeAttribute("disabled");
-          updateThreadPresence();
-        }
-        return allowed;
-      } catch { return true; }
-    }
-
-    async function updateTyping(value) {
-      if (!presence) return;
-      const isTyping = Boolean(value && activeUser);
-      clearTimeout(typingStopTimer);
-      await presence.update({ typingTo: isTyping ? activeUser : "" });
-      if (isTyping) {
-        typingStopTimer = setTimeout(() => { presence?.update({ typingTo: "" }); }, 1200);
-      }
-    }
-
-    form.addEventListener("submit", async e => {
-      e.preventDefault();
-      const text = String(input.value || "").trim();
-      if (!activeUser || !text) return;
-      clearTimeout(typingStopTimer);
-      try {
-        const allowed = await PF.canMessageProfile(activeUser);
-        if (!allowed) { notify("This user accepts messages from friends only.", "error"); await updateComposerAccess(); return; }
-      } catch (gateError) { notify(gateError.message, "error"); await updateComposerAccess(); return; }
-
-      // Optimistic send: show the bubble instantly instead of waiting on the
-      // round trip, so sending *feels* fast even on a slow connection. It's
-      // marked .pending until the server confirms, then swapped for the
-      // real row; on failure it's removed and the text is handed back.
-      input.value = "";
-      const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      appendMessage({ id: tempId, sender_username: me.username, receiver_username: activeUser, content: text, created_at: new Date().toISOString() });
-      thread.querySelector(`[data-message-id="${tempId}"]`)?.classList.add("pending");
-
-      const dropTemp = () => {
-        renderedMessageIds.delete(tempId);
-        thread.querySelector(`[data-message-id="${tempId}"]`)?.closest(".message-row")?.remove();
-      };
-
-      try {
-        const sent = await PF.sendMessage(activeUser, text);
-        await presence?.update({ typingTo: "" });
-        dropTemp();
-        if (sent) {
-          appendMessage(sent);
-          const idx = conversations.findIndex(c => c.username === activeUser);
-          if (idx >= 0) {
-            conversations[idx] = { ...conversations[idx], lastMessage: sent.content, createdAt: sent.created_at, updatedLabel: new Date(sent.created_at).toLocaleDateString([], { month: "short", day: "2-digit" }) };
-          } else {
-            conversations.unshift({ username: activeUser, userId: activeUserId, displayName: activeUser, avatar: "", lastMessage: sent.content, createdAt: sent.created_at, updatedLabel: "Now" });
-          }
-          conversations.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-          renderConversations();
-        }
-      } catch (e) {
-        dropTemp();
-        input.value = text; // hand the text back so nothing typed is lost
-        notify(e.message, "error");
-      }
-      finally { input.focus(); }
-    });
-
-    let composing = false;
-    input.addEventListener("compositionstart", () => { composing = true; });
-    input.addEventListener("compositionend", () => { composing = false; input.dispatchEvent(new Event("input", { bubbles:true })); });
-    input.addEventListener("input", () => {
-      clearTimeout(typingTimer);
-      typingTimer = setTimeout(() => updateTyping(input.value.trim()), 80);
-    });
-    input.addEventListener("keydown", e => {
-      // Ignore Enter while a mobile keyboard's word-suggestion/composition
-      // is still in progress (e.isComposing / the legacy keyCode 229).
-      // Submitting mid-composition sends whatever text existed *before*
-      // the phone's predictive text finished swapping in the final word,
-      // which is what caused sent messages to not match what was typed.
-      if (e.key === "Enter" && !e.shiftKey && !composing && !e.isComposing && e.keyCode !== 229) {
-        e.preventDefault();
-        form.requestSubmit();
-      }
-    });
-    search.addEventListener("input", renderConversations);
-
-    let resyncing = false;
-    const resyncThread = async () => {
-      // Fallback catch-up: re-pulls the open thread + conversation list from
-      // the server. Cheap (id-based de-dupe skips anything already shown) and
-      // guarantees delivery even if a push event was missed (tab backgrounded,
-      // socket hiccup, etc.) instead of requiring a manual page reload.
-      if (resyncing) return;
-      resyncing = true;
-      try {
-        await loadConversations();
-        const active = conversations.find(c => c.username === activeUser);
-        if (active?.userId) activeUserId = active.userId;
-        if (activeUser) {
-          const messages = await PF.getMessages(activeUser);
-          [...messages].reverse().forEach(m => appendMessage(m));
-        }
-      } catch {} finally { resyncing = false; }
-    };
-
-    messageUnsubscribe = await PF.subscribeMessages(async msg => {
-      if (!msg || (msg.sender_id !== me.id && msg.receiver_id !== me.id)) return;
-
-      const otherId = msg.sender_id === me.id ? msg.receiver_id : msg.sender_id;
-      const isActiveConversation = Boolean(activeUser && activeUserId && otherId === activeUserId);
-      const isOwnEcho = msg.sender_id === me.id;
-
-      if (isActiveConversation) {
-        appendMessage({
-          id: msg.id,
-          sender_username: isOwnEcho ? me.username : activeUser,
-          receiver_username: isOwnEcho ? activeUser : me.username,
-          content: msg.content,
-          created_at: msg.created_at
-        });
-      }
-
-      try {
-        await loadConversations();
-        const active = conversations.find(c => c.username === activeUser);
-        if (active?.userId) activeUserId = active.userId;
-      } catch {}
-    }, resyncThread);
-
-    reactionUnsubscribe = await PF.subscribeMessageReactions(async evt => {
-      const id = evt?.new?.message_id || evt?.old?.message_id;
-      if (!id || !activeUser) return;
-      try { await refreshOpenThread(); } catch {}
-    });
-
-    presence = await PF.subscribePresence(me.username, evt => {
-      if (presence) presence.state = evt?.state || {};
-      updateThreadPresence();
-    });
-
-    window.addEventListener("beforeunload", () => {
-      try { messageUnsubscribe?.(); } catch {}
-      try { presence?.unsubscribe?.(); } catch {}
-      try { reactionUnsubscribe?.(); } catch {}
-      clearTimeout(typingTimer);
-      clearTimeout(typingStopTimer);
-    });
-
-    await loadConversations();
-    input.disabled = true;
-    status.textContent = "";
-
-    const initialUser = PF.normalizeUsername(new URLSearchParams(location.search).get("u") || "");
-    if (initialUser && initialUser !== me.username) {
-      try {
-        let profileConversation = conversations.find(c => c.username === initialUser);
-        if (!profileConversation) {
-          const profile = await PF.getProfile(initialUser);
-          if (profile) {
-            profileConversation = { username: profile.username, userId: profile.userId || "", displayName: profile.displayName || profile.username, avatar: profile.avatar || "", lastMessage: "Start a new conversation", updatedLabel: "", createdAt: "" };
-            conversations.unshift(profileConversation);
-            renderConversations();
-          }
-        }
-        if (profileConversation) await openConversation(initialUser);
-      } catch (e) { notify(e.message, "error"); }
-    }
-  }
-
-
-  async function initAdmin() {
-    const root = $("#adminRoot");
-    if (!root) return;
-    try {
-      const ok = await PF.adminStatus();
-      if (!ok) { root.innerHTML = `<div class="empty-state glass"><h2>Access denied</h2><p>This area is restricted to Rivo administrators.</p></div>`; return; }
-      const build = (users, selected) => `<div class="admin-grid"><section class="admin-card glass"><div class="field"><span>Find account</span><input id="adminSearch" class="field-input" placeholder="username or display name" value="${esc(selected?.username || "")}"></div><div id="adminUsers"></div></section><section id="adminDetail" class="admin-card glass"><div class="empty-state"><h2>Select an account</h2><p>Choose a user from the list to inspect or moderate.</p></div></section></div>`;
-      root.innerHTML = build([], null);
-      const usersBox = $("#adminUsers");
-      const detail = $("#adminDetail");
-      let users = [];
-      let selected = "";
-      const drawUsers = () => {
-        usersBox.innerHTML = users.length ? users.map(u => `<button class="admin-user-row ${selected===u.username?"selected":""}" type="button" data-admin-user="${esc(u.username)}">${avatarMarkup(u)}<span class="admin-user-copy"><b>${esc(u.displayName || u.username)}</b><small>@${esc(u.username)}</small></span>${u.is_banned ? `<span class="admin-badge banned">Banned</span>`:""}</button>`).join("") : `<div class="empty-state"><p>No accounts found.</p></div>`;
-        $$('[data-admin-user]', root).forEach(btn => btn.onclick = () => selectUser(btn.dataset.adminUser));
-      };
-      const drawDetail = async username => {
-        detail.innerHTML = `<div class="empty-state"><h2>Loading account</h2></div>`;
-        const d = await PF.adminGetUserDetails(username);
-        if (!d) { detail.innerHTML = `<div class="empty-state"><h2>User not found</h2></div>`; return; }
-        const visitorRows = (d.visitors || []).length ? d.visitors.map(v => `<div class="visitor-row"><span>${esc(v.display_name || v.username)}</span><span>@${esc(v.username)} · ${esc(new Date(v.last_seen).toLocaleDateString())}</span></div>`).join("") : `<div class="empty-state"><p>No identified visitors yet.</p></div>`;
-        detail.innerHTML = `<div class="admin-detail"><div class="admin-detail-head"><div><span class="eyebrow">ACCOUNT</span><h2 style="margin:5px 0 0">${esc(d.displayName || d.username)}</h2><div class="admin-detail-meta">@${esc(d.username)} · joined ${esc(new Date(d.created_at).toLocaleDateString())}</div></div><span class="admin-badge ${d.is_banned?'banned':''}">${d.is_banned?'Banned':'Active'}</span></div><div class="admin-stats"><div class="admin-stat"><span>Profile views</span><b>${esc(d.views)}</b></div><div class="admin-stat"><span>Profile likes</span><b>${esc(d.likes)}</b></div><div class="admin-stat"><span>Friends</span><b>${esc(d.friends)}</b></div></div><div class="field"><span>Adjust public counters</span><div class="form-grid"><input id="adminViews" class="field-input" type="number" min="0" value="${esc(d.views)}" placeholder="Views"><input id="adminLikes" class="field-input" type="number" min="0" value="${esc(d.likes)}" placeholder="Likes"></div></div><div class="admin-actions"><button class="btn btn-primary" id="adminSaveStats">Save counters</button><button class="btn" id="adminToggleBan">${d.is_banned?'Unban account':'Block account'}</button><a class="btn" href="profile.html?u=${encodeURIComponent(d.username)}" target="_blank" rel="noreferrer">Open profile</a></div><section><div class="section-head"><div><div class="section-kicker">VISITORS</div><h3>Recent profile visitors</h3></div></div><div class="visitor-list">${visitorRows}</div></section><section class="admin-card danger-zone"><div class="section-kicker">DANGER ZONE</div><h3>Delete account permanently</h3><p class="muted">Removes the auth account and cascading profile data. This cannot be undone.</p><button class="btn btn-danger" id="adminDeleteUser">Delete ${esc(d.username)}</button></section></div>`;
-        $("#adminSaveStats").onclick = async () => { try { await PF.adminSetStats(d.username, $("#adminViews").value, $("#adminLikes").value); notify("Counters updated", "success"); await selectUser(d.username); } catch(e) { notify(e.message,"error"); } };
-        $("#adminToggleBan").onclick = async () => { try { await PF.adminSetBanned(d.username, !d.is_banned); notify(d.is_banned?"Account unblocked":"Account blocked", "success"); await selectUser(d.username); } catch(e) { notify(e.message,"error"); } };
-        $("#adminDeleteUser").onclick = async () => { if (!confirm(`Delete @${d.username} permanently?`)) return; try { await PF.adminDeleteUser(d.username); notify("Account deleted", "success"); selected=""; users = users.filter(u=>u.username!==d.username); drawUsers(); detail.innerHTML = `<div class="empty-state"><h2>Account deleted</h2></div>`; } catch(e) { notify(e.message,"error"); } };
-      };
-      async function selectUser(username) { selected = username; drawUsers(); await drawDetail(username); }
-      const loadUsers = async q => { try { users = await PF.adminListUsers(q, 120); drawUsers(); if (selected && users.some(u=>u.username===selected)) await drawDetail(selected); } catch(e) { notify(e.message,"error"); } };
-      let timer=0; $("#adminSearch").addEventListener("input", () => { clearTimeout(timer); timer=setTimeout(()=>loadUsers($("#adminSearch").value),180); });
-      await loadUsers("");
-    } catch (e) { root.innerHTML = `<div class="empty-state glass"><h2>Admin unavailable</h2><p>${esc(e.message)}</p></div>`; }
-  }
-
   async function initSettings() {
     const me = await PF.currentProfile(); if (!me) { location.href = "login.html"; return; }
     $("#settingsUsername") && ($("#settingsUsername").textContent = "@" + me.username);
     $("#settingsDisplay") && ($("#settingsDisplay").textContent = me.displayName || me.username);
-    $("#settingsLogout")?.addEventListener("click", async () => { await PF.clearSession(); location.href = "../index.html"; });
-    const select = $("#messagePrivacy");
-    const save = $("#messagePrivacySave");
-    const hint = $("#messagePrivacyHint");
-    const messageHint = v => v === "nobody"
-      ? "Nobody can message you — not even friends. Your profile shows a \u201cMessages closed\u201d badge instead of a Message button."
-      : v === "friends"
-        ? "Only your accepted friends can message you."
-        : "Anyone with a Rivo account can message you.";
-    const currentSetting = me.messageSettings?.whoCanMessage === "friends" ? "friends"
-      : me.messageSettings?.whoCanMessage === "nobody" ? "nobody" : "everyone";
-    const applyScheme = mode => {
-      const v = mode === "light" ? "light" : "dark";
-      localStorage.setItem("rivo_color_scheme", v);
-      document.documentElement.dataset.colorScheme = v;
-      document.querySelector('meta[name="theme-color"]')?.setAttribute("content", v === "light" ? "#f3f6fb" : "#07090e");
-    };
-    const mode = localStorage.getItem("rivo_color_scheme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
-    applyScheme(mode);
-    $("#themeDark") && ($("#themeDark").checked = mode === "dark");
-    $("#themeLight") && ($("#themeLight").checked = mode === "light");
-    $$('input[name="themeMode"]').forEach(r => r.addEventListener("change", () => applyScheme(r.value)));
-
-    const nbtn = $("#enableNotifications"), nsupport = $("#notificationSupport");
-    if (nbtn) {
-      const supported = "Notification" in window;
-      const syncNotificationUI = () => {
-        const permission = supported ? Notification.permission : "unsupported";
-        const enabled = supported && permission === "granted" && PF.browserNotificationsEnabled();
-        nbtn.disabled = !supported;
-        nbtn.setAttribute("aria-pressed", String(enabled));
-        nbtn.textContent = enabled ? "Notifications enabled ✓ — turn off" : "Enable notifications";
-        nsupport.textContent = !supported
-          ? "This browser does not support web notifications."
-          : permission === "denied"
-            ? "Notifications are blocked by the browser. Allow Rivo notifications in browser/site settings, then enable them here."
-            : enabled ? "Message and friend-request alerts are enabled on this device." : "Notifications are currently off on this device.";
-      };
-      syncNotificationUI();
-      nbtn.onclick = async () => {
-        try {
-          if (!supported) return;
-          const currentlyEnabled = Notification.permission === "granted" && PF.browserNotificationsEnabled();
-          if (currentlyEnabled) {
-            PF.setBrowserNotificationsEnabled(false);
-            syncNotificationUI();
-            notify("Browser notifications turned off", "success");
-            return;
-          }
-          const result = await PF.requestBrowserNotifications();
-          if (result === "granted") PF.setBrowserNotificationsEnabled(true);
-          else PF.setBrowserNotificationsEnabled(false);
-          syncNotificationUI();
-          notify(result === "granted" ? "Browser notifications enabled" : "Browser notifications not enabled", result === "granted" ? "success" : "error");
-        } catch (e) { notify(e.message || "Unable to change notification setting", "error"); }
-      };
-    }
-    try { const isAdmin = await PF.adminStatus(); $$("[data-admin-link]").forEach(a => a.classList.toggle("hidden", !isAdmin)); } catch {}
-    if (select) select.value = currentSetting;
-    if (hint) hint.textContent = messageHint(currentSetting);
-    save?.addEventListener("click", async () => {
-      try {
-        save.disabled = true;
-        save.textContent = "Saving…";
-        const v = await PF.setMessageSetting(select.value);
-        hint.textContent = messageHint(v);
-        notify("Message privacy saved", "success");
-      } catch (e) { notify(e.message, "error"); }
-      finally { save.disabled = false; save.textContent = "Save message privacy"; }
-    });
+    $("#settingsLogout")?.addEventListener("click", () => { PF.clearSession(); location.href = "../index.html"; });
   }
 })();
