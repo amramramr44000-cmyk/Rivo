@@ -413,3 +413,55 @@ html[data-color-scheme="light"] .feature-card p,html[data-color-scheme="light"] 
 .avatar-story-trigger.has-story,.profile-avatar-button.has-story{overflow:visible}
 .avatar-story-trigger.has-story > .avatar-xs img,.avatar-story-trigger.has-story > .avatar-sm img,.profile-avatar-button.has-story .profile-avatar img{display:block;width:100%;height:100%;object-fit:cover;border-radius:50%}
 @media(max-width:430px){.profile-avatar-button.has-story::before{inset:-5px}.avatar-story-trigger.has-story::before{inset:-3px}}
+
+
+/* Rivo v9 — story ring alignment + profile likes visibility */
+.avatar-story-trigger,
+.profile-avatar-button{overflow:visible!important;position:relative;isolation:isolate;}
+.avatar-story-trigger.has-story::before,
+.avatar-story-trigger.has-story::after,
+.profile-avatar-button.has-story::before,
+.profile-avatar-button.has-story::after{content:none!important;display:none!important;}
+.avatar-story-trigger .story-ring-frame,
+.profile-avatar-button .story-ring-frame{
+  position:absolute;
+  inset:-5px;
+  border-radius:50%;
+  background:conic-gradient(from 10deg,#ff5f6d,#ffc371,#8b5cf6,#5b8cff,#ff5f6d);
+  z-index:0;
+  pointer-events:none;
+  animation:storyRingSpin 7s linear infinite;
+  box-shadow:0 0 0 2px var(--surface),0 0 18px rgba(139,92,246,.22);
+}
+.avatar-story-trigger .story-ring-frame::after,
+.profile-avatar-button .story-ring-frame::after{
+  content:"";
+  position:absolute;
+  inset:3px;
+  border-radius:50%;
+  background:var(--surface);
+}
+.avatar-story-trigger>.avatar-xs,
+.avatar-story-trigger>.avatar-sm,
+.profile-avatar-button>.profile-avatar{position:relative;z-index:2;}
+.avatar-story-trigger .story-ring-frame{inset:-4px;}
+.profile-avatar-button .story-ring-frame{inset:-6px;}
+.profile-stats{grid-template-columns:repeat(4,minmax(0,1fr));}
+.profile-stats .like-stat span{display:inline-flex;align-items:center;gap:5px;}
+.heart-mini{font-size:11px;color:#ff667e;}
+@media(max-width:760px){
+  .profile-stats{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;}
+  .profile-stats>div{min-width:0;padding:9px 4px;}
+  .profile-stats span{font-size:7px;}
+  .profile-stats b{font-size:10px;}
+  .avatar-story-trigger .story-ring-frame{inset:-3px;}
+  .profile-avatar-button .story-ring-frame{inset:-5px;}
+}
+@media(max-width:430px){
+  .profile-stats{grid-template-columns:repeat(4,minmax(0,1fr));}
+  .profile-stats>div{padding:8px 2px;}
+  .profile-stats span{font-size:6.5px;}
+  .profile-stats b{font-size:9px;}
+  .avatar-story-trigger .story-ring-frame{inset:-3px;}
+  .profile-avatar-button .story-ring-frame{inset:-5px;}
+}
