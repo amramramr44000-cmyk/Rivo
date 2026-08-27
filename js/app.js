@@ -40,6 +40,57 @@
     const logged = !!PF.currentUsername();
     $$(".auth-required").forEach(el => el.classList.toggle("hidden", !logged));
     $$(".guest-only").forEach(el => el.classList.toggle("hidden", logged));
+    if (logged) initNotificationCenter();
+  }
+
+  async function initNotificationCenter() {
+    if ($("[data-rivo-notifications]")) return;
+    const host = $(".topbar-right");
+    if (!host) return;
+    const wrap = document.createElement("div");
+    wrap.className = "rivo-notification-wrap";
+    wrap.innerHTML = `<button class="icon-btn notification-btn" type="button" data-rivo-notifications aria-label="Notifications"><span>🔔</span><i class="notification-badge hidden" data-notification-badge>0</i></button><div class="notification-popover glass" data-notification-popover><div class="notification-head"><div><b>Notifications</b><small data-notification-count>Loading…</small></div><button class="btn btn-sm btn-ghost" data-notification-readall>Mark all read</button></div><div class="notification-list" data-notification-list></div></div>`;
+    host.prepend(wrap);
+    const button = $("[data-rivo-notifications]", wrap);
+    const pop = $("[data-notification-popover]", wrap);
+    const list = $("[data-notification-list]", wrap);
+    const badge = $("[data-notification-badge]", wrap);
+    const count = $("[data-notification-count]", wrap);
+    let notifications = [];
+    const icon = type => type === "message" ? "✉️" : type === "friend_request" ? "👋" : type === "friend_accept" ? "🤝" : "🔔";
+    const label = n => {
+      const a = n.actor_display_name || n.actor_username || "Someone";
+      if (n.type === "message") return `${a} sent you a message`;
+      if (n.type === "friend_request") return `${a} sent you a friend request`;
+      if (n.type === "friend_accept") return `${a} accepted your friend request`;
+      return n.body || "You have a new notification";
+    };
+    const render = () => {
+      const unread = notifications.filter(n => !n.read_at).length;
+      badge.textContent = unread > 99 ? "99+" : String(unread);
+      badge.classList.toggle("hidden", unread === 0);
+      count.textContent = unread ? `${unread} unread` : `${notifications.length} total`;
+      list.innerHTML = notifications.length ? notifications.map(n => `<button type="button" class="notification-item ${n.read_at ? "read" : "unread"}" data-notification-id="${esc(n.id)}"><span class="notification-icon">${icon(n.type)}</span><span><b>${esc(label(n))}</b><small>${esc(new Date(n.created_at).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}))}</small></span></button>`).join("") : `<div class="notification-empty">Nothing new.</div>`;
+      $$('[data-notification-id]', wrap).forEach(btn => btn.onclick = async () => {
+        try { await PF.markNotificationRead(btn.dataset.notificationId); notifications = notifications.map(n => String(n.id) === String(btn.dataset.notificationId) ? {...n, read_at:new Date().toISOString()} : n); render(); } catch {}
+      });
+    };
+    const load = async () => { try { notifications = await PF.listNotifications(50); render(); } catch { count.textContent = "Unavailable"; } };
+    button.onclick = async e => { e.stopPropagation(); const open = !pop.classList.contains("open"); pop.classList.toggle("open", open); if (open) await load(); if (open && "Notification" in window && Notification.permission === "default") await PF.requestBrowserNotifications(); };
+    $("[data-notification-readall]", wrap).onclick = async () => { try { await PF.markAllNotificationsRead(); notifications = notifications.map(n => ({...n,read_at:new Date().toISOString()})); render(); } catch {} };
+    document.addEventListener("click", e => { if (!wrap.contains(e.target)) pop.classList.remove("open"); });
+    try {
+      const unsubscribe = await PF.subscribeNotifications(async n => {
+        if (!n) return;
+        notifications = [n, ...notifications.filter(x => String(x.id) !== String(n.id))].slice(0,50);
+        render();
+        const body = label(n);
+        notify(body, "success");
+        if (document.hidden) await PF.notifyBrowser("Rivo", {body, tag:`rivo-${n.id}`});
+      });
+      window.addEventListener("beforeunload", () => { try { unsubscribe?.(); } catch {} });
+    } catch {}
+    load();
   }
 
   document.addEventListener("DOMContentLoaded", async () => {
@@ -55,6 +106,7 @@
       if (path === "explore.html") await initExplore();
       if (path === "friends.html") await initFriends();
       if (path === "settings.html") await initSettings();
+      if (path === "admin.html") await initAdmin();
       if (path === "messages.html") await initMessages();
     } catch (err) { console.error(err); notify(err.message || "Something went wrong", "error"); }
   });
@@ -521,6 +573,7 @@
     let activeUserId = "";
     let conversations = [];
     let messageUnsubscribe = null;
+    let reactionUnsubscribe = null;
     let presence = null;
     let typingTimer = null;
     let typingStopTimer = null;
@@ -570,16 +623,50 @@
       bubble.className = "message-bubble";
       bubble.dir = "auto";
       bubble.setAttribute("data-message-id", String(m.id));
-      bubble.textContent = String(m.content ?? "").normalize("NFC");
+      const content = document.createElement("span");
+      content.className = PF.isEmojiOnly(m.content) ? "message-content emoji-only" : "message-content";
+      content.textContent = PF.normalizeMessageText(m.content);
+      bubble.appendChild(content);
       const time = document.createElement("time");
       time.textContent = new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       bubble.appendChild(time);
+      if (!String(m.id).startsWith("pending-")) {
+        const reactionBar = document.createElement("div");
+        reactionBar.className = "message-reactions";
+        reactionBar.innerHTML = (Array.isArray(m.reactions) ? m.reactions : []).map(r => `<button type="button" class="reaction-chip ${r.me ? "mine" : ""}" data-reaction-message="${esc(m.id)}" data-reaction-value="${esc(r.reaction)}"><span>${esc(r.reaction)}</span><b>${esc(r.count)}</b></button>`).join("");
+        if (reactionBar.childElementCount) bubble.appendChild(reactionBar);
+        const reactionToggle = document.createElement("button");
+        reactionToggle.type = "button"; reactionToggle.className = "reaction-add"; reactionToggle.textContent = "＋"; reactionToggle.setAttribute("aria-label","Add reaction");
+        reactionToggle.onclick = ev => { ev.stopPropagation(); openReactionMenu(reactionToggle, m.id); };
+        bubble.appendChild(reactionToggle);
+      }
       row.appendChild(bubble);
       const placeholder = thread.querySelector(".message-empty");
       if (placeholder) thread.innerHTML = "";
       thread.appendChild(row);
       if (keepBottom) scrollThread();
     };
+
+    function openReactionMenu(anchorEl, messageId) {
+      document.querySelectorAll(".reaction-popover").forEach(x => x.remove());
+      const pop = document.createElement("div");
+      pop.className = "reaction-popover glass";
+      pop.innerHTML = PF.REACTION_SET.map(r => `<button type="button" data-quick-reaction="${esc(r)}">${esc(r)}</button>`).join("");
+      document.body.appendChild(pop);
+      const rect = anchorEl.getBoundingClientRect();
+      pop.style.left = `${Math.max(8, Math.min(window.innerWidth-210, rect.left))}px`;
+      pop.style.top = `${Math.max(8, rect.top - 54)}px`;
+      $$('[data-quick-reaction]', pop).forEach(btn => btn.onclick = async () => {
+        try { await PF.toggleMessageReaction(messageId, btn.dataset.quickReaction); await refreshOpenThread(); } catch (e) { notify(e.message, "error"); } finally { pop.remove(); }
+      });
+      setTimeout(() => document.addEventListener("click", () => pop.remove(), {once:true}), 0);
+    }
+
+    async function refreshOpenThread() {
+      if (!activeUser) return;
+      const messages = await PF.getMessages(activeUser);
+      renderThread(messages);
+    }
 
     const renderThread = messages => {
       renderedMessageIds.clear();
@@ -704,6 +791,9 @@
       finally { input.focus(); }
     });
 
+    let composing = false;
+    input.addEventListener("compositionstart", () => { composing = true; });
+    input.addEventListener("compositionend", () => { composing = false; input.dispatchEvent(new Event("input", { bubbles:true })); });
     input.addEventListener("input", () => {
       clearTimeout(typingTimer);
       typingTimer = setTimeout(() => updateTyping(input.value.trim()), 80);
@@ -714,12 +804,17 @@
       // Submitting mid-composition sends whatever text existed *before*
       // the phone's predictive text finished swapping in the final word,
       // which is what caused sent messages to not match what was typed.
-      if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+      if (e.key === "Enter" && !e.shiftKey && !composing && !e.isComposing && e.keyCode !== 229) {
         e.preventDefault();
         form.requestSubmit();
       }
     });
     search.addEventListener("input", renderConversations);
+    const emojiTray = document.createElement("div");
+    emojiTray.className = "message-emoji-tray";
+    emojiTray.innerHTML = PF.REACTION_SET.map(e => `<button type="button" title="${esc(e)}">${esc(e)}</button>`).join("");
+    form.parentElement?.insertBefore(emojiTray, form);
+    $$('button', emojiTray).forEach(btn => btn.onclick = () => { input.value += btn.textContent; input.focus(); input.dispatchEvent(new Event("input", {bubbles:true})); });
 
     let resyncing = false;
     const resyncThread = async () => {
@@ -764,6 +859,12 @@
       } catch {}
     }, resyncThread);
 
+    reactionUnsubscribe = await PF.subscribeMessageReactions(async evt => {
+      const id = evt?.new?.message_id || evt?.old?.message_id;
+      if (!id || !activeUser) return;
+      try { await refreshOpenThread(); } catch {}
+    });
+
     presence = await PF.subscribePresence(me.username, evt => {
       if (presence) presence.state = evt?.state || {};
       updateThreadPresence();
@@ -772,6 +873,7 @@
     window.addEventListener("beforeunload", () => {
       try { messageUnsubscribe?.(); } catch {}
       try { presence?.unsubscribe?.(); } catch {}
+      try { reactionUnsubscribe?.(); } catch {}
       clearTimeout(typingTimer);
       clearTimeout(typingStopTimer);
     });
@@ -797,6 +899,40 @@
     }
   }
 
+
+  async function initAdmin() {
+    const root = $("#adminRoot");
+    if (!root) return;
+    try {
+      const ok = await PF.adminStatus();
+      if (!ok) { root.innerHTML = `<div class="empty-state glass"><h2>Access denied</h2><p>This area is restricted to Rivo administrators.</p></div>`; return; }
+      const build = (users, selected) => `<div class="admin-grid"><section class="admin-card glass"><div class="field"><span>Find account</span><input id="adminSearch" class="field-input" placeholder="username or display name" value="${esc(selected?.username || "")}"></div><div id="adminUsers"></div></section><section id="adminDetail" class="admin-card glass"><div class="empty-state"><h2>Select an account</h2><p>Choose a user from the list to inspect or moderate.</p></div></section></div>`;
+      root.innerHTML = build([], null);
+      const usersBox = $("#adminUsers");
+      const detail = $("#adminDetail");
+      let users = [];
+      let selected = "";
+      const drawUsers = () => {
+        usersBox.innerHTML = users.length ? users.map(u => `<button class="admin-user-row ${selected===u.username?"selected":""}" type="button" data-admin-user="${esc(u.username)}">${avatarMarkup(u)}<span class="admin-user-copy"><b>${esc(u.displayName || u.username)}</b><small>@${esc(u.username)}</small></span>${u.is_banned ? `<span class="admin-badge banned">Banned</span>`:""}</button>`).join("") : `<div class="empty-state"><p>No accounts found.</p></div>`;
+        $$('[data-admin-user]', root).forEach(btn => btn.onclick = () => selectUser(btn.dataset.adminUser));
+      };
+      const drawDetail = async username => {
+        detail.innerHTML = `<div class="empty-state"><h2>Loading account</h2></div>`;
+        const d = await PF.adminGetUserDetails(username);
+        if (!d) { detail.innerHTML = `<div class="empty-state"><h2>User not found</h2></div>`; return; }
+        const visitorRows = (d.visitors || []).length ? d.visitors.map(v => `<div class="visitor-row"><span>${esc(v.display_name || v.username)}</span><span>@${esc(v.username)} · ${esc(new Date(v.last_seen).toLocaleDateString())}</span></div>`).join("") : `<div class="empty-state"><p>No identified visitors yet.</p></div>`;
+        detail.innerHTML = `<div class="admin-detail"><div class="admin-detail-head"><div><span class="eyebrow">ACCOUNT</span><h2 style="margin:5px 0 0">${esc(d.displayName || d.username)}</h2><div class="admin-detail-meta">@${esc(d.username)} · joined ${esc(new Date(d.created_at).toLocaleDateString())}</div></div><span class="admin-badge ${d.is_banned?'banned':''}">${d.is_banned?'Banned':'Active'}</span></div><div class="admin-stats"><div class="admin-stat"><span>Profile views</span><b>${esc(d.views)}</b></div><div class="admin-stat"><span>Profile likes</span><b>${esc(d.likes)}</b></div><div class="admin-stat"><span>Friends</span><b>${esc(d.friends)}</b></div></div><div class="field"><span>Adjust public counters</span><div class="form-grid"><input id="adminViews" class="field-input" type="number" min="0" value="${esc(d.views)}" placeholder="Views"><input id="adminLikes" class="field-input" type="number" min="0" value="${esc(d.likes)}" placeholder="Likes"></div></div><div class="admin-actions"><button class="btn btn-primary" id="adminSaveStats">Save counters</button><button class="btn" id="adminToggleBan">${d.is_banned?'Unban account':'Block account'}</button><a class="btn" href="profile.html?u=${encodeURIComponent(d.username)}" target="_blank" rel="noreferrer">Open profile</a></div><section><div class="section-head"><div><div class="section-kicker">VISITORS</div><h3>Recent profile visitors</h3></div></div><div class="visitor-list">${visitorRows}</div></section><section class="admin-card danger-zone"><div class="section-kicker">DANGER ZONE</div><h3>Delete account permanently</h3><p class="muted">Removes the auth account and cascading profile data. This cannot be undone.</p><button class="btn btn-danger" id="adminDeleteUser">Delete ${esc(d.username)}</button></section></div>`;
+        $("#adminSaveStats").onclick = async () => { try { await PF.adminSetStats(d.username, $("#adminViews").value, $("#adminLikes").value); notify("Counters updated", "success"); await selectUser(d.username); } catch(e) { notify(e.message,"error"); } };
+        $("#adminToggleBan").onclick = async () => { try { await PF.adminSetBanned(d.username, !d.is_banned); notify(d.is_banned?"Account unblocked":"Account blocked", "success"); await selectUser(d.username); } catch(e) { notify(e.message,"error"); } };
+        $("#adminDeleteUser").onclick = async () => { if (!confirm(`Delete @${d.username} permanently?`)) return; try { await PF.adminDeleteUser(d.username); notify("Account deleted", "success"); selected=""; users = users.filter(u=>u.username!==d.username); drawUsers(); detail.innerHTML = `<div class="empty-state"><h2>Account deleted</h2></div>`; } catch(e) { notify(e.message,"error"); } };
+      };
+      async function selectUser(username) { selected = username; drawUsers(); await drawDetail(username); }
+      const loadUsers = async q => { try { users = await PF.adminListUsers(q, 120); drawUsers(); if (selected && users.some(u=>u.username===selected)) await drawDetail(selected); } catch(e) { notify(e.message,"error"); } };
+      let timer=0; $("#adminSearch").addEventListener("input", () => { clearTimeout(timer); timer=setTimeout(()=>loadUsers($("#adminSearch").value),180); });
+      await loadUsers("");
+    } catch (e) { root.innerHTML = `<div class="empty-state glass"><h2>Admin unavailable</h2><p>${esc(e.message)}</p></div>`; }
+  }
+
   async function initSettings() {
     const me = await PF.currentProfile(); if (!me) { location.href = "login.html"; return; }
     $("#settingsUsername") && ($("#settingsUsername").textContent = "@" + me.username);
@@ -812,6 +948,18 @@
         : "Anyone with a Rivo account can message you.";
     const currentSetting = me.messageSettings?.whoCanMessage === "friends" ? "friends"
       : me.messageSettings?.whoCanMessage === "nobody" ? "nobody" : "everyone";
+    const mode = localStorage.getItem("rivo_color_scheme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    $("#themeDark") && ($("#themeDark").checked = mode === "dark");
+    $("#themeLight") && ($("#themeLight").checked = mode === "light");
+    $$('input[name="themeMode"]').forEach(r => r.addEventListener("change", () => { localStorage.setItem("rivo_color_scheme", r.value); document.documentElement.dataset.colorScheme = r.value; }));
+    const nbtn = $("#enableNotifications"), nsupport = $("#notificationSupport");
+    if (nbtn) {
+      const supported = "Notification" in window;
+      nsupport.textContent = !supported ? "This browser does not support web notifications." : `Permission: ${Notification.permission}`;
+      nbtn.disabled = !supported;
+      nbtn.onclick = async () => { const result = await PF.requestBrowserNotifications(); nsupport.textContent = `Permission: ${result}`; nbtn.textContent = result === "granted" ? "Notifications enabled ✓" : "Enable browser notifications"; };
+    }
+    try { const isAdmin = await PF.adminStatus(); $$("[data-admin-link]").forEach(a => a.classList.toggle("hidden", !isAdmin)); } catch {}
     if (select) select.value = currentSetting;
     if (hint) hint.textContent = messageHint(currentSetting);
     save?.addEventListener("click", async () => {

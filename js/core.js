@@ -126,7 +126,7 @@
     if (includePrivate) {
       const priv = row?.private_data || {};
       p.friendRequests = priv.friendRequests || { incoming: [], outgoing: [] };
-      p.messageSettings = { whoCanMessage: priv.messageSettings?.whoCanMessage === "friends" ? "friends" : "everyone" };
+      p.messageSettings = { whoCanMessage: ["friends","nobody"].includes(priv.messageSettings?.whoCanMessage) ? priv.messageSettings.whoCanMessage : "everyone" };
     }
     return p;
   }
@@ -610,6 +610,22 @@
     try { await sb.realtime.setAuth(session?.access_token || null); } catch {}
   }
 
+
+  function applySavedColorScheme() {
+    const saved = localStorage.getItem("rivo_color_scheme");
+    const mode = saved === "light" || saved === "dark" ? saved : (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    document.documentElement.dataset.colorScheme = mode;
+  }
+  applySavedColorScheme();
+
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      const onPages = /\/pages\//.test(location.pathname);
+      const swPath = onPages ? "../sw.js" : "sw.js";
+      navigator.serviceWorker.register(swPath, { scope: onPages ? "../" : "./" }).catch(err => console.warn("[Rivo] Service worker registration failed", err));
+    });
+  }
+
   if (sb) {
     sb.auth.onAuthStateChange((_event, session) => {
       syncRealtimeAuth(session);
@@ -629,12 +645,160 @@
     });
   }
 
+
+  const REACTION_SET = ["❤️","😂","👍","😮","😢"];
+
+  function normalizeMessageText(value) {
+    return String(value ?? "").replace(/\r\n?/g, "\n").normalize("NFC").trim();
+  }
+
+  function isEmojiOnly(text) {
+    const value = normalizeMessageText(text).replace(/[\s\u200d\ufe0f]/gu, "");
+    if (!value) return false;
+    try {
+      return [...value].every(ch => /\p{Extended_Pictographic}|\p{Emoji_Presentation}|\p{Emoji_Modifier}/u.test(ch));
+    } catch {
+      return /^(?:[\u2600-\u27ff]|[\ud800-\udbff][\udc00-\udfff])+$/u.test(value);
+    }
+  }
+
+  async function toggleMessageReaction(messageId, reaction) {
+    requireClient();
+    const r = String(reaction || "");
+    if (!REACTION_SET.includes(r)) throw new Error("Unsupported reaction");
+    const { data, error } = await sb.rpc("rivo_toggle_message_reaction", { p_message_id: Number(messageId), p_reaction: r });
+    if (error) throw error;
+    return data;
+  }
+
+  async function listNotifications(limit = 40) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_list_notifications", { p_limit: Math.max(1, Math.min(Number(limit)||40,100)) });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  }
+
+  async function markNotificationRead(id) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_mark_notification_read", { p_notification_id: Number(id) });
+    if (error) throw error;
+    return data;
+  }
+
+  async function markAllNotificationsRead() {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_mark_notifications_read", {});
+    if (error) throw error;
+    return data;
+  }
+
+  async function subscribeMessageReactions(callback) {
+    requireClient();
+    const session = (await sb.auth.getSession()).data?.session;
+    if (!session?.user?.id) return async () => {};
+    await syncRealtimeAuth(session);
+    const channel = sb.channel(`rivo-reactions-${session.user.id}-${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "rivo_message_reactions" }, payload => callback?.(payload || null))
+      .subscribe();
+    return async () => { try { await sb.removeChannel(channel); } catch {} };
+  }
+
+  async function subscribeNotifications(callback) {
+    requireClient();
+    const session = (await sb.auth.getSession()).data?.session;
+    if (!session?.user?.id) return async () => {};
+    await syncRealtimeAuth(session);
+    const channel = sb.channel(`rivo-notifications-${session.user.id}-${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_notifications", filter: `recipient_id=eq.${session.user.id}` }, payload => callback?.(payload?.new || null))
+      .subscribe();
+    return async () => { try { await sb.removeChannel(channel); } catch {} };
+  }
+
+  async function requestBrowserNotifications() {
+    if (!("Notification" in window)) return "unsupported";
+    if (Notification.permission === "granted") return "granted";
+    return Notification.requestPermission();
+  }
+
+  async function notifyBrowser(title, options = {}) {
+    try {
+      if (!("Notification" in window) || Notification.permission !== "granted") return false;
+      const reg = await navigator.serviceWorker?.getRegistration?.();
+      if (reg?.showNotification) {
+        await reg.showNotification(title, { icon: options.icon || undefined, badge: options.badge || undefined, body: options.body || "", tag: options.tag || "rivo", data: options.data || {}, renotify: true });
+        return true;
+      }
+      new Notification(title, options);
+      return true;
+    } catch { return false; }
+  }
+
+  async function listProfileVisitors(username, limit = 50) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_get_profile_visitors", { p_username: normalizeUsername(username), p_limit: Math.max(1, Math.min(Number(limit)||50,100)) });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  }
+
+  async function adminStatus() {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_admin_is_admin", {});
+    if (error) throw error;
+    return !!data;
+  }
+
+  async function adminListUsers(query = "", limit = 100) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_admin_list_users", { p_query: String(query||""), p_limit: Math.max(1, Math.min(Number(limit)||100,200)) });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  }
+
+  async function adminSetBanned(username, banned) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_admin_set_banned", { p_username: normalizeUsername(username), p_banned: !!banned });
+    if (error) throw error;
+    return data;
+  }
+
+  async function adminSetStats(username, views, likes) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_admin_set_stats", { p_username: normalizeUsername(username), p_views: Math.max(0, Math.floor(Number(views)||0)), p_likes: Math.max(0, Math.floor(Number(likes)||0)) });
+    if (error) throw error;
+    invalidateProfileCache(username);
+    return data;
+  }
+
+  async function adminDeleteUser(username) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_admin_delete_user", { p_username: normalizeUsername(username) });
+    if (error) throw error;
+    invalidateProfileCache(username);
+    return data;
+  }
+
+  async function adminGetUserDetails(username) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_admin_get_user_details", { p_username: normalizeUsername(username) });
+    if (error) throw error;
+    return data;
+  }
+
+  async function setProfileViewPreference(enabled) {
+    requireClient();
+    const { data, error } = await sb.rpc("rivo_set_profile_view_preference", { p_enabled: !!enabled });
+    if (error) throw error;
+    return data;
+  }
+
   window.PF = {
     defaults, badgeCatalog, templates, getProfile, listProfiles, putProfile: saveProfile, deleteProfile,
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
     updateProfile, saveProfile, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
     removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, sendMessage,
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
-    initials, escapeHtml, safeUrl
+    REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
+    subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, listProfileVisitors, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminGetUserDetails,
+    setProfileViewPreference, initials, escapeHtml, safeUrl
   };
 })();
