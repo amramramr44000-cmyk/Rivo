@@ -103,3 +103,48 @@ Run the complete `supabase_schema.sql` file in the Supabase SQL Editor for the p
 
 ## Calling privacy
 Calls support Everyone / Friends only / Nobody under Settings → Calls. The call permission is enforced by Supabase RPC.
+
+
+## Rivo Calls — cross-network reliability
+
+The call client now supports TURN credentials and ICE restart. This is important when two users are on different networks/NATs: STUN can discover routes, while TURN provides a relay when direct ICE candidates cannot connect.
+
+### Supabase Edge Function
+Deploy `supabase/functions/rivo-turn/index.ts` as the `rivo-turn` function.
+
+Set these server-side Supabase Function Secrets:
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_TURN_KEY_ID`
+- `CLOUDFLARE_TURN_API_TOKEN`
+
+Create a Cloudflare Realtime TURN key first. Do NOT place the Cloudflare API token in `js/supabase-config.js` or any browser code.
+
+The browser is configured to call:
+`https://stfjcrcualeggmiygqur.supabase.co/functions/v1/rivo-turn`
+
+The client falls back to STUN if TURN credentials are unavailable, but reliable calls between restrictive/mobile networks require the TURN function to be deployed and configured.
+
+## Rivo Calls — LiveKit Cloud
+
+The call UI is preserved, but media transport now uses LiveKit Cloud instead of raw WebRTC/STUN/TURN. Supabase Realtime remains responsible for ringing, accept/decline, and hangup signaling. LiveKit's browser SDK handles audio/video transport, reconnection, adaptive streaming, and cross-network routing.
+
+Deploy the bundled token function:
+
+```bash
+supabase functions deploy rivo-livekit-token
+```
+
+The exact function source is included at `supabase/functions/rivo-livekit-token/index.ts`, so you do not need to retype it in the Supabase Editor.
+
+Set these Supabase Edge Function secrets (Dashboard → Edge Functions → Secrets):
+
+- `LIVEKIT_URL` — your LiveKit Cloud WebSocket URL (`wss://...livekit.cloud`)
+- `LIVEKIT_API_KEY` — LiveKit API key
+- `LIVEKIT_API_SECRET` — LiveKit API secret
+
+Never put the LiveKit API secret in `js/supabase-config.js` or any browser file. The Edge Function validates the user's Supabase session and mints a short-lived room token.
+
+The frontend calls:
+`https://stfjcrcualeggmiygqur.supabase.co/functions/v1/rivo-livekit-token`
+
+The LiveKit client SDK is loaded from jsDelivr in the HTML pages. For production, pin and self-host the SDK if you want full control over dependency delivery.
