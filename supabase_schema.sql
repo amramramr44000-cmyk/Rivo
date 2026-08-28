@@ -1303,9 +1303,12 @@ grant execute on function public.rivo_toggle_post_repost(bigint) to authenticate
 
 create or replace function public.rivo_create_community(p_name text,p_description text,p_join_policy text,p_image_url text default null,p_image_path text default null)
 returns jsonb language plpgsql security definer set search_path=public as $$
-declare me uuid:=auth.uid(); cid bigint; policy text:=case when p_join_policy='friends' then 'friends' when p_join_policy='request' then 'request' else 'public' end;
+declare me uuid:=auth.uid(); cid bigint; owned_count int; policy text:=case when p_join_policy='friends' then 'friends' when p_join_policy='request' then 'request' else 'public' end;
 begin
   if me is null then raise exception 'Not signed in'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(me::text,0));
+  select count(*)::int into owned_count from public.rivo_communities where owner_id=me;
+  if owned_count >= 3 then raise exception 'You can create up to 3 communities'; end if;
   if nullif(trim(coalesce(p_name,'')),'') is null then raise exception 'Community name is required'; end if;
   insert into public.rivo_communities(owner_id,name,description,join_policy,image_url,image_path)
   values(me,trim(p_name),trim(coalesce(p_description,'')),policy,nullif(trim(p_image_url),''),nullif(trim(p_image_path),'')) returning id into cid;
@@ -1314,6 +1317,13 @@ begin
 end; $$;
 revoke all on function public.rivo_create_community(text,text,text,text,text) from public;
 grant execute on function public.rivo_create_community(text,text,text,text,text) to authenticated;
+
+create or replace function public.rivo_my_community_count()
+returns integer language sql security definer set search_path=public as $$
+  select count(*)::int from public.rivo_communities where owner_id=auth.uid();
+$$;
+revoke all on function public.rivo_my_community_count() from public;
+grant execute on function public.rivo_my_community_count() to authenticated;
 
 create or replace function public.rivo_list_communities(p_limit int default 30)
 returns setof jsonb language sql security definer set search_path=public as $$
