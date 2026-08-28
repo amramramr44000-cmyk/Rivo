@@ -148,3 +148,13 @@ The frontend calls:
 `https://stfjcrcualeggmiygqur.supabase.co/functions/v1/rivo-livekit-token`
 
 The LiveKit client SDK is loaded from jsDelivr in the HTML pages. For production, pin and self-host the SDK if you want full control over dependency delivery.
+
+
+## Calls v11 improvements
+- LiveKit remains the media transport; the existing Rivo call UI is preserved.
+- Audio capture uses WebRTC echo cancellation, noise suppression and auto gain control.
+- LiveKit adaptive streaming + dynacast are enabled to reduce video bandwidth/CPU and adapt to network conditions.
+- A connection-quality indicator is shown during calls.
+- In-call audio output routing is exposed where the browser supports audio output selection; wired/Bluetooth devices are allowed to follow the phone/browser routing policy.
+- A true in-app mini-call mode lets the user keep the call visible while interacting with the current Rivo page.
+- Reconnection policy and initial connection retry settings were strengthened.
