@@ -86,4 +86,4 @@ New account creation now uses a stronger password policy (10–128 characters wi
 
 ### Rivo Human Check
 
-No Cloudflare or other CAPTCHA setup is required. The browser presents a single familiar “I’m human” checkbox and runs the layered local checks already included in the project. Keep the Supabase Auth rate limits enabled in production.
+No third-party CAPTCHA setup is required. The browser presents a single familiar verification square and runs the layered local anti-automation checks already included in the project. Keep the Supabase Auth rate limits enabled in production.
