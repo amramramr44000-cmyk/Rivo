@@ -1803,15 +1803,6 @@ html[data-color-scheme="light"] .social-side-link.active{background:rgba(16,24,4
    Posts + Communities live inside the hamburger menu on phones.
    The actual social page content remains fully visible.
    ========================================================= */
-.menu-section-title{
-  padding:9px 12px 5px;
-  color:#687384;
-  font-size:9px;
-  font-weight:800;
-  letter-spacing:.12em;
-}
-.menu-section-spacer{margin-top:4px;padding-top:10px;border-top:1px solid rgba(255,255,255,.07)}
-.menu-social-link{display:flex;align-items:center;gap:10px!important;font-weight:700!important}
 @media(max-width:760px){
   .social-page .topbar{position:sticky!important;z-index:1000!important;}
   .social-page .menu-button{display:grid!important;visibility:visible!important;opacity:1!important;}
@@ -1828,5 +1819,171 @@ html[data-color-scheme="light"] .social-side-link.active{background:rgba(16,24,4
   .social-page .community-grid,
   .social-page .community-room{min-width:0!important;width:100%!important;max-width:100%!important;}
   .social-page .community-room.hidden{display:none!important;}
-  .menu-panel a.menu-social-link{min-height:48px!important;font-size:14px!important;}
+  .menu-panel > a{min-height:48px!important;font-size:14px!important;}
+}
+
+/* =========================================================
+   Unified mobile menu — Posts / Communities available on every page
+   at the same hierarchy as the other navigation links.
+   ========================================================= */
+@media(max-width:760px){
+  .menu-panel{
+    z-index:1200;
+    min-width:190px;
+    max-width:min(320px,calc(100vw - 24px));
+  }
+  .menu-panel > a{
+    display:flex!important;
+    align-items:center;
+    min-height:44px;
+    width:100%;
+    box-sizing:border-box;
+  }
+}
+
+
+/* ============================================================
+   Rivo social v3 — mobile-safe hamburger + WhatsApp-style communities
+   ============================================================ */
+.post-delete-action{
+  color:#ffb4b4!important;
+  border-color:rgba(255,90,90,.22)!important;
+}
+.post-author{position:relative;}
+.post-author .post-delete-action{
+  margin-inline-start:auto;
+  flex:0 0 auto;
+  padding:6px 8px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:9px;
+  background:rgba(255,255,255,.025);
+  font-size:10px;
+  cursor:pointer;
+}
+.community-avatar,.room-avatar{
+  display:inline-grid;
+  place-items:center;
+  overflow:hidden;
+  flex:0 0 auto;
+  background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.07);
+}
+.community-avatar{width:44px;height:44px;border-radius:14px;}
+.room-avatar{width:38px;height:38px;border-radius:12px;}
+.community-avatar img,.room-avatar img{width:100%;height:100%;object-fit:cover;display:block;}
+.community-avatar-fallback{font-size:14px;font-weight:900;color:#dbe2ec;}
+.room-title-line{display:flex;align-items:center;gap:10px;min-width:0;}
+.room-title-line>div:last-child{min-width:0;}
+.room-head-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
+.room-mobile-back{display:none;}
+.community-image-picker{display:grid;grid-template-columns:auto auto 1fr;align-items:center;gap:10px;padding:10px;border:1px solid var(--border);border-radius:14px;background:rgba(255,255,255,.025);}
+.community-image-preview{width:54px;height:54px;border-radius:15px;display:grid;place-items:center;overflow:hidden;background:rgba(255,255,255,.06);font-weight:900;}
+.community-image-preview img{width:100%;height:100%;object-fit:cover;}
+.community-image-picker small{color:#7f8998;font-size:10px;}
+
+@media(max-width:760px){
+  /* One stable top navigation: no social bar pushed into the page. */
+  .social-page .topbar{position:sticky!important;top:6px!important;z-index:5000!important;}
+  .social-page .menu-button{display:grid!important;}
+  .social-page .menu-panel{top:65px!important;inset-inline:4px!important;max-height:calc(100svh - 78px)!important;overflow:auto!important;}
+  .social-page .social-shell{padding-bottom:18px!important;}
+
+  /* Posts: the auxiliary social bar never becomes a broken bottom/top strip. */
+  .social-page .post-layout{grid-template-columns:minmax(0,1fr)!important;}
+  .social-page .social-side{display:none!important;}
+
+  /* Communities: WhatsApp-like left mini list + right chat panel. */
+  .social-page .whatsapp-communities{
+    grid-template-columns:clamp(92px,30vw,150px) minmax(0,1fr)!important;
+    gap:8px!important;
+    align-items:stretch!important;
+    min-height:calc(100svh - 170px);
+  }
+  .social-page .community-list-panel{
+    display:grid!important;
+    grid-template-columns:1fr!important;
+    align-content:start;
+    gap:7px!important;
+    overflow:auto!important;
+    max-height:calc(100svh - 170px)!important;
+    padding-right:2px;
+  }
+  .social-page .community-list-panel .community-card{
+    padding:8px!important;
+    border-radius:14px!important;
+    cursor:pointer;
+  }
+  .social-page .community-list-panel .community-card-head{
+    align-items:center!important;
+    gap:7px!important;
+  }
+  .social-page .community-list-panel .community-avatar{width:34px!important;height:34px!important;border-radius:11px!important;}
+  .social-page .community-list-panel .community-card-copy h3{
+    margin:0!important;
+    font-size:11px!important;
+    line-height:1.2!important;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .social-page .community-list-panel .community-meta,
+  .social-page .community-list-panel .community-card p{
+    display:none!important;
+  }
+  .social-page .community-list-panel .community-actions{
+    margin-top:7px!important;
+  }
+  .social-page .community-list-panel .community-actions .btn{
+    width:100%!important;
+    padding:5px 6px!important;
+    font-size:8px!important;
+    min-height:28px!important;
+  }
+  .social-page .community-list-panel .community-actions .btn-danger{display:none!important;}
+
+  .social-page .community-room{
+    position:relative!important;
+    top:auto!important;
+    min-height:calc(100svh - 170px)!important;
+    height:calc(100svh - 170px)!important;
+    border-radius:16px!important;
+  }
+  .social-page .community-room.hidden{display:none!important;}
+  .social-page .community-room .room-mobile-back{display:grid!important;}
+  .social-page .community-room .room-close-desktop{display:none!important;}
+  .social-page .community-room .room-head{padding:9px 10px!important;}
+  .social-page .community-room .room-title h2{font-size:13px!important;}
+  .social-page .community-room .room-title p{font-size:9px!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:42vw;}
+  .social-page .community-room .room-body{grid-template-columns:1fr!important;min-height:0!important;}
+  .social-page .community-room .room-sidebar{display:none!important;}
+  .social-page .community-room .room-chat{min-height:0!important;}
+  .social-page .community-room .room-messages{
+    max-height:none!important;
+    height:auto!important;
+    flex:1 1 auto!important;
+    overflow:auto!important;
+    padding:10px!important;
+    gap:7px!important;
+  }
+  .social-page .community-room .room-compose{
+    position:sticky!important;
+    bottom:0!important;
+    padding:8px!important;
+    background:rgba(8,11,16,.94);
+    backdrop-filter:blur(10px);
+  }
+  .social-page .community-room .room-compose input{min-height:38px!important;font-size:11px!important;}
+  .social-page .community-room .room-compose .btn{min-height:38px!important;}
+}
+
+@media(max-width:430px){
+  .social-page .whatsapp-communities{
+    grid-template-columns:88px minmax(0,1fr)!important;
+    gap:6px!important;
+  }
+  .social-page .community-list-panel .community-card{padding:7px!important;}
+  .social-page .community-list-panel .community-avatar{width:32px!important;height:32px!important;}
+  .social-page .community-room{min-height:calc(100svh - 155px)!important;height:calc(100svh - 155px)!important;}
+  .community-image-picker{grid-template-columns:auto 1fr; }
+  .community-image-picker small{grid-column:1/-1;}
 }
