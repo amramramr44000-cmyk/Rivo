@@ -938,6 +938,48 @@
     return data;
   }
 
+
+  async function uploadPostImage(file) {
+    requireClient();
+    const me = await currentProfile();
+    if (!me?.id) throw new Error("No signed-in profile.");
+    if (!(file instanceof File)) throw new Error("Choose an image.");
+    if (!file.type.startsWith("image/")) throw new Error("Only images are supported.");
+    if (file.size > 8 * 1024 * 1024) throw new Error("Each image must be 8 MB or less.");
+    const dataUrl = await compressImage(file, 1800, .86);
+    const blob = dataUrlToBlob(dataUrl);
+    const path = `${me.id}/posts/${Date.now()}-${crypto.randomUUID()}.webp`;
+    const url = await uploadBlob(blob, path, "image/webp");
+    return { url, path, type: "image/webp" };
+  }
+  async function listPosts(username=null, limit=30, offset=0) { return callRpc("rivo_list_posts", { p_username: username || null, p_limit: limit, p_offset: offset }); }
+  async function getPost(id) { return callRpc("rivo_get_post", { p_post_id: Number(id) }); }
+  async function createPost(content, media=[]) { return callRpc("rivo_create_post", { p_content: String(content||""), p_media: media.slice(0,5) }); }
+  async function reactPost(id, reaction) { return callRpc("rivo_toggle_post_reaction", { p_post_id:Number(id), p_reaction:reaction }); }
+  async function commentPost(id, content) { return callRpc("rivo_add_post_comment", { p_post_id:Number(id), p_content:String(content||"") }); }
+  async function repostPost(id) { return callRpc("rivo_toggle_post_repost", { p_post_id:Number(id) }); }
+  async function createCommunity(name, description, joinPolicy) { return callRpc("rivo_create_community", { p_name:name, p_description:description, p_join_policy:joinPolicy }); }
+  async function listCommunities() { return callRpc("rivo_list_communities", { p_limit:60 }); }
+  async function getCommunity(id) { return callRpc("rivo_get_community", { p_id:Number(id) }); }
+  async function joinCommunity(id) { return callRpc("rivo_join_community", { p_id:Number(id) }); }
+  async function leaveCommunity(id) { return callRpc("rivo_leave_community", { p_id:Number(id) }); }
+  async function listCommunityMembers(id) { return callRpc("rivo_list_community_members", { p_id:Number(id) }); }
+  async function listCommunityRequests(id) { return callRpc("rivo_list_community_requests", { p_id:Number(id) }); }
+  async function respondCommunityRequest(id, username, accept) { return callRpc("rivo_respond_community_request", { p_id:Number(id), p_username:username, p_accept:!!accept }); }
+  async function kickCommunityMember(id, username) { return callRpc("rivo_kick_community_member", { p_id:Number(id), p_username:username }); }
+  async function getCommunityMessages(id) { return callRpc("rivo_get_community_messages", { p_id:Number(id), p_limit:160 }); }
+  async function sendCommunityMessage(id, content) { return callRpc("rivo_send_community_message", { p_id:Number(id), p_content:String(content||"") }); }
+  async function subscribeCommunityMessages(communityId, callback) {
+    requireClient();
+    const session=(await sb.auth.getSession()).data?.session;
+    if(!session?.user?.id) return async()=>{};
+    await syncRealtimeAuth(session);
+    const channel=sb.channel(`rivo-community-${communityId}-${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", {event:"INSERT",schema:"public",table:"rivo_community_messages",filter:`community_id=eq.${Number(communityId)}`}, payload=>callback?.(payload?.new||null))
+      .subscribe();
+    return async()=>{try{await sb.removeChannel(channel)}catch{}};
+  }
+
   window.PF = {
     defaults, badgeCatalog, templates, getProfile, listProfiles, putProfile: saveProfile, deleteProfile,
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
@@ -946,6 +988,6 @@
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, listPosts, getPost, createPost, reactPost, commentPost, repostPost, createCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, subscribeCommunityMessages
   };
 })();
