@@ -1987,3 +1987,105 @@ html[data-color-scheme="light"] .social-side-link.active{background:rgba(16,24,4
   .community-image-picker{grid-template-columns:auto 1fr; }
   .community-image-picker small{grid-column:1/-1;}
 }
+
+/* Rivo social navigation + community tools — authoritative mobile override */
+.community-tools{display:flex;flex-direction:column;gap:6px;min-width:min(100%,320px);margin-inline-start:auto;align-items:flex-end}
+.community-search-row{display:flex;align-items:center;gap:7px;width:min(100%,360px)}
+.community-search-wrap{position:relative;display:block;flex:1;min-width:0}
+.community-search-icon{position:absolute;inset-inline-start:12px;top:50%;transform:translateY(-50%);color:#788395;font-size:17px;line-height:1;pointer-events:none}
+.community-search-input{min-height:40px!important;padding-inline-start:34px!important;padding-inline-end:12px!important;margin:0!important}
+.community-create-icon{width:40px!important;height:40px!important;min-width:40px!important;padding:0!important;font-size:20px!important}
+.community-create-icon:disabled{opacity:.45;cursor:not-allowed;transform:none!important}
+.community-limit{color:#727d8e;font-size:9px;letter-spacing:.04em}
+.community-limit.limit-reached{color:#e5a0aa}
+@media(max-width:760px){
+  .social-page .topbar{
+    position:fixed!important;
+    top:6px!important;
+    right:6px!important;
+    bottom:auto!important;
+    left:6px!important;
+    inset:auto 6px auto 6px!important;
+    width:calc(100% - 12px)!important;
+    z-index:9000!important;
+  }
+  .social-page .menu-panel{
+    position:fixed!important;
+    top:70px!important;
+    right:12px!important;
+    bottom:auto!important;
+    left:12px!important;
+    inset:70px 12px auto 12px!important;
+    width:auto!important;
+    min-width:0!important;
+    max-width:none!important;
+    max-height:calc(100svh - 84px)!important;
+    overflow:auto!important;
+    z-index:9100!important;
+    display:none!important;
+  }
+  .social-page .menu-panel.open{
+    display:grid!important;
+    visibility:visible!important;
+    opacity:1!important;
+    pointer-events:auto!important;
+  }
+  .social-page .menu-button{position:relative!important;z-index:9101!important;display:grid!important;visibility:visible!important;opacity:1!important}
+  .community-head{gap:12px!important}
+  .community-tools{width:100%;align-items:stretch;margin-inline-start:0}
+  .community-search-row{width:100%;}
+}
+@media(min-width:761px){
+  .community-tools{max-width:360px}
+}
+
+/* Rivo social navigation + community tools — authoritative mobile override */
+.community-tools{display:flex;flex-direction:column;gap:6px;min-width:min(100%,320px);margin-inline-start:auto;align-items:flex-end}
+.community-search-row{display:flex;align-items:center;gap:7px;width:min(100%,360px)}
+.community-search-wrap{position:relative;display:block;flex:1;min-width:0}
+.community-search-icon{position:absolute;inset-inline-start:12px;top:50%;transform:translateY(-50%);color:#788395;font-size:17px;line-height:1;pointer-events:none}
+.community-search-input{min-height:40px!important;padding-inline-start:34px!important;padding-inline-end:12px!important;margin:0!important}
+.community-create-icon{width:40px!important;height:40px!important;min-width:40px!important;padding:0!important;font-size:20px!important}
+.community-create-icon:disabled{opacity:.45;cursor:not-allowed;transform:none!important}
+.community-limit{color:#727d8e;font-size:9px;letter-spacing:.04em}
+.community-limit.limit-reached{color:#e5a0aa}
+@media(max-width:760px){
+  .social-page .topbar{
+    position:fixed!important;
+    top:6px!important;
+    right:6px!important;
+    bottom:auto!important;
+    left:6px!important;
+    inset:auto 6px auto 6px!important;
+    width:calc(100% - 12px)!important;
+    z-index:9000!important;
+  }
+  .social-page .menu-panel{
+    position:fixed!important;
+    top:70px!important;
+    right:12px!important;
+    bottom:auto!important;
+    left:12px!important;
+    inset:70px 12px auto 12px!important;
+    width:auto!important;
+    min-width:0!important;
+    max-width:none!important;
+    max-height:calc(100svh - 84px)!important;
+    overflow:auto!important;
+    z-index:9100!important;
+    display:none!important;
+  }
+  .social-page .menu-panel.open{
+    display:grid!important;
+    visibility:visible!important;
+    opacity:1!important;
+    pointer-events:auto!important;
+  }
+  .social-page .menu-button{position:relative!important;z-index:9101!important;display:grid!important;visibility:visible!important;opacity:1!important}
+  .community-head{gap:12px!important}
+  .community-tools{width:100%;align-items:stretch;margin-inline-start:0}
+  .community-search-row{width:100%;}
+}
+@media(min-width:761px){
+  .community-tools{max-width:360px}
+}
