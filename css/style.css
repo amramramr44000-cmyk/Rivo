@@ -1796,3 +1796,37 @@ html[data-color-scheme="light"] .social-side-link.active{background:rgba(16,24,4
   }
 }
 
+
+
+/* =========================================================
+   Rivo mobile social navigation — final authoritative layer
+   Posts + Communities live inside the hamburger menu on phones.
+   The actual social page content remains fully visible.
+   ========================================================= */
+.menu-section-title{
+  padding:9px 12px 5px;
+  color:#687384;
+  font-size:9px;
+  font-weight:800;
+  letter-spacing:.12em;
+}
+.menu-section-spacer{margin-top:4px;padding-top:10px;border-top:1px solid rgba(255,255,255,.07)}
+.menu-social-link{display:flex;align-items:center;gap:10px!important;font-weight:700!important}
+@media(max-width:760px){
+  .social-page .topbar{position:sticky!important;z-index:1000!important;}
+  .social-page .menu-button{display:grid!important;visibility:visible!important;opacity:1!important;}
+  .social-page .menu-panel{display:none;}
+  .social-page .menu-panel.open{display:grid!important;visibility:visible!important;opacity:1!important;}
+  .social-page .social-shell{display:block!important;visibility:visible!important;opacity:1!important;width:calc(100% - 12px)!important;max-width:none!important;min-width:0!important;}
+  .social-page .page-head{display:block!important;visibility:visible!important;min-width:0!important;overflow:visible!important;padding-top:22px!important;}
+  .social-page .post-layout,
+  .social-page .community-layout{display:grid!important;visibility:visible!important;width:100%!important;min-width:0!important;}
+  .social-page .post-layout{grid-template-columns:minmax(0,1fr)!important;}
+  .social-page .community-layout{grid-template-columns:minmax(0,1fr)!important;}
+  .social-page .social-side{display:none!important;}
+  .social-page .post-layout>div,
+  .social-page .community-grid,
+  .social-page .community-room{min-width:0!important;width:100%!important;max-width:100%!important;}
+  .social-page .community-room.hidden{display:none!important;}
+  .menu-panel a.menu-social-link{min-height:48px!important;font-size:14px!important;}
+}
