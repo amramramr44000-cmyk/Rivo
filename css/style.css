@@ -2089,3 +2089,47 @@ html[data-color-scheme="light"] .social-side-link.active{background:rgba(16,24,4
 @media(min-width:761px){
   .community-tools{max-width:360px}
 }
+
+/* Rivo Calls — compact, responsive voice/video calling UI */
+.thread-call-actions{display:flex;align-items:center;gap:7px;flex:0 0 auto}.call-action,.profile-call-btn{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;font-size:14px;line-height:1}.profile-call-btn{border:1px solid color-mix(in srgb,var(--accent) 28%,var(--border));background:color-mix(in srgb,var(--accent) 9%,transparent);color:inherit}.profile-call-btn svg,.call-action svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.profile-call-btn:hover,.call-action:hover{border-color:color-mix(in srgb,var(--accent) 55%,transparent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+#rivoCallUI{position:fixed;inset:0;z-index:12000;pointer-events:none}.call-backdrop{position:fixed;inset:0;display:grid;place-items:center;padding:18px;background:rgba(3,5,9,.72);backdrop-filter:blur(18px);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .2s ease,visibility .2s ease}.call-backdrop.open{opacity:1;visibility:visible;pointer-events:auto}.call-panel{width:min(520px,calc(100vw - 24px));overflow:hidden;border:1px solid color-mix(in srgb,var(--accent) 20%,var(--border));border-radius:26px;box-shadow:0 30px 90px rgba(0,0,0,.48)}.call-panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:15px 17px;border-bottom:1px solid var(--border)}.call-panel-head h2{margin:4px 0 1px;font-size:16px}.call-panel-head small{color:#7e8999;font-size:9px}.call-stage{position:relative;min-height:420px;display:grid;place-items:center;background:radial-gradient(circle at 50% 30%,color-mix(in srgb,var(--accent) 13%,transparent),transparent 45%),#070a10;overflow:hidden}.call-remote-placeholder{display:flex;flex-direction:column;align-items:center;gap:9px;text-align:center;color:#dbe1eb}.call-remote-placeholder small{font-size:10px;color:#7c8797}.call-avatar-large{width:88px;height:88px;border-radius:50%;display:grid;place-items:center;overflow:hidden;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 55px color-mix(in srgb,var(--accent) 23%,transparent);font-size:28px;font-weight:900}.call-avatar-large img{width:100%;height:100%;object-fit:cover}.call-remote-video,.call-local-video{display:none;background:#000;object-fit:cover}.call-remote-video.live{display:block;position:absolute;inset:0;width:100%;height:100%}.call-local-video.live{display:block;position:absolute;right:14px;bottom:14px;width:120px;height:170px;border-radius:16px;border:1px solid rgba(255,255,255,.16);box-shadow:0 14px 32px rgba(0,0,0,.4)}.call-connected .call-remote-placeholder{display:none}.call-controls{display:flex;justify-content:center;gap:14px;padding:16px;border-top:1px solid var(--border)}.call-control{width:48px;height:48px;border-radius:50%;border:1px solid var(--border);background:rgba(255,255,255,.045);color:inherit;display:grid;place-items:center;cursor:pointer;transition:transform .16s ease,background .16s ease,border-color .16s ease}.call-control svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.call-control.is-off{background:rgba(255,255,255,.08);border-color:color-mix(in srgb,var(--border) 90%,white)}.call-control.end{background:#b43d4a;border-color:#d15a67}.call-control.end svg{transform:rotate(-135deg);stroke-width:2.2}.call-control:hover{transform:translateY(-1px)}.call-incoming-actions{display:flex;gap:8px;padding:0 15px 15px}.call-incoming-actions .btn{flex:1}.hidden.call-incoming-actions{display:none!important}
+@media(max-width:760px){.thread-call-actions{gap:4px}.call-action{width:32px;height:32px}.call-panel{width:calc(100vw - 14px);border-radius:22px}.call-stage{min-height:min(64vh,520px)}.call-local-video.live{width:92px;height:132px;right:10px;bottom:10px}.call-controls{padding:12px}.call-control{width:44px;height:44px}.call-panel-head{padding:13px 14px}.profile-call-btn{width:36px;height:36px}.profile-head-actions .profile-call-btn{width:36px}}
+
+/* Rivo Calls v7 — mobile-first call sheet / full-screen call room */
+#rivoCallUI{font-family:inherit;}
+.call-backdrop{isolation:isolate;}
+.call-panel{position:relative;background:var(--card-bg,rgba(12,16,24,.96));color:var(--text,#f4f7fb);}
+.call-panel-head .icon-btn{flex:0 0 38px;width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-size:20px;line-height:1;}
+.call-stage{min-height:420px;}
+.call-controls{background:color-mix(in srgb,var(--card-bg, #0b0f16) 92%, transparent);backdrop-filter:blur(14px);}
+
+@media (max-width:760px){
+  #rivoCallUI{position:fixed;inset:0;width:100%;height:100%;}
+  #rivoCallUI .call-backdrop{inset:0;padding:0;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.58);backdrop-filter:blur(10px);}
+  #rivoCallUI .call-panel{width:100%;max-width:none;height:auto;max-height:min(92svh,760px);margin:0;border-radius:26px 26px 0 0;border-left:0;border-right:0;border-bottom:0;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -24px 70px rgba(0,0,0,.42);}
+  #rivoCallUI .call-panel-head{flex:0 0 auto;min-height:66px;padding:10px 14px;}
+  #rivoCallUI .call-panel-head h2{font-size:15px;max-width:230px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #rivoCallUI .call-panel-head small{font-size:10px;}
+  #rivoCallUI .call-panel-head .eyebrow{font-size:8px;letter-spacing:.12em;}
+  #rivoCallUI .call-stage{min-height:0;height:min(58svh,520px);max-height:520px;flex:1 1 auto;overflow:hidden;border-radius:0;}
+  #rivoCallUI .call-remote-placeholder{gap:8px;padding:20px;}
+  #rivoCallUI .call-avatar-large{width:78px;height:78px;font-size:24px;box-shadow:0 0 42px color-mix(in srgb,var(--accent) 18%,transparent);}
+  #rivoCallUI .call-remote-placeholder b{font-size:15px;}
+  #rivoCallUI .call-remote-placeholder small{font-size:10px;}
+  #rivoCallUI .call-local-video.live{width:88px;height:124px;right:12px;bottom:12px;border-radius:14px;}
+  #rivoCallUI .call-controls{position:relative;z-index:3;flex:0 0 auto;min-height:76px;padding:13px 14px calc(13px + env(safe-area-inset-bottom));gap:12px;}
+  #rivoCallUI .call-control{width:46px;height:46px;}
+  #rivoCallUI .call-control.end{width:50px;height:50px;}
+  #rivoCallUI .call-incoming-actions{position:relative;z-index:4;flex:0 0 auto;padding:0 14px calc(14px + env(safe-area-inset-bottom));gap:10px;background:color-mix(in srgb,var(--card-bg,#0b0f16) 92%, transparent);}
+  #rivoCallUI .call-incoming-actions .btn{min-height:44px;border-radius:13px;}
+  #rivoCallUI .call-panel:not(.is-incoming){}
+}
+
+@media (max-width:390px){
+  #rivoCallUI .call-panel{max-height:94svh;border-radius:22px 22px 0 0;}
+  #rivoCallUI .call-stage{height:min(55svh,420px);}
+  #rivoCallUI .call-avatar-large{width:70px;height:70px;font-size:21px;}
+  #rivoCallUI .call-controls{gap:9px;padding-inline:10px;}
+  #rivoCallUI .call-control{width:43px;height:43px;}
+  #rivoCallUI .call-control.end{width:47px;height:47px;}
+}
