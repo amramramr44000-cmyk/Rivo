@@ -287,33 +287,809 @@
   function initCallSystem() {
     if (window.__rivoCallsReady) return;
     window.__rivoCallsReady = true;
+
     const LK = window.LivekitClient;
-    let active = null, callTimer = null, callStartedAt = 0, inboxClose = null;
-    const ensureUI=()=>{let h=$("#rivoCallUI");if(h)return h;h=document.createElement("div");h.id="rivoCallUI";h.innerHTML=`<div class="call-backdrop" data-call-backdrop><section class="call-panel glass" role="dialog" aria-modal="true"><header class="call-panel-head"><div><span class="eyebrow">RIVO CALL</span><h2 data-call-title>Ready to call</h2><small data-call-subtitle>Private voice & video</small></div><button class="icon-btn" data-call-close aria-label="Close">×</button></header><div class="call-stage" data-call-stage><div class="call-remote-placeholder"><div class="call-avatar-large" data-call-avatar>?</div><b data-call-name>Contact</b><small data-call-state>Calling…</small></div><video class="call-remote-video" data-call-remote autoplay playsinline></video><video class="call-local-video" data-call-local autoplay muted playsinline></video></div><div class="call-controls"><button class="call-control" data-call-mute aria-label="Mute microphone"><svg viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="12" rx="5"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8.5 21h7"></path></svg></button><button class="call-control" data-call-camera aria-label="Camera on/off"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="12" height="10" rx="2"></rect><path d="m15 10 6-3v10l-6-3z"></path></svg></button><button class="call-control end" data-call-end aria-label="End call"><svg viewBox="0 0 24 24"><path d="M7.4 4.5 10 4l1.4 4-2.1 1.4a11.6 11.6 0 0 0 5.3 5.3l1.4-2.1 4 1.4-.5 2.6a2.2 2.2 0 0 1-2.4 1.8C10.2 17.5 6.5 13.8 5.6 6.9a2.2 2.2 0 0 1 1.8-2.4Z"></path></svg></button></div><div class="call-incoming-actions hidden" data-call-incoming><button class="btn btn-primary" data-call-accept>Accept</button><button class="btn btn-danger" data-call-decline>Decline</button></div></section></div>`;document.body.appendChild(h);$("[data-call-backdrop]",h).onclick=e=>{if(e.target===e.currentTarget&&!active?.connected)closeUI()};$("[data-call-close]",h).onclick=()=>active?endCall(true):closeUI();$("[data-call-end]",h).onclick=()=>endCall(true);$("[data-call-mute]",h).onclick=toggleMute;$("[data-call-camera]",h).onclick=toggleCamera;$("[data-call-accept]",h).onclick=acceptIncoming;$("[data-call-decline]",h).onclick=declineIncoming;return h};
-    const E=()=>{const h=ensureUI();return{h,b:$('[data-call-backdrop]',h),title:$('[data-call-title]',h),sub:$('[data-call-subtitle]',h),name:$('[data-call-name]',h),av:$('[data-call-avatar]',h),state:$('[data-call-state]',h),stage:$('[data-call-stage]',h),remote:$('[data-call-remote]',h),local:$('[data-call-local]',h),incoming:$('[data-call-incoming]',h),mute:$('[data-call-mute]',h),camera:$('[data-call-camera]',h)}};
-    const closeUI=()=>{const e=E();e.b.classList.remove('open');e.remote.classList.remove('live');e.local.classList.remove('live');e.remote.srcObject=null;e.local.srcObject=null;if(callTimer)clearInterval(callTimer);callTimer=null;callStartedAt=0};
-    const show=()=>E().b.classList.add('open');
-    const state=(t,c=false)=>{const e=E();e.state.textContent=t;e.h.classList.toggle('call-connected',c)};
-    const person=p=>{const e=E();e.name.textContent=p.displayName||p.username||'Contact';e.av.innerHTML=p.avatar?`<img src="${PF.safeUrl(p.avatar)}" alt="">`:PF.initials(p.displayName||p.username||'?')};
-    const notifyCall=(m,t='')=>window.PFUI?.notify?.(m,t);
-    const timer=()=>{callStartedAt=Date.now();if(callTimer)clearInterval(callTimer);callTimer=setInterval(()=>{const s=Math.floor((Date.now()-callStartedAt)/1000),mm=String(Math.floor(s/60)).padStart(2,'0'),ss=String(s%60).padStart(2,'0');E().sub.textContent=`Connected · ${mm}:${ss}`},1000)};
-    async function token(roomName,participantName){const cfg=window.RIVO_CALL_CONFIG||{},session=(await window.__rivoSupabase?.auth.getSession())?.data?.session;if(!cfg.tokenUrl||!session?.access_token)throw new Error('Call service is not configured.');const r=await fetch(cfg.tokenUrl,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},body:JSON.stringify({roomName,participantName})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Could not authorize the call.');return d}
-    async function connectMedia(){if(!LK)throw new Error('LiveKit client failed to load.');const e=E();if(!active?.roomName)throw new Error('Call room is missing.');const room=new LK.Room({adaptiveStream:true,dynacast:true,disconnectOnPageLeave:true,webAudioMix:false});room.on(LK.RoomEvent.TrackSubscribed,(track)=>{const media=track.attach();if(track.kind===LK.Track.Kind.Video){media.className='call-remote-video live';media.autoplay=true;media.playsInline=true;while(e.stage.querySelector('.call-remote-video.live'))e.stage.querySelector('.call-remote-video.live').remove();e.stage.appendChild(media)}else{media.autoplay=true;media.playsInline=true;media.style.display='none';document.body.appendChild(media)}});room.on(LK.RoomEvent.TrackUnsubscribed,t=>t.detach().forEach(x=>x.remove()));room.on(LK.RoomEvent.Reconnecting,()=>state('Reconnecting…'));room.on(LK.RoomEvent.Reconnected,()=>{state('Connected',true);if(!callStartedAt)timer()});room.on(LK.RoomEvent.Disconnected,reason=>{if(active){notifyCall(reason?`Call ended: ${reason}`:'Call connection ended.','error');endCall(false)}});room.on(LK.RoomEvent.ParticipantDisconnected,()=>{if(active?.connected)endCall(false)});room.on(LK.RoomEvent.MediaDevicesError,err=>notifyCall(err?.message||'Microphone or camera permission is unavailable.','error'));active.room=room;state(active.isVideo?'Connecting video…':'Connecting…');const d=await token(active.roomName,active.meId);if(!d.server_url||!d.participant_token)throw new Error('LiveKit authorization failed.');await room.connect(d.server_url,d.participant_token,{autoSubscribe:true,maxRetries:3});await room.localParticipant.setMicrophoneEnabled(true);if(active.isVideo){await room.localParticipant.setCameraEnabled(true);const pub=room.localParticipant.getTrackPublication(LK.Track.Source.Camera);if(pub?.track){const v=pub.track.attach();v.className='call-local-video live';v.autoplay=true;v.muted=true;v.playsInline=true;e.local.replaceWith(v);e.local=v}}active.connected=true;state('Connected',true);timer()}
-    async function beginCall(username,type='audio'){if(active)return notifyCall('A call is already active.','error');if(!LK)throw new Error('Call system is unavailable.');const me=await PF.currentProfile(),peer=await PF.getCallUser(username),isVideo=type==='video',callId=crypto.randomUUID(),roomName=`rivo-${callId}`;const e=E();person(peer);e.title.textContent=isVideo?'Starting video call':'Starting voice call';e.sub.textContent=isVideo?'Video · waiting for answer':'Voice · waiting for answer';state('Ringing…');e.incoming.classList.add('hidden');show();active={role:'caller',meId:me.id,peerId:peer.userId,peer,callId,isVideo,roomName,connected:false,inbox:null,channel:null,room:null};try{active.channel=await PF.openCallChannel(`rivo-call-${callId}`,handleSignal);active.inbox=await PF.openCallChannel(`rivo-call-inbox-${peer.userId}`,handleSignal);await active.inbox.send({callId,from:me.id,to:peer.userId,type:'offer',payload:{isVideo,roomName,displayName:me.displayName||me.username,avatar:me.avatar||'',username:me.username}})}catch(err){notifyCall(err.message||'Could not start the call','error');endCall(false)}}
-    async function handleSignal(msg){if(!active||msg.callId!==active.callId)return;if(msg.type==='accept'&&active.role==='caller'){try{state('Connecting…');await connectMedia()}catch(err){notifyCall(err.message||'Could not connect the call','error');endCall(true)}}else if(msg.type==='decline'||msg.type==='hangup'){notifyCall(msg.type==='decline'?'Call declined.':'Call ended.');endCall(false)}else if(msg.type==='busy'){notifyCall('This person is already on a call.','error');endCall(false)}}
-    async function showIncoming(msg){const me=await PF.currentProfile(),u=msg.payload?.username||'';if(!u||!(await PF.canReceiveCallFrom(u)))return;const peer=await PF.getProfile(u).catch(()=>null),e=E();person(peer||{username:u,displayName:msg.payload?.displayName||'Contact',avatar:msg.payload?.avatar||''});e.title.textContent=msg.payload?.isVideo?'Incoming video call':'Incoming voice call';e.sub.textContent='Incoming call';state('Calling…');e.incoming.classList.remove('hidden');show();active={role:'callee',meId:me.id,peerId:msg.from,peer:peer||{username:u,displayName:msg.payload?.displayName||'Contact'},callId:msg.callId,isVideo:!!msg.payload?.isVideo,roomName:msg.payload?.roomName,connected:false,inbox:null,channel:null,room:null}}
-    async function acceptIncoming(){if(!active||active.role!=='callee')return;const e=E();e.incoming.classList.add('hidden');try{active.channel=await PF.openCallChannel(`rivo-call-${active.callId}`,handleSignal);await active.channel.send({callId:active.callId,from:active.meId,to:active.peerId,type:'accept'});await connectMedia()}catch(err){notifyCall(err.message||'Could not accept the call','error');endCall(true)}}
-    async function declineIncoming(){if(!active)return;try{const box=await PF.openCallChannel(`rivo-call-inbox-${active.peerId}`);await box.send({callId:active.callId,from:active.meId,to:active.peerId,type:'decline'});await box.close()}catch{}endCall(false)}
-    async function endCall(send=true){const old=active;active=null;try{if(send&&old?.channel)await old.channel.send({callId:old.callId,from:old.meId,to:old.peerId,type:'hangup'})}catch{}try{await old?.inbox?.close?.();await old?.channel?.close?.();await old?.room?.disconnect?.()}catch{}closeUI()}
-    async function toggleMute(){if(!active?.room)return;const on=active.room.localParticipant.isMicrophoneEnabled;await active.room.localParticipant.setMicrophoneEnabled(!on);E().mute.classList.toggle('is-off',on)}
-    async function toggleCamera(){if(!active?.room||!active.isVideo)return;const on=active.room.localParticipant.isCameraEnabled;await active.room.localParticipant.setCameraEnabled(!on);E().camera.classList.toggle('is-off',on)}
-    window.addEventListener('offline',()=>{if(active?.connected)state('Offline · reconnecting…')});
-    window.addEventListener('online',()=>{if(active?.connected)state('Reconnecting…')});
-    const activeUserForMessages=()=>window.__rivoActiveMessageUser||'';
-    document.addEventListener('click',async e=>{const b=e.target.closest?.('[data-call-user]');if(b){e.preventDefault();try{await beginCall(b.dataset.callUser,b.dataset.callType||'audio')}catch(err){notifyCall(err.message||'Could not call','error')}return}const a=e.target.closest?.('[data-call-action]');if(a&&activeUserForMessages()){try{await beginCall(activeUserForMessages(),a.dataset.callAction||'audio')}catch(err){notifyCall(err.message||'Could not call','error')}}});
-    window.RivoCalls={start:beginCall,end:()=>endCall(true)};
-    (async()=>{try{const me=await PF.currentProfile();if(!me?.id)return;inboxClose=await PF.subscribeCallInbox(me.id,async msg=>{if(msg.type==='offer'&&msg.to===me.id)await showIncoming(msg);else if(active&&msg.callId===active.callId)await handleSignal(msg)});window.addEventListener('beforeunload',()=>{try{inboxClose?.()}catch{}})}catch(e){console.warn('[Rivo Calls] inbox unavailable',e)}})();
+    let active = null;
+    let callTimer = null;
+    let qualityTimer = null;
+    let callStartedAt = 0;
+    let inboxClose = null;
+
+    const ensureUI = () => {
+      let h = $("#rivoCallUI");
+      if (h) return h;
+
+      h = document.createElement("div");
+      h.id = "rivoCallUI";
+      h.innerHTML = `
+        <div class="call-backdrop" data-call-backdrop>
+          <section class="call-panel glass" role="dialog" aria-modal="true" aria-label="Rivo call">
+            <header class="call-panel-head">
+              <div class="call-person-head">
+                <span class="eyebrow">RIVO CALL</span>
+                <h2 data-call-title>Ready to call</h2>
+                <small data-call-subtitle>Private voice & video</small>
+              </div>
+              <div class="call-head-actions">
+                <span class="call-quality" data-call-quality title="Connection quality">
+                  <i></i><span data-call-quality-text>—</span>
+                </span>
+                <button class="icon-btn call-mini-toggle" type="button" data-call-minimize aria-label="Minimize call">−</button>
+                <button class="icon-btn" type="button" data-call-close aria-label="Close">×</button>
+              </div>
+            </header>
+
+            <div class="call-stage" data-call-stage>
+              <div class="call-remote-placeholder">
+                <div class="call-avatar-large" data-call-avatar>?</div>
+                <b data-call-name>Contact</b>
+                <small data-call-state>Calling…</small>
+              </div>
+
+              <video class="call-remote-video" data-call-remote autoplay playsinline></video>
+              <video class="call-local-video" data-call-local autoplay muted playsinline></video>
+            </div>
+
+            <div class="call-tools">
+              <button class="call-tool-btn" type="button" data-call-audio-route aria-label="Audio output">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M3 10v4h4l5 4V6l-5 4H3Z"></path>
+                  <path d="M16 9.5a4 4 0 0 1 0 5M18.5 7a7.5 7.5 0 0 1 0 10"></path>
+                </svg>
+                <span data-call-route-label>Audio</span>
+              </button>
+              <div class="call-route-menu hidden" data-call-route-menu role="menu"></div>
+            </div>
+
+            <div class="call-controls">
+              <button class="call-control" type="button" data-call-mute aria-label="Mute microphone">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="7" y="3" width="10" height="12" rx="5"></rect>
+                  <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8.5 21h7"></path>
+                </svg>
+              </button>
+
+              <button class="call-control" type="button" data-call-camera aria-label="Camera on/off">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="3" y="7" width="12" height="10" rx="2"></rect>
+                  <path d="m15 10 6-3v10l-6-3z"></path>
+                </svg>
+              </button>
+
+              <button class="call-control end" type="button" data-call-end aria-label="End call">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7.4 4.5 10 4l1.4 4-2.1 1.4a11.6 11.6 0 0 0 5.3 5.3l1.4-2.1 4 1.4-.5 2.6a2.2 2.2 0 0 1-2.4 1.8C10.2 17.5 6.5 13.8 5.6 6.9a2.2 2.2 0 0 1 1.8-2.4Z"></path>
+                </svg>
+              </button>
+            </div>
+
+            <div class="call-incoming-actions hidden" data-call-incoming>
+              <button class="btn btn-primary" type="button" data-call-accept>Accept</button>
+              <button class="btn btn-danger" type="button" data-call-decline>Decline</button>
+            </div>
+          </section>
+        </div>`;
+
+      document.body.appendChild(h);
+
+      $("[data-call-backdrop]", h).onclick = e => {
+        if (e.target === e.currentTarget && !active?.connected) closeUI();
+      };
+
+      $("[data-call-close]", h).onclick = () => {
+        if (active) endCall(true);
+        else closeUI();
+      };
+
+      $("[data-call-end]", h).onclick = () => endCall(true);
+      $("[data-call-mute]", h).onclick = toggleMute;
+      $("[data-call-camera]", h).onclick = toggleCamera;
+      $("[data-call-accept]", h).onclick = acceptIncoming;
+      $("[data-call-decline]", h).onclick = declineIncoming;
+      $("[data-call-minimize]", h).onclick = toggleMinimized;
+      $("[data-call-audio-route]", h).onclick = toggleAudioRoute;
+
+      return h;
+    };
+
+    const E = () => {
+      const h = ensureUI();
+      return {
+        h,
+        b: $("[data-call-backdrop]", h),
+        panel: $(".call-panel", h),
+        title: $("[data-call-title]", h),
+        sub: $("[data-call-subtitle]", h),
+        name: $("[data-call-name]", h),
+        av: $("[data-call-avatar]", h),
+        state: $("[data-call-state]", h),
+        stage: $("[data-call-stage]", h),
+        remote: $("[data-call-remote]", h),
+        local: $("[data-call-local]", h),
+        incoming: $("[data-call-incoming]", h),
+        mute: $("[data-call-mute]", h),
+        camera: $("[data-call-camera]", h),
+        quality: $("[data-call-quality]", h),
+        qualityText: $("[data-call-quality-text]", h),
+        route: $("[data-call-audio-route]", h),
+        routeLabel: $("[data-call-route-label]", h),
+        routeMenu: $("[data-call-route-menu]", h),
+        minimize: $("[data-call-minimize]", h)
+      };
+    };
+
+    const closeRouteMenu = () => {
+      const e = E();
+      e.routeMenu.classList.add("hidden");
+      e.route.classList.remove("active");
+    };
+
+    const closeUI = () => {
+      const e = E();
+      closeRouteMenu();
+      e.b.classList.remove("open");
+      e.h.classList.remove("call-minimized");
+      e.remote.classList.remove("live");
+      e.local.classList.remove("live");
+      e.remote.srcObject = null;
+      e.local.srcObject = null;
+      if (callTimer) clearInterval(callTimer);
+      if (qualityTimer) clearInterval(qualityTimer);
+      callTimer = null;
+      qualityTimer = null;
+      callStartedAt = 0;
+      e.qualityText.textContent = "—";
+      e.quality.className = "call-quality";
+      e.routeLabel.textContent = "Audio";
+      e.minimize.textContent = "−";
+      e.minimize.setAttribute("aria-label", "Minimize call");
+    };
+
+    const show = () => E().b.classList.add("open");
+
+    const toggleMinimized = () => {
+      const e = E();
+      if (!active) return;
+      const mini = e.h.classList.toggle("call-minimized");
+      e.minimize.textContent = mini ? "□" : "−";
+      e.minimize.setAttribute("aria-label", mini ? "Restore call" : "Minimize call");
+      e.minimize.title = mini ? "Restore call" : "Minimize call";
+      // In mini mode the backdrop becomes click-through, so the app remains usable.
+    };
+
+    const state = (t, connected = false) => {
+      const e = E();
+      e.state.textContent = t;
+      e.h.classList.toggle("call-connected", connected);
+    };
+
+    const person = p => {
+      const e = E();
+      e.name.textContent = p?.displayName || p?.username || "Contact";
+      e.av.innerHTML = p?.avatar
+        ? `<img src="${PF.safeUrl(p.avatar)}" alt="">`
+        : PF.initials(p?.displayName || p?.username || "?");
+    };
+
+    const notifyCall = (m, t = "") => window.PFUI?.notify?.(m, t);
+
+    const timer = () => {
+      callStartedAt = Date.now();
+      if (callTimer) clearInterval(callTimer);
+      callTimer = setInterval(() => {
+        const s = Math.floor((Date.now() - callStartedAt) / 1000);
+        const mm = String(Math.floor(s / 60)).padStart(2, "0");
+        const ss = String(s % 60).padStart(2, "0");
+        const e = E();
+        e.sub.textContent = `Connected · ${mm}:${ss}`;
+      }, 1000);
+    };
+
+    const qualityLabel = q => {
+      const v = String(q || "unknown").toLowerCase();
+      if (v.includes("excellent")) return ["Excellent", "excellent"];
+      if (v.includes("good")) return ["Good", "good"];
+      if (v.includes("poor")) return ["Weak", "poor"];
+      if (v.includes("lost")) return ["Reconnecting", "lost"];
+      return ["Checking", "unknown"];
+    };
+
+    const updateQuality = q => {
+      const e = E();
+      const [label, cls] = qualityLabel(q);
+      e.qualityText.textContent = label;
+      e.quality.className = `call-quality ${cls}`;
+    };
+
+    const startQualityMonitor = room => {
+      if (qualityTimer) clearInterval(qualityTimer);
+      const refresh = () => {
+        try {
+          updateQuality(room?.localParticipant?.connectionQuality || "unknown");
+        } catch {
+          updateQuality("unknown");
+        }
+      };
+      refresh();
+      qualityTimer = setInterval(refresh, 2500);
+    };
+
+    async function token(roomName, participantName) {
+      const cfg = window.RIVO_CALL_CONFIG || {};
+      const session = (await window.__rivoSupabase?.auth.getSession())?.data?.session;
+      if (!cfg.tokenUrl || !session?.access_token) {
+        throw new Error("Call service is not configured.");
+      }
+
+      const r = await fetch(cfg.tokenUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({ roomName, participantName })
+      });
+
+      const d = await r.json().catch(() => ({}));
+
+      if (!r.ok) {
+        throw new Error(d.error || "Could not authorize the call.");
+      }
+
+      return d;
+    }
+
+    async function attachAudioTrack(track) {
+      const media = track.attach();
+      media.autoplay = true;
+      media.playsInline = true;
+      media.setAttribute("playsinline", "");
+      media.setAttribute("data-rivo-call-audio", "true");
+      media.className = "call-remote-audio";
+      media.style.position = "fixed";
+      media.style.width = "1px";
+      media.style.height = "1px";
+      media.style.opacity = "0";
+      media.style.pointerEvents = "none";
+      media.style.left = "-9999px";
+      document.body.appendChild(media);
+      try {
+        await media.play();
+      } catch {}
+      active.audioEls = active.audioEls || [];
+      active.audioEls.push(media);
+      return media;
+    }
+
+    async function buildAudioRouteMenu() {
+      const e = E();
+      e.routeMenu.innerHTML = "";
+
+      const supported = !!LK?.supportsAudioOutputSelection?.();
+      const devices = (navigator.mediaDevices?.enumerateDevices)
+        ? await navigator.mediaDevices.enumerateDevices().catch(() => [])
+        : [];
+
+      const outputs = devices.filter(d => d.kind === "audiooutput");
+
+      const makeItem = (label, deviceId, disabled = false) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "call-route-item";
+        b.textContent = label;
+        b.disabled = disabled;
+        b.onclick = async () => {
+          try {
+            if (!active?.room) return;
+            if (!deviceId || deviceId === "default") {
+              const ok = await active.room.switchActiveDevice("audiooutput", "default", false);
+              if (ok !== false) {
+                e.routeLabel.textContent = "Device";
+                notifyCall("Audio routed to device", "success");
+              }
+            } else {
+              await active.room.switchActiveDevice("audiooutput", deviceId, false);
+              e.routeLabel.textContent = label.length > 14 ? "Output" : label;
+              notifyCall(`Audio output: ${label}`, "success");
+            }
+            closeRouteMenu();
+          } catch {
+            notifyCall("This device does not allow audio output switching.", "error");
+          }
+        };
+        e.routeMenu.appendChild(b);
+      };
+
+      makeItem("Automatic / Device", "default");
+
+      if (supported && outputs.length) {
+        outputs
+          .filter(d => d.deviceId !== "default")
+          .slice(0, 6)
+          .forEach(d => makeItem(d.label || "Audio device", d.deviceId));
+      } else if (!supported) {
+        const note = document.createElement("div");
+        note.className = "call-route-note";
+        note.textContent = "Your browser controls the speaker/earpiece automatically.";
+        e.routeMenu.appendChild(note);
+      }
+
+      const hint = document.createElement("div");
+      hint.className = "call-route-note";
+      hint.textContent = "Wired/Bluetooth headsets are preferred by the phone when available.";
+      e.routeMenu.appendChild(hint);
+    }
+
+    async function toggleAudioRoute(ev) {
+      ev?.stopPropagation();
+      const e = E();
+      const opening = e.routeMenu.classList.contains("hidden");
+      if (!opening) {
+        closeRouteMenu();
+        return;
+      }
+      if (!active?.room) {
+        notifyCall("Audio routing is available after the call connects.", "error");
+        return;
+      }
+      await buildAudioRouteMenu();
+      e.routeMenu.classList.remove("hidden");
+      e.route.classList.add("active");
+    }
+
+    async function connectMedia() {
+      if (!LK) throw new Error("LiveKit client failed to load.");
+      if (!active?.roomName) throw new Error("Call room is missing.");
+
+      const e = E();
+
+      const reconnectPolicy = LK.DefaultReconnectPolicy
+        ? new LK.DefaultReconnectPolicy([300, 700, 1200, 2000, 3500, 6000, 10000])
+        : undefined;
+
+      const room = new LK.Room({
+        adaptiveStream: true,
+        dynacast: true,
+        disconnectOnPageLeave: true,
+        webAudioMix: true,
+        reconnectPolicy,
+        audioCaptureDefaults: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          voiceIsolation: true
+        },
+        publishDefaults: {
+          simulcast: true,
+          videoCodec: "vp8",
+          degradationPreference: "maintain-framerate",
+          videoSimulcastLayers: []
+        }
+      });
+
+      room.on(LK.RoomEvent.TrackSubscribed, async (track) => {
+        if (track.kind === LK.Track.Kind.Video) {
+          const media = track.attach();
+          media.className = "call-remote-video live";
+          media.autoplay = true;
+          media.playsInline = true;
+
+          const old = e.stage.querySelector(".call-remote-video.live");
+          if (old) old.remove();
+
+          e.stage.appendChild(media);
+
+          try { await media.play(); } catch {}
+        } else if (track.kind === LK.Track.Kind.Audio) {
+          await attachAudioTrack(track);
+        }
+      });
+
+      room.on(LK.RoomEvent.TrackUnsubscribed, track => {
+        try { track.detach().forEach(x => x.remove()); } catch {}
+      });
+
+      room.on(LK.RoomEvent.Reconnecting, () => state("Reconnecting…"));
+      room.on(LK.RoomEvent.Reconnected, () => {
+        state("Connected", true);
+        updateQuality(room.localParticipant.connectionQuality);
+        if (!callStartedAt) timer();
+      });
+
+      room.on(LK.RoomEvent.ConnectionQualityChanged, (quality) => {
+        updateQuality(quality);
+      });
+
+      room.on(LK.RoomEvent.AudioPlaybackStatusChanged, playing => {
+        if (!playing) notifyCall("Tap Audio to start call sound.", "error");
+      });
+
+      room.on(LK.RoomEvent.Disconnected, reason => {
+        if (active) {
+          notifyCall(
+            reason ? `Call ended: ${reason}` : "Call connection ended.",
+            "error"
+          );
+          endCall(false);
+        }
+      });
+
+      room.on(LK.RoomEvent.ParticipantDisconnected, () => {
+        if (active?.connected) endCall(false);
+      });
+
+      room.on(LK.RoomEvent.MediaDevicesError, err => {
+        notifyCall(
+          err?.message || "Microphone or camera permission is unavailable.",
+          "error"
+        );
+      });
+
+      room.on(LK.RoomEvent.TrackStreamStateChanged, (_pub, streamState) => {
+        const paused = String(streamState).toLowerCase().includes("paused");
+        if (paused) state("Optimizing connection…");
+        else if (active?.connected) state("Connected", true);
+      });
+
+      active.room = room;
+      active.audioEls = [];
+
+      state(active.isVideo ? "Connecting video…" : "Connecting…");
+
+      const d = await token(active.roomName, active.meId);
+
+      if (!d.server_url || !d.participant_token) {
+        throw new Error("LiveKit authorization failed.");
+      }
+
+      // Pre-warm where supported to reduce perceived connect latency.
+      try { room.prepareConnection(d.server_url, d.participant_token); } catch {}
+
+      await room.connect(
+        d.server_url,
+        d.participant_token,
+        {
+          autoSubscribe: true,
+          maxRetries: 6,
+          peerConnectionTimeout: 20000,
+          websocketTimeout: 20000
+        }
+      );
+
+      await room.localParticipant.setMicrophoneEnabled(true);
+
+      if (active.isVideo) {
+        await room.localParticipant.setCameraEnabled(true);
+        const pub = room.localParticipant.getTrackPublication(
+          LK.Track.Source.Camera
+        );
+
+        if (pub?.track) {
+          const v = pub.track.attach();
+          v.className = "call-local-video live";
+          v.autoplay = true;
+          v.muted = true;
+          v.playsInline = true;
+          e.local.replaceWith(v);
+          e.local = v;
+          try { await v.play(); } catch {}
+        }
+      }
+
+      active.connected = true;
+      state("Connected", true);
+      updateQuality(room.localParticipant.connectionQuality);
+      startQualityMonitor(room);
+    }
+
+    async function beginCall(username, type = "audio") {
+      if (active) return notifyCall("A call is already active.", "error");
+      if (!LK) throw new Error("Call system is unavailable.");
+
+      const me = await PF.currentProfile();
+      const peer = await PF.getCallUser(username);
+      const isVideo = type === "video";
+      const callId = crypto.randomUUID();
+      const roomName = `rivo-${callId}`;
+
+      const e = E();
+      person(peer);
+      e.title.textContent = isVideo ? "Starting video call" : "Starting voice call";
+      e.sub.textContent = isVideo
+        ? "Video · waiting for answer"
+        : "Voice · waiting for answer";
+      state("Ringing…");
+      e.incoming.classList.add("hidden");
+      show();
+
+      active = {
+        role: "caller",
+        meId: me.id,
+        peerId: peer.userId,
+        peer,
+        callId,
+        isVideo,
+        roomName,
+        connected: false,
+        inbox: null,
+        channel: null,
+        room: null,
+        audioEls: []
+      };
+
+      try {
+        active.channel = await PF.openCallChannel(
+          `rivo-call-${callId}`,
+          handleSignal
+        );
+
+        active.inbox = await PF.openCallChannel(
+          `rivo-call-inbox-${peer.userId}`,
+          handleSignal
+        );
+
+        await active.inbox.send({
+          callId,
+          from: me.id,
+          to: peer.userId,
+          type: "offer",
+          payload: {
+            isVideo,
+            roomName,
+            displayName: me.displayName || me.username,
+            avatar: me.avatar || "",
+            username: me.username
+          }
+        });
+      } catch (err) {
+        notifyCall(err.message || "Could not start the call", "error");
+        endCall(false);
+      }
+    }
+
+    async function handleSignal(msg) {
+      if (!active || msg.callId !== active.callId) return;
+
+      if (msg.type === "accept" && active.role === "caller") {
+        try {
+          state("Connecting…");
+          await connectMedia();
+        } catch (err) {
+          notifyCall(err.message || "Could not connect the call", "error");
+          endCall(true);
+        }
+      } else if (msg.type === "decline" || msg.type === "hangup") {
+        notifyCall(msg.type === "decline" ? "Call declined." : "Call ended.");
+        endCall(false);
+      } else if (msg.type === "busy") {
+        notifyCall("This person is already on a call.", "error");
+        endCall(false);
+      }
+    }
+
+    async function showIncoming(msg) {
+      const me = await PF.currentProfile();
+      const u = msg.payload?.username || "";
+
+      if (!u || !(await PF.canReceiveCallFrom(u))) return;
+
+      const peer = await PF.getProfile(u).catch(() => null);
+      const e = E();
+
+      person(
+        peer || {
+          username: u,
+          displayName: msg.payload?.displayName || "Contact",
+          avatar: msg.payload?.avatar || ""
+        }
+      );
+
+      e.title.textContent = msg.payload?.isVideo
+        ? "Incoming video call"
+        : "Incoming voice call";
+
+      e.sub.textContent = "Incoming call";
+      state("Calling…");
+      e.incoming.classList.remove("hidden");
+      show();
+
+      active = {
+        role: "callee",
+        meId: me.id,
+        peerId: msg.from,
+        peer: peer || {
+          username: u,
+          displayName: msg.payload?.displayName || "Contact"
+        },
+        callId: msg.callId,
+        isVideo: !!msg.payload?.isVideo,
+        roomName: msg.payload?.roomName,
+        connected: false,
+        inbox: null,
+        channel: null,
+        room: null,
+        audioEls: []
+      };
+    }
+
+    async function acceptIncoming() {
+      if (!active || active.role !== "callee") return;
+
+      const e = E();
+      e.incoming.classList.add("hidden");
+
+      try {
+        active.channel = await PF.openCallChannel(
+          `rivo-call-${active.callId}`,
+          handleSignal
+        );
+
+        await active.channel.send({
+          callId: active.callId,
+          from: active.meId,
+          to: active.peerId,
+          type: "accept"
+        });
+
+        await connectMedia();
+      } catch (err) {
+        notifyCall(err.message || "Could not accept the call", "error");
+        endCall(true);
+      }
+    }
+
+    async function declineIncoming() {
+      if (!active) return;
+
+      try {
+        const box = await PF.openCallChannel(
+          `rivo-call-inbox-${active.peerId}`
+        );
+
+        await box.send({
+          callId: active.callId,
+          from: active.meId,
+          to: active.peerId,
+          type: "decline"
+        });
+
+        await box.close();
+      } catch {}
+
+      endCall(false);
+    }
+
+    async function endCall(send = true) {
+      const old = active;
+      active = null;
+
+      try {
+        if (send && old?.channel) {
+          await old.channel.send({
+            callId: old.callId,
+            from: old.meId,
+            to: old.peerId,
+            type: "hangup"
+          });
+        }
+      } catch {}
+
+      try {
+        if (old?.audioEls?.length) {
+          old.audioEls.forEach(el => {
+            try { el.srcObject = null; el.remove(); } catch {}
+          });
+        }
+
+        await old?.inbox?.close?.();
+        await old?.channel?.close?.();
+        await old?.room?.disconnect?.();
+      } catch {}
+
+      closeUI();
+    }
+
+    async function toggleMute() {
+      if (!active?.room) return;
+
+      const e = E();
+      const on = active.room.localParticipant.isMicrophoneEnabled;
+
+      await active.room.localParticipant.setMicrophoneEnabled(!on);
+
+      e.mute.classList.toggle("is-off", on);
+      e.mute.setAttribute("aria-label", on ? "Unmute microphone" : "Mute microphone");
+    }
+
+    async function toggleCamera() {
+      if (!active?.room || !active.isVideo) return;
+
+      const e = E();
+      const on = active.room.localParticipant.isCameraEnabled;
+
+      await active.room.localParticipant.setCameraEnabled(!on);
+
+      e.camera.classList.toggle("is-off", on);
+      e.camera.setAttribute("aria-label", on ? "Turn camera on" : "Turn camera off");
+    }
+
+    window.addEventListener("offline", () => {
+      if (active?.connected) state("Offline · reconnecting…");
+    });
+
+    window.addEventListener("online", () => {
+      if (active?.connected) state("Reconnecting…");
+    });
+
+    document.addEventListener("click", async e => {
+      if (!e.target.closest?.("[data-call-route-menu]") &&
+          !e.target.closest?.("[data-call-audio-route]")) {
+        closeRouteMenu();
+      }
+
+      const b = e.target.closest?.("[data-call-user]");
+      if (b) {
+        e.preventDefault();
+        try {
+          await beginCall(
+            b.dataset.callUser,
+            b.dataset.callType || "audio"
+          );
+        } catch (err) {
+          notifyCall(err.message || "Could not call", "error");
+        }
+        return;
+      }
+
+      const a = e.target.closest?.("[data-call-action]");
+      if (a && activeUserForMessages()) {
+        try {
+          await beginCall(
+            activeUserForMessages(),
+            a.dataset.callAction || "audio"
+          );
+        } catch (err) {
+          notifyCall(err.message || "Could not call", "error");
+        }
+      }
+    });
+
+    window.RivoCalls = {
+      start: beginCall,
+      end: () => endCall(true),
+      minimize: () => {
+        if (active) {
+          E().h.classList.add("call-minimized");
+        }
+      },
+      restore: () => E().h.classList.remove("call-minimized")
+    };
+
+    (async () => {
+      try {
+        const me = await PF.currentProfile();
+        if (!me?.id) return;
+
+        inboxClose = await PF.subscribeCallInbox(
+          me.id,
+          async msg => {
+            if (msg.type === "offer" && msg.to === me.id) {
+              await showIncoming(msg);
+            } else if (active && msg.callId === active.callId) {
+              await handleSignal(msg);
+            }
+          }
+        );
+
+        window.addEventListener("beforeunload", () => {
+          try { inboxClose?.(); } catch {}
+        });
+      } catch (e) {
+        console.warn("[Rivo Calls] inbox unavailable", e);
+      }
+    })();
   }
+
   document.addEventListener("DOMContentLoaded", async () => {
     nav(); initMenu(); initStorySystem(); initCallSystem();
     $$('[data-profile-link]').forEach(a => { const me = PF.currentUsername(); if (me) a.href = `profile.html?u=${encodeURIComponent(me)}`; });
