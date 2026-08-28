@@ -1657,3 +1657,143 @@ html[data-color-scheme="light"] .social-side-link.active{background:rgba(16,24,4
     z-index:100!important;
   }
 }
+
+/* =========================================================
+   RIVO MOBILE SOCIAL NAV + CONTENT HARDENING
+   Ensures Posts / Communities / Explore / Messages remain
+   directly reachable on phones, while keeping desktop layout intact.
+   ========================================================= */
+.mobile-quick-nav .mobile-quick-link.active{
+  background:color-mix(in srgb,var(--accent) 12%,transparent)!important;
+  border-color:color-mix(in srgb,var(--accent) 22%,transparent)!important;
+  color:#fff!important;
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 10%,transparent) inset;
+}
+@media(max-width:760px){
+  .social-page .social-shell{
+    width:calc(100% - 12px)!important;
+    max-width:none!important;
+    padding-inline:6px!important;
+    padding-bottom:calc(112px + env(safe-area-inset-bottom))!important;
+    box-sizing:border-box!important;
+  }
+  .social-page .page-head{
+    padding-top:18px!important;
+    padding-bottom:14px!important;
+  }
+  .social-page .post-layout{
+    width:100%!important;
+    max-width:100%!important;
+    grid-template-columns:minmax(0,1fr)!important;
+    gap:10px!important;
+    min-width:0!important;
+  }
+  .social-page .social-side{
+    width:100%!important;
+    max-width:100%!important;
+    min-width:0!important;
+    overflow-x:auto!important;
+    overflow-y:hidden!important;
+    display:flex!important;
+    flex-wrap:nowrap!important;
+    gap:5px!important;
+    position:relative!important;
+    top:auto!important;
+    scrollbar-width:none;
+  }
+  .social-page .social-side::-webkit-scrollbar{display:none;}
+  .social-page .social-side-link{
+    flex:0 0 auto!important;
+    white-space:nowrap!important;
+  }
+  .social-page #postFeed,
+  .social-page #postComposer,
+  .social-page #communityRoot,
+  .social-page #communityList,
+  .social-page #communityRoom{
+    width:100%!important;
+    max-width:100%!important;
+    min-width:0!important;
+    box-sizing:border-box!important;
+  }
+  .social-page .post-card,
+  .social-page .community-card,
+  .social-page .community-room{
+    width:100%!important;
+    max-width:100%!important;
+    min-width:0!important;
+  }
+  .social-page .post-main,
+  .social-page .post-comments,
+  .social-page .community-card,
+  .social-page .room-head,
+  .social-page .room-compose{
+    overflow-wrap:anywhere;
+  }
+  .social-page .post-media{
+    width:100%!important;
+    min-width:0!important;
+  }
+  .social-page .post-media img{
+    min-width:0!important;
+    width:100%!important;
+  }
+  .social-page .community-head{
+    width:100%!important;
+    min-width:0!important;
+  }
+  .social-page .community-layout{
+    width:100%!important;
+    grid-template-columns:minmax(0,1fr)!important;
+    min-width:0!important;
+  }
+  .social-page .community-grid{
+    width:100%!important;
+    grid-template-columns:minmax(0,1fr)!important;
+    min-width:0!important;
+  }
+  .social-page .community-room{
+    position:relative!important;
+    top:auto!important;
+    min-height:calc(100dvh - 190px)!important;
+    max-height:none!important;
+    overflow:hidden!important;
+  }
+  .social-page .room-body{
+    grid-template-columns:minmax(0,1fr)!important;
+    min-height:0!important;
+  }
+  .social-page .room-messages{
+    max-height:none!important;
+    min-height:260px!important;
+    overflow:auto!important;
+  }
+  .social-page .room-compose input{
+    min-width:0!important;
+  }
+  .social-page .community-actions .btn{
+    min-height:40px!important;
+  }
+}
+
+@media(max-width:430px){
+  .social-page .social-shell{
+    padding-inline:4px!important;
+  }
+  .social-page .page-head h1{
+    font-size:28px!important;
+  }
+  .social-page .post-composer,
+  .social-page .post-card,
+  .social-page .community-card,
+  .social-page .community-room{
+    border-radius:16px!important;
+  }
+  .social-page .post-main,
+  .social-page .post-comments,
+  .social-page .community-card{
+    padding-inline:12px!important;
+  }
+  .social-page .post-content{font-size:12.5px!important;}
+  .social-page .post-media img{min-height:95px!important;}
+}
