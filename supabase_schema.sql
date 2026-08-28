@@ -4,6 +4,15 @@
 -- and configure Auth -> Email -> "Confirm email" = OFF for the current username/password flow.
 
 create extension if not exists pgcrypto;
+-- v10 security notes:
+-- * RLS intentionally prevents guest SELECT access to profiles. Login therefore
+--   must not query public.profiles before authentication; the browser derives
+--   the deterministic synthetic Auth email from the normalized username.
+-- * CAPTCHA is enforced by Supabase Auth when enabled in the Dashboard.
+--   The browser passes a Cloudflare Turnstile token via supabase-js options.
+-- * Do not add a guest SELECT policy for auth_email. That would weaken account
+--   privacy and was the root of the previous login implementation's RLS conflict.
+
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
