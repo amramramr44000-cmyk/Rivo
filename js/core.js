@@ -79,16 +79,21 @@
   ];
 
   const templates = [
-    ["discord-noir","Discord Noir","Clean social identity with compact status HUD"],
-    ["anime-cinema","Anime Cinema","Cinematic character composition with portrait focus"],
-    ["neon-arena","Neon Arena","Competitive gaming card with luminous stats"],
-    ["cyber-terminal","Cyber Terminal","Terminal surfaces and technical diagnostics"],
-    ["dark-luxury","Dark Luxury","Editorial black surfaces with refined gold accents"],
-    ["minimal-ice","Minimal Ice","Bright, quiet portfolio card with precise spacing"],
-    ["samurai-ink","Samurai Ink","Poster-like ink composition with sharp separators"],
-    ["deep-space","Deep Space","Cosmic profile identity with atmospheric depth"],
-    ["creator-pulse","Creator Pulse","Media-first creator card with energetic rhythm"],
-    ["monochrome-pro","Monochrome Pro","High-contrast executive portfolio presentation"]
+    ["discord-noir","Discord Noir","Compact social HUD with layered panels"],
+    ["anime-cinema","Anime Cinema","Cinematic portrait stage with editorial framing"],
+    ["neon-arena","Neon Arena","Competitive energy with luminous stat rails"],
+    ["cyber-terminal","Cyber Terminal","Technical console surfaces and diagnostic accents"],
+    ["dark-luxury","Dark Luxury","Editorial obsidian with premium metallic details"],
+    ["minimal-ice","Minimal Ice","Quiet ultra-clean portfolio with precision spacing"],
+    ["samurai-ink","Samurai Ink","Ink-poster composition with sharp blade dividers"],
+    ["deep-space","Deep Space","Cosmic depth with orbit-like atmosphere"],
+    ["creator-pulse","Creator Pulse","Media-first layout with rhythmic signal details"],
+    ["monochrome-pro","Monochrome Pro","Executive grayscale with strict geometry"],
+    ["starlight-royal","Starlight Royal","Starfield identity with constellation highlights"],
+    ["aurora-glass","Aurora Glass","Aurora gradients through crystalline glass layers"],
+    ["obsidian-court","Obsidian Court","Luxury court-inspired layout with rich framing"],
+    ["pixel-arcade","Pixel Arcade","Retro pixel-inspired HUD with game-status details"],
+    ["botanical-night","Botanical Night","Organic night-garden identity with elegant leaf motifs"]
   ];
 
   function requireClient() {

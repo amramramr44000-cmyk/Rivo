@@ -468,11 +468,16 @@
     "neon-arena": { accent: "#55d6ff", card: "outline" },
     "cyber-terminal": { accent: "#38ff9b", card: "terminal" },
     "dark-luxury": { accent: "#f4c879", card: "solid" },
-    "minimal-ice": { accent: "#d9efff", card: "solid" },
-    "samurai-ink": { accent: "#ff5f72", card: "poster" },
+    "minimal-ice": { accent: "#d9efff", card: "frosted" },
+    "samurai-ink": { accent: "#ff5f72", card: "notched" },
     "deep-space": { accent: "#9a86ff", card: "glass" },
-    "creator-pulse": { accent: "#f26eea", card: "glass" },
-    "monochrome-pro": { accent: "#f4f5f7", card: "outline" }
+    "creator-pulse": { accent: "#f26eea", card: "aurora" },
+    "monochrome-pro": { accent: "#f4f5f7", card: "frame" },
+    "starlight-royal": { accent: "#b9a7ff", card: "starfield" },
+    "aurora-glass": { accent: "#67e8f9", card: "aurora" },
+    "obsidian-court": { accent: "#f0b65b", card: "frame" },
+    "pixel-arcade": { accent: "#7dff8d", card: "terminal" },
+    "botanical-night": { accent: "#79d79a", card: "frosted" }
   };
 
   const templateNames = {
@@ -485,7 +490,12 @@
     "samurai-ink": "Samurai Ink",
     "deep-space": "Deep Space",
     "creator-pulse": "Creator Pulse",
-    "monochrome-pro": "Monochrome Pro"
+    "monochrome-pro": "Monochrome Pro",
+    "starlight-royal": "Starlight Royal",
+    "aurora-glass": "Aurora Glass",
+    "obsidian-court": "Obsidian Court",
+    "pixel-arcade": "Pixel Arcade",
+    "botanical-night": "Botanical Night"
   };
 
   function applyVisual(state, target = document.documentElement) {
@@ -757,7 +767,7 @@
       <div class="profile-content">
         <div class="profile-head">
           <div class="profile-avatar-wrap">
-            <button type="button" class="profile-avatar-button ${p.story?.active ? "has-story" : ""}" data-story-user="${esc(p.username)}" data-story-active="${p.story?.active ? "1" : "0"}" data-story-own="${isMe ? "1" : "0"}" aria-label="${p.story?.active ? "View story" : isMe ? "Add a story" : "Profile avatar"}">${p.story?.active ? `<span class="story-ring-frame" aria-hidden="true"></span>` : ""}<span class="profile-avatar ${frame}">${p.avatar ? `<img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}">` : esc(initials(p))}</span>${isMe && !p.story?.active ? `<b class="story-add-dot profile-story-plus" aria-hidden="true">+</b>` : ""}</button>
+            <button type="button" class="profile-avatar-button ${p.story?.active ? "has-story" : "story-empty"}" data-story-user="${esc(p.username)}" data-story-active="${p.story?.active ? "1" : "0"}" data-story-own="${isMe ? "1" : "0"}" aria-label="${p.story?.active ? "View story" : isMe ? "Add a story" : "Profile avatar"}">${p.story?.active ? `<span class="story-ring-frame" aria-hidden="true"></span>` : ""}<span class="profile-avatar ${frame}">${p.avatar ? `<img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}">` : esc(initials(p))}</span>${isMe && !p.story?.active ? `<b class="story-add-dot profile-story-plus" aria-hidden="true">+</b>` : ""}</button>
           </div>
           <div class="profile-identity">
             <div class="profile-topline"><span class="status-dot ${p.status === "Offline" ? "offline" : ""}"></span><span>${esc(p.status === "Custom" ? (p.customStatus || "Online") : (p.status || "Online"))}</span>${isMe ? `<span class="you-label">YOUR PROFILE</span>` : ""}</div>
