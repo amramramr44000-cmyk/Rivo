@@ -298,35 +298,136 @@
     } catch (err) { console.error(err); notify(err.message || "Something went wrong", "error"); }
   });
 
+
+  function setupTurnstile(form, containerId, messageId) {
+    const security = window.RIVO_SECURITY || {};
+    const container = document.getElementById(containerId);
+    const message = document.getElementById(messageId);
+    const submit = form?.querySelector('button[type="submit"]');
+    let widgetId = null;
+    let token = "";
+    const startedAt = performance.now();
+
+    const setMessage = (text = "", type = "") => {
+      if (!message) return;
+      message.textContent = text;
+      message.className = `captcha-note ${type}`.trim();
+    };
+    const setSubmitState = () => {
+      if (!submit) return;
+      const botTrapFilled = !!document.getElementById(form.id === "signupForm" ? "signupWebsite" : "loginWebsite")?.value;
+      submit.disabled = !!security.requireCaptcha && (!token || botTrapFilled);
+    };
+    const reset = () => {
+      token = "";
+      setSubmitState();
+      if (widgetId !== null && window.turnstile) {
+        try { window.turnstile.reset(widgetId); } catch {}
+      }
+    };
+
+    form.__rivoCaptcha = {
+      getToken: () => token,
+      reset,
+      isTrapClean: () => !document.getElementById(form.id === "signupForm" ? "signupWebsite" : "loginWebsite")?.value,
+      startedAt: () => startedAt
+    };
+
+    document.getElementById(form.id === "signupForm" ? "signupWebsite" : "loginWebsite")?.addEventListener("input", setSubmitState);
+
+    if (!security.requireCaptcha) {
+      setMessage("Human verification is disabled in configuration.");
+      setSubmitState();
+      return form.__rivoCaptcha;
+    }
+
+    if (!security.siteKey) {
+      setMessage("Security check is not configured yet. Add the Turnstile site key in js/supabase-config.js.", "error");
+      if (submit) submit.disabled = true;
+      return form.__rivoCaptcha;
+    }
+
+    const render = () => {
+      if (!window.turnstile || !container || widgetId !== null) return;
+      try {
+        widgetId = window.turnstile.render(container, {
+          sitekey: security.siteKey,
+          theme: "dark",
+          size: "flexible",
+          callback: t => { token = String(t || ""); setMessage("Verification complete.", "success"); setSubmitState(); },
+          "expired-callback": () => { token = ""; setMessage("The verification expired. Please check again.", "error"); setSubmitState(); },
+          "error-callback": () => { token = ""; setMessage("Security verification failed. Please try again.", "error"); setSubmitState(); }
+        });
+        setSubmitState();
+      } catch (err) {
+        console.error("[Rivo] Turnstile render failed", err);
+        setMessage("Unable to load the security check. Please disable blockers or check the Turnstile setup.", "error");
+        if (submit) submit.disabled = true;
+      }
+    };
+
+    if (window.turnstile) render();
+    else window.addEventListener("load", render, { once: true });
+    return form.__rivoCaptcha;
+  }
+
   async function initLogin() {
     const form = $("#loginForm"); if (!form) return;
+    setupTurnstile(form, "loginTurnstile", "loginCaptchaMsg");
     form.addEventListener("submit", async e => {
       e.preventDefault();
-      const btn = form.querySelector("button[type=submit]"); btn.disabled = true;
+      const btn = form.querySelector("button[type=submit]");
+      const captcha = form.__rivoCaptcha;
       $("#loginMsg") && ($("#loginMsg").textContent = "");
-      try { await PF.login($("#loginUsername").value, $("#loginPassword").value); location.href = "profile.html"; }
-      catch (err) { $("#loginMsg") && ($("#loginMsg").textContent = err.message); }
-      finally { btn.disabled = false; }
+      if (captcha?.isTrapClean && !captcha.isTrapClean()) return;
+      if (window.RIVO_SECURITY?.requireCaptcha && !captcha?.getToken()) {
+        $("#loginMsg") && ($("#loginMsg").textContent = "Complete the human verification first.");
+        return;
+      }
+      btn.disabled = true;
+      try {
+        await PF.login($("#loginUsername").value, $("#loginPassword").value, captcha?.getToken?.() || "");
+        location.href = "profile.html";
+      } catch (err) {
+        $("#loginMsg") && ($("#loginMsg").textContent = err.message);
+        captcha?.reset?.();
+      } finally {
+        if (!window.RIVO_SECURITY?.requireCaptcha) btn.disabled = false;
+      }
     });
   }
 
   async function initSignup() {
     const form = $("#signupForm"); if (!form) return;
+    const captcha = setupTurnstile(form, "signupTurnstile", "signupCaptchaMsg");
     $("#signupUsername")?.addEventListener("input", () => {
       const v = PF.normalizeUsername($("#signupUsername").value);
-      $("#usernameHint") && ($("#usernameHint").textContent = PF.validUsername(v) ? "Username is available format-wise." : "4–26 chars: letters, numbers, . _ -");
+      $("#usernameHint") && ($("#usernameHint").textContent = PF.validUsername(v) ? "Username format is valid." : "4–26 chars: letters, numbers, . _ -");
     });
     form.addEventListener("submit", async e => {
       e.preventDefault();
-      const btn = form.querySelector("button[type=submit]"); btn.disabled = true;
+      const btn = form.querySelector("button[type=submit]");
       $("#signupMsg") && ($("#signupMsg").textContent = "");
+      if (captcha?.isTrapClean && !captcha.isTrapClean()) return;
+      if (performance.now() - captcha?.startedAt?.() < 1200) {
+        $("#signupMsg") && ($("#signupMsg").textContent = "Please take a moment and complete the form normally.");
+        return;
+      }
+      if (window.RIVO_SECURITY?.requireCaptcha && !captcha?.getToken()) {
+        $("#signupMsg") && ($("#signupMsg").textContent = "Complete the human verification first.");
+        return;
+      }
+      btn.disabled = true;
       try {
         const password = $("#signupPassword").value;
         if (password !== $("#signupPassword2").value) throw new Error("Passwords do not match.");
-        await PF.createAccount({ username: $("#signupUsername").value, displayName: $("#signupDisplay").value, password });
+        await PF.createAccount({ username: $("#signupUsername").value, displayName: $("#signupDisplay").value, password, captchaToken: captcha?.getToken?.() || "" });
         location.href = "editor.html";
-      } catch (err) { $("#signupMsg") && ($("#signupMsg").textContent = err.message); }
-      finally { btn.disabled = false; }
+      } catch (err) {
+        $("#signupMsg") && ($("#signupMsg").textContent = err.message);
+        captcha?.reset?.();
+        btn.disabled = false;
+      }
     });
   }
 

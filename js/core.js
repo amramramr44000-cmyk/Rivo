@@ -109,8 +109,15 @@
   }
   function setSession(username) { cacheUsername(username); }
   async function clearSession() {
+    // Clear browser-side identity data BEFORE navigation so a later login
+    // can never hydrate a stale account from the previous session.
     cacheUsername("");
-    if (sb) await sb.auth.signOut();
+    cacheDelete(CURRENT_PROFILE_CACHE_KEY);
+    try { sessionStorage.removeItem("rivo_profiles_list_v2"); } catch {}
+    if (sb) {
+      const { error } = await sb.auth.signOut();
+      if (error) throw error;
+    }
   }
   function publicData(profile) {
     const p = structuredClone(profile || {});
@@ -291,20 +298,32 @@
     return saveProfile({ ...current, ...patch });
   }
 
-  async function createAccount({ username, displayName, password }) {
+  async function createAccount({ username, displayName, password, captchaToken = "" }) {
     requireClient();
     const u = normalizeUsername(username);
     if (!validUsername(u)) throw new Error("Username must use 4–26 chars: letters, numbers, . _ -.");
     if (!String(displayName || "").trim()) throw new Error("Display name is required.");
-    if (String(password || "").length < 6) throw new Error("Password must be at least 6 characters.");
+    const passwordValue = String(password || "");
+    if (passwordValue.length < 10) throw new Error("Password must be at least 10 characters.");
+    if (passwordValue.length > 128) throw new Error("Password must be 128 characters or fewer.");
+    const classes = [/[a-z]/.test(passwordValue), /[A-Z]/.test(passwordValue), /\d/.test(passwordValue), /[^A-Za-z0-9]/.test(passwordValue)].filter(Boolean).length;
+    if (classes < 3) throw new Error("Use a stronger password: mix uppercase, lowercase, numbers and/or symbols.");
+    const weak = new Set(["password123", "password123!", "qwerty1234", "1234567890", "letmein123", "welcome123"]);
+    if (weak.has(passwordValue.toLowerCase())) throw new Error("Choose a less predictable password.");
+    if (window.RIVO_SECURITY?.requireCaptcha && !String(captchaToken || "")) {
+      throw new Error("Complete the human verification first.");
+    }
     const { data: existing, error: lookupError } = await sb.rpc("rivo_username_exists", { p_username: u });
     if (lookupError) throw lookupError;
     if (existing) throw new Error("That username is already taken.");
 
     const syntheticEmail = `${u}@users.rivo.app`;
+    const signUpOptions = {};
+    if (captchaToken) signUpOptions.captchaToken = String(captchaToken);
     const { data: auth, error: authError } = await sb.auth.signUp({
       email: syntheticEmail,
-      password: String(password)
+      password: passwordValue,
+      options: signUpOptions
     });
     if (authError) throw authError;
     if (!auth.user || !auth.session) {
@@ -332,20 +351,31 @@
     return base;
   }
 
-  async function login(username, password) {
+  async function login(username, password, captchaToken = "") {
     requireClient();
     const u = normalizeUsername(username);
     if (!u) throw new Error("Enter your username.");
-    const { data: row, error: lookupError } = await sb.from("profiles")
-      .select("auth_email,username").eq("username", u).maybeSingle();
-    if (lookupError) throw lookupError;
-    if (!row) throw new Error("Incorrect username or password.");
+    const passwordValue = String(password || "");
+    if (!passwordValue) throw new Error("Enter your password.");
+    if (window.RIVO_SECURITY?.requireCaptcha && !String(captchaToken || "")) {
+      throw new Error("Complete the human verification first.");
+    }
+
+    // The auth email is deterministic from the username, so do not query
+    // public.profiles while signed out. RLS correctly blocks that query for
+    // guests, which was the cause of the post-logout "correct password" bug.
+    const syntheticEmail = `${u}@users.rivo.app`;
+    const signInOptions = {};
+    if (captchaToken) signInOptions.captchaToken = String(captchaToken);
     const { data, error } = await sb.auth.signInWithPassword({
-      email: row.auth_email, password: String(password || "")
+      email: syntheticEmail,
+      password: passwordValue,
+      options: signInOptions
     });
     if (error || !data.user) throw new Error("Incorrect username or password.");
-    cacheUsername(row.username);
-    return currentProfile();
+    cacheDelete(CURRENT_PROFILE_CACHE_KEY);
+    cacheUsername(u);
+    return currentProfile({ force: true });
   }
 
   async function deleteProfile(username) {
