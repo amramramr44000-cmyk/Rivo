@@ -87,3 +87,16 @@ New account creation now uses a stronger password policy (10–128 characters wi
 ### Rivo Human Check
 
 No Cloudflare or other CAPTCHA setup is required. The browser presents a single familiar “I’m human” checkbox and runs the layered local checks already included in the project. Keep the Supabase Auth rate limits enabled in production.
+
+## Rivo Social v1 additions
+
+This build adds:
+
+- `pages/posts.html`: social feed with post creation, up to 5 images per post, comments, 5 reaction types (`❤️ 😂 👍 😮 😢`) with one reaction per user, and reposts.
+- Profile posts: each profile now shows its published posts and posts reposted by that profile.
+- `pages/communities.html`: community discovery, community creation, public/friends/request-only join policies, owner approval/decline, member removal, and group chat.
+- Realtime community messages through Supabase Realtime.
+- All new writes are mediated by Supabase RPC functions and the new schema is included at the end of `supabase_schema.sql`.
+
+### Supabase update
+Run the complete `supabase_schema.sql` file in the Supabase SQL Editor for the project. Keep the existing `rivo-media` storage bucket and existing RLS/storage policies. No manual data migration is required for existing profiles, friends, messages, or stories.
