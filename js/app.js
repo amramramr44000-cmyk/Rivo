@@ -350,7 +350,7 @@
       button?.setAttribute("aria-pressed", "false");
       button?.classList.remove("verified", "checking");
       const status = button?.querySelector(".human-check-status");
-      if (status) status.textContent = "Verify";
+      if (status) { status.textContent = "Ready"; status.setAttribute("aria-hidden","true"); }
       challenge = `${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)}:${Date.now()}`;
       startedAt = performance.now();
       updateSubmit();
@@ -736,9 +736,9 @@
     const friendsOnlyBlocked = p.messagePrivacy === "friends" && relationship !== "friends";
     const messageAction = canInteract
       ? (messagesClosed
-        ? `<span class="btn btn-ghost messages-closed-badge" role="note" aria-label="This user has closed their messages">🔒 Messages closed</span>`
+        ? `<button type="button" class="btn btn-ghost messages-closed-badge is-disabled" disabled aria-disabled="true" title="This user has closed messages">🔒 Messages off</button>`
         : friendsOnlyBlocked
-          ? `<span class="btn btn-ghost messages-closed-badge" role="note" aria-label="This user only accepts messages from friends">🔒 Friends only</span>`
+          ? `<button type="button" class="btn btn-ghost messages-closed-badge is-disabled" disabled aria-disabled="true" title="You must be friends to message this user">🔒 Friends only</button>`
           : `<a class="btn" href="messages.html?u=${encodeURIComponent(p.username)}">Message</a>`)
       : "";
     const friendActionWrap = canInteract
@@ -922,6 +922,8 @@
 
     let activeUser = "";
     let activeUserId = "";
+    let activeCanMessage = true;
+    let activeRestriction = "";
     let conversations = [];
     let messageUnsubscribe = null;
     let reactionUnsubscribe = null;
@@ -1042,6 +1044,21 @@
       renderConversations();
     }
 
+    const setComposerState = (allowed, reason = "") => {
+      activeCanMessage = !!allowed;
+      activeRestriction = reason || "";
+      input.disabled = !activeCanMessage;
+      const submitButton = form.querySelector('button[type="submit"]');
+      if (submitButton) submitButton.disabled = !activeCanMessage;
+      if (!activeCanMessage) {
+        input.placeholder = reason || "Messaging is unavailable";
+        status.textContent = reason || "Messaging is unavailable";
+      } else {
+        input.placeholder = "Write a message…";
+        updateThreadPresence();
+      }
+    };
+
     async function openConversation(username) {
       activeUser = PF.normalizeUsername(username);
       const c = conversations.find(x => x.username === activeUser);
@@ -1052,28 +1069,40 @@
       }
 
       let conversation = c;
-      if (!conversation || !activeUserId) {
-        try {
-          const profile = await PF.getProfile(activeUser);
-          if (profile) {
-            activeUserId = profile.userId || activeUserId;
-            conversation = conversation || {
-              username: profile.username,
-              userId: profile.userId || "",
-              displayName: profile.displayName || profile.username,
-              avatar: profile.avatar || "",
-              lastMessage: "Start a new conversation",
-              updatedLabel: "",
-              createdAt: ""
-            };
-            if (!c) {
-              conversations.unshift(conversation);
-            } else if (c.userId !== activeUserId) {
-              const idx = conversations.indexOf(c);
-              if (idx >= 0) conversations[idx] = { ...c, userId: activeUserId };
-            }
+      let targetProfile = null;
+      try {
+        targetProfile = await PF.getProfile(activeUser, { force: true });
+        if (targetProfile) {
+          activeUserId = targetProfile.userId || activeUserId;
+          conversation = conversation || {
+            username: targetProfile.username,
+            userId: targetProfile.userId || "",
+            displayName: targetProfile.displayName || targetProfile.username,
+            avatar: targetProfile.avatar || "",
+            lastMessage: "Start a new conversation",
+            updatedLabel: "",
+            createdAt: ""
+          };
+          if (!c) {
+            conversations.unshift(conversation);
+          } else if (c.userId !== activeUserId) {
+            const idx = conversations.indexOf(c);
+            if (idx >= 0) conversations[idx] = { ...c, userId: activeUserId };
           }
-        } catch {}
+        }
+      } catch {}
+
+      if (!targetProfile) {
+        setComposerState(false, "This profile is unavailable");
+      } else if (targetProfile.username === me.username) {
+        setComposerState(false, "You cannot message yourself");
+      } else {
+        const relation = PF.friendshipState(me, targetProfile.username);
+        const privacy = targetProfile.messagePrivacy === "nobody" ? "nobody"
+          : targetProfile.messagePrivacy === "friends" ? "friends" : "everyone";
+        if (privacy === "nobody") setComposerState(false, "Messages are closed");
+        else if (privacy === "friends" && relation !== "friends") setComposerState(false, "Only friends can message this user");
+        else setComposerState(true);
       }
 
       title.innerHTML = conversation
@@ -1084,8 +1113,8 @@
         const messages = await PF.getMessages(activeUser);
         renderThread(messages);
         updateThreadPresence();
-        input.disabled = false;
-        input.focus();
+        setComposerState(activeCanMessage, activeRestriction);
+        if (activeCanMessage) input.focus();
       } catch (e) { notify(e.message, "error"); }
     }
 
@@ -1102,7 +1131,7 @@
     form.addEventListener("submit", async e => {
       e.preventDefault();
       const text = String(input.value || "").trim();
-      if (!activeUser || !text) return;
+      if (!activeUser || !text || !activeCanMessage) return;
       clearTimeout(typingStopTimer);
 
       // Optimistic send: show the bubble instantly instead of waiting on the
@@ -1297,7 +1326,12 @@
     const mode = localStorage.getItem("rivo_color_scheme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
     $("#themeDark") && ($("#themeDark").checked = mode === "dark");
     $("#themeLight") && ($("#themeLight").checked = mode === "light");
-    $$('input[name="themeMode"]').forEach(r => r.addEventListener("change", () => { localStorage.setItem("rivo_color_scheme", r.value); document.documentElement.dataset.colorScheme = r.value; }));
+    $$('input[name="themeMode"]').forEach(r => r.addEventListener("change", () => {
+      localStorage.setItem("rivo_color_scheme", r.value);
+      document.documentElement.dataset.colorScheme = r.value;
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.content = r.value === "light" ? "#f7f8fb" : "#0b0d12";
+    }));
     const notifOn = $("#notifOn"), notifOff = $("#notifOff"), nsupport = $("#notificationSupport");
     if (notifOn && notifOff) {
       const supported = "Notification" in window;

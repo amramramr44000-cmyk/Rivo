@@ -454,7 +454,9 @@
     // Invalidate both the private (own) cache and the public-profile cache so
     // the "Messages closed" state shows up immediately on anyone viewing this
     // profile, instead of waiting out the old cached copy.
-    invalidateProfileCache(currentUsername());
+    const meUsername = currentUsername();
+    invalidateProfileCache(meUsername);
+    cacheDelete(CURRENT_PROFILE_CACHE_KEY);
     return v;
   }
   async function sendMessage(username, content) {
@@ -742,6 +744,8 @@
     const saved = localStorage.getItem("rivo_color_scheme");
     const mode = saved === "light" || saved === "dark" ? saved : (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark");
     document.documentElement.dataset.colorScheme = mode;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = mode === "light" ? "#f7f8fb" : "#0b0d12";
   }
   applySavedColorScheme();
 
