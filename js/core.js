@@ -983,7 +983,8 @@
     });
   }
   async function deleteCommunity(id) { return callRpc("rivo_delete_community", { p_id:Number(id) }); }
-  async function listCommunities() { return callRpc("rivo_list_communities", { p_limit:60 }); }
+  async function listCommunities() { return callRpc("rivo_list_communities", { p_limit:80 }); }
+  async function myCommunityCount() { return Number(await callRpc("rivo_my_community_count", {})) || 0; }
   async function getCommunity(id) { return callRpc("rivo_get_community", { p_id:Number(id) }); }
   async function joinCommunity(id) { return callRpc("rivo_join_community", { p_id:Number(id) }); }
   async function leaveCommunity(id) { return callRpc("rivo_leave_community", { p_id:Number(id) }); }
@@ -1012,6 +1013,6 @@
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, subscribeCommunityMessages
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages
   };
 })();

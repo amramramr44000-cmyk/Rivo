@@ -1501,13 +1501,34 @@
   }
 
   async function initCommunitiesPage(){
-    const list=$('#communityList'),create=$('#newCommunityBtn');
+    const list=$('#communityList'),create=$('#newCommunityBtn'),search=$('#communitySearch'),limitEl=$('#communityCreateLimit');
     const me=await PF.currentProfile().catch(()=>null);
-    if(create&&!me)create.classList.add('hidden');
-    create?.addEventListener('click',()=>openCommunityCreateModal());
-    const draw=async()=>{
-      const cs=await PF.listCommunities();
-      list.innerHTML=cs.length?cs.map(communityCard).join(''):`<div class="empty-state glass"><h2>No communities yet</h2><p>Create the first one.</p></div>`;
+    let communities=[];
+    let myCount=0;
+    const updateCreateState=()=>{
+      const atLimit=myCount>=3;
+      if(create){
+        create.classList.toggle('hidden',!me);
+        create.disabled=atLimit;
+        create.setAttribute('aria-disabled',String(atLimit));
+        create.title=atLimit?'You can create up to 3 communities':'Create community';
+      }
+      if(limitEl && me){
+        limitEl.textContent=`Your communities: ${Math.min(myCount,3)}/3`;
+        limitEl.classList.remove('hidden');
+        limitEl.classList.toggle('limit-reached',atLimit);
+      }
+    };
+    if(me){
+      try{myCount=await PF.myCommunityCount();}
+      catch{myCount=0;}
+    }
+    updateCreateState();
+    create?.addEventListener('click',()=>{if(myCount>=3){notify('You can create up to 3 communities.','error');return}openCommunityCreateModal()});
+    const renderList=()=>{
+      const term=String(search?.value||'').trim().toLowerCase();
+      const filtered=term?communities.filter(c=>String(c?.name||'').toLowerCase().includes(term)):communities;
+      list.innerHTML=filtered.length?filtered.map(communityCard).join(''):(term?`<div class="empty-state glass"><h2>No matching communities</h2><p>Try another name.</p></div>`:`<div class="empty-state glass"><h2>No communities yet</h2><p>Create the first one.</p></div>`);
       list.querySelectorAll('[data-join-community]').forEach(b=>b.onclick=async()=>{if(!PF.currentUsername()){location.href='login.html';return}try{const c=await PF.joinCommunity(b.dataset.joinCommunity);if(c?.is_member) await openCommunityRoom(b.dataset.joinCommunity);await draw()}catch(e){notify(e.message,'error')}});
       list.querySelectorAll('[data-open-community]').forEach(b=>b.onclick=async()=>{try{await openCommunityRoom(b.dataset.openCommunity)}catch(e){notify(e.message,'error')}});
       list.querySelectorAll('[data-delete-community]').forEach(b=>b.onclick=async()=>{
@@ -1515,6 +1536,16 @@
         try{await PF.deleteCommunity(b.dataset.deleteCommunity);notify('Community deleted','success');await draw()}catch(e){notify(e.message||'Could not delete community','error')}
       });
     };
+    const draw=async()=>{
+      communities=await PF.listCommunities();
+      if(me){
+        try{myCount=await PF.myCommunityCount();}catch{myCount=communities.filter(c=>PF.normalizeUsername(c?.owner?.username||'')===PF.normalizeUsername(me.username||'')).length;}
+      }
+      updateCreateState();
+      renderList();
+    };
+    search?.addEventListener('input',renderList);
+    search?.addEventListener('search',renderList);
     await draw();
     const q=new URLSearchParams(location.search).get('community');
     if(q) await openCommunityRoom(q);
