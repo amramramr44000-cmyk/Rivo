@@ -1658,142 +1658,141 @@ html[data-color-scheme="light"] .social-side-link.active{background:rgba(16,24,4
   }
 }
 
-/* =========================================================
-   RIVO MOBILE SOCIAL NAV + CONTENT HARDENING
-   Ensures Posts / Communities / Explore / Messages remain
-   directly reachable on phones, while keeping desktop layout intact.
-   ========================================================= */
-.mobile-quick-nav .mobile-quick-link.active{
-  background:color-mix(in srgb,var(--accent) 12%,transparent)!important;
-  border-color:color-mix(in srgb,var(--accent) 22%,transparent)!important;
-  color:#fff!important;
-  box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 10%,transparent) inset;
+/* ============================================================
+   Rivo Social mobile visibility fix
+   Keep Posts / Communities / People reachable and fully visible
+   on narrow phones without changing the desktop layout.
+   ============================================================ */
+.social-mobile-nav{
+  display:none;
+  min-width:0;
+}
+.social-mobile-nav a{
+  min-width:0;
+  min-height:44px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:7px;
+  padding:0 12px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:rgba(255,255,255,.028);
+  color:#9da7b6;
+  font-size:11px;
+  font-weight:700;
+  white-space:nowrap;
+  flex:1 1 0;
+}
+.social-mobile-nav a.active{
+  color:#fff;
+  background:color-mix(in srgb,var(--accent) 12%,transparent);
+  border-color:color-mix(in srgb,var(--accent) 28%,var(--border));
 }
 @media(max-width:760px){
-  .social-page .social-shell{
+  .social-shell{
     width:calc(100% - 12px)!important;
-    max-width:none!important;
-    padding-inline:6px!important;
-    padding-bottom:calc(112px + env(safe-area-inset-bottom))!important;
-    box-sizing:border-box!important;
+    max-width:none;
+    padding-inline:0;
+    min-width:0;
   }
-  .social-page .page-head{
-    padding-top:18px!important;
-    padding-bottom:14px!important;
+  .social-shell .page-head{
+    min-width:0;
+    overflow:visible;
   }
-  .social-page .post-layout{
-    width:100%!important;
-    max-width:100%!important;
+  .social-mobile-nav{
+    display:flex;
+    width:100%;
+    gap:6px;
+    margin:0 0 12px;
+    padding:4px;
+    border:1px solid var(--border);
+    border-radius:15px;
+    background:rgba(12,16,24,.72);
+    box-shadow:0 10px 28px rgba(0,0,0,.14);
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+  .social-mobile-nav a{
+    flex:1 0 0;
+  }
+  .post-layout{
+    width:100%;
+    min-width:0;
+    display:grid;
     grid-template-columns:minmax(0,1fr)!important;
-    gap:10px!important;
-    min-width:0!important;
+    gap:12px;
+    justify-content:stretch;
   }
-  .social-page .social-side{
-    width:100%!important;
-    max-width:100%!important;
-    min-width:0!important;
-    overflow-x:auto!important;
-    overflow-y:hidden!important;
+  .post-layout>aside.social-side{
     display:flex!important;
-    flex-wrap:nowrap!important;
-    gap:5px!important;
-    position:relative!important;
-    top:auto!important;
-    scrollbar-width:none;
+    width:100%;
+    max-width:100%;
+    min-width:0;
+    position:static;
+    overflow-x:auto;
+    overflow-y:hidden;
+    flex-wrap:nowrap;
   }
-  .social-page .social-side::-webkit-scrollbar{display:none;}
-  .social-page .social-side-link{
-    flex:0 0 auto!important;
-    white-space:nowrap!important;
+  .post-layout>aside.social-side .social-side-link{
+    flex:0 0 auto;
   }
-  .social-page #postFeed,
-  .social-page #postComposer,
-  .social-page #communityRoot,
-  .social-page #communityList,
-  .social-page #communityRoom{
-    width:100%!important;
-    max-width:100%!important;
-    min-width:0!important;
-    box-sizing:border-box!important;
+  .post-layout>div{
+    width:100%;
+    min-width:0;
   }
-  .social-page .post-card,
-  .social-page .community-card,
-  .social-page .community-room{
-    width:100%!important;
-    max-width:100%!important;
-    min-width:0!important;
+  .post-feed,.post-composer{
+    width:100%;
+    min-width:0;
   }
-  .social-page .post-main,
-  .social-page .post-comments,
-  .social-page .community-card,
-  .social-page .room-head,
-  .social-page .room-compose{
+  .post-card,.community-card,.community-room{
+    min-width:0;
+    max-width:100%;
+  }
+  .community-layout{
+    width:100%;
+    min-width:0;
+    grid-template-columns:minmax(0,1fr)!important;
+  }
+  .community-grid{
+    width:100%;
+    min-width:0;
+  }
+  .community-room{
+    width:100%;
+    min-width:0;
+    overflow:hidden;
+  }
+  .post-content,.community-card p,.room-title,.room-title h2,.room-title p{
     overflow-wrap:anywhere;
+    word-break:normal;
   }
-  .social-page .post-media{
-    width:100%!important;
-    min-width:0!important;
+  .room-compose{
+    min-width:0;
   }
-  .social-page .post-media img{
-    min-width:0!important;
-    width:100%!important;
+  .room-compose .field-input{
+    min-width:0;
   }
-  .social-page .community-head{
-    width:100%!important;
-    min-width:0!important;
+}
+@media(max-width:430px){
+  .social-mobile-nav{
+    gap:4px;
+    margin-bottom:10px;
+    padding:3px;
   }
-  .social-page .community-layout{
-    width:100%!important;
-    grid-template-columns:minmax(0,1fr)!important;
-    min-width:0!important;
+  .social-mobile-nav a{
+    min-height:42px;
+    padding-inline:8px;
+    font-size:10px;
   }
-  .social-page .community-grid{
-    width:100%!important;
-    grid-template-columns:minmax(0,1fr)!important;
-    min-width:0!important;
+  .post-layout{
+    gap:10px;
   }
-  .social-page .community-room{
-    position:relative!important;
-    top:auto!important;
-    min-height:calc(100dvh - 190px)!important;
-    max-height:none!important;
-    overflow:hidden!important;
+  .post-main{
+    padding:13px!important;
   }
-  .social-page .room-body{
-    grid-template-columns:minmax(0,1fr)!important;
-    min-height:0!important;
-  }
-  .social-page .room-messages{
-    max-height:none!important;
-    min-height:260px!important;
-    overflow:auto!important;
-  }
-  .social-page .room-compose input{
-    min-width:0!important;
-  }
-  .social-page .community-actions .btn{
-    min-height:40px!important;
+  .community-card{
+    padding:14px!important;
   }
 }
 
-@media(max-width:430px){
-  .social-page .social-shell{
-    padding-inline:4px!important;
-  }
-  .social-page .page-head h1{
-    font-size:28px!important;
-  }
-  .social-page .post-composer,
-  .social-page .post-card,
-  .social-page .community-card,
-  .social-page .community-room{
-    border-radius:16px!important;
-  }
-  .social-page .post-main,
-  .social-page .post-comments,
-  .social-page .community-card{
-    padding-inline:12px!important;
-  }
-  .social-page .post-content{font-size:12.5px!important;}
-  .social-page .post-media img{min-height:95px!important;}
-}
