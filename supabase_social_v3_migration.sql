@@ -52,3 +52,23 @@ begin
 end; $$;
 revoke all on function public.rivo_delete_community(bigint) from public;
 grant execute on function public.rivo_delete_community(bigint) to authenticated;
+
+
+-- Rivo Calls v5.1: call privacy + server-side call permission
+create or replace function public.rivo_set_call_setting(p_who_can_call text)
+returns text language plpgsql security definer set search_path = public as $$
+declare v text := case when p_who_can_call='friends' then 'friends' when p_who_can_call='nobody' then 'nobody' else 'everyone' end;
+begin update public.profiles set private_data=jsonb_set(coalesce(private_data,'{}'::jsonb),'{callSettings,whoCanCall}',to_jsonb(v),true),updated_at=now() where id=auth.uid(); if not found then raise exception 'Profile not found'; end if; return v; end; $$;
+revoke all on function public.rivo_set_call_setting(text) from public; grant execute on function public.rivo_set_call_setting(text) to authenticated;
+create or replace function public.rivo_can_call_user(p_target_username text)
+returns boolean language plpgsql security definer set search_path=public as $$
+declare me public.profiles; target public.profiles; setting text;
+begin select * into me from public.profiles where id=auth.uid(); select * into target from public.profiles where username=lower(trim(both '@' from p_target_username)); if me.id is null or target.id is null or me.id=target.id then return false; end if; setting:=coalesce(target.private_data->'callSettings'->>'whoCanCall','everyone'); if setting='nobody' then return false; end if; if setting='friends' then return coalesce(me.public_data->'friends','[]'::jsonb) ? target.username; end if; return true; end; $$;
+revoke all on function public.rivo_can_call_user(text) from public; grant execute on function public.rivo_can_call_user(text) to authenticated;
+
+
+create or replace function public.rivo_can_receive_call(p_caller_username text)
+returns boolean language plpgsql security definer set search_path=public as $$
+declare me public.profiles; caller public.profiles; setting text;
+begin select * into me from public.profiles where id=auth.uid(); select * into caller from public.profiles where username=lower(trim(both '@' from p_caller_username)); if me.id is null or caller.id is null or me.id=caller.id then return false; end if; setting:=coalesce(me.private_data->'callSettings'->>'whoCanCall','everyone'); if setting='nobody' then return false; end if; if setting='friends' then return coalesce(me.public_data->'friends','[]'::jsonb) ? caller.username; end if; return true; end; $$;
+revoke all on function public.rivo_can_receive_call(text) from public; grant execute on function public.rivo_can_receive_call(text) to authenticated;

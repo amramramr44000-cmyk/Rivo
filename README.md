@@ -100,3 +100,6 @@ This build adds:
 
 ### Supabase update
 Run the complete `supabase_schema.sql` file in the Supabase SQL Editor for the project. Keep the existing `rivo-media` storage bucket and existing RLS/storage policies. No manual data migration is required for existing profiles, friends, messages, or stories.
+
+## Calling privacy
+Calls support Everyone / Friends only / Nobody under Settings → Calls. The call permission is enforced by Supabase RPC.
