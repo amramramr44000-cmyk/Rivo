@@ -19,3 +19,12 @@ window.RIVO_SECURITY = {
   minInteractionMs: 1500,
   challengeBits: 17
 };
+
+/*
+  Rivo Calls networking.
+  The app will request short-lived TURN credentials from this HTTPS endpoint.
+  Keep all TURN API keys on the server/Edge Function; never put them here.
+*/
+window.RIVO_CALL_CONFIG = {
+  tokenUrl: "https://stfjcrcualeggmiygqur.supabase.co/functions/v1/rivo-livekit-token"
+};

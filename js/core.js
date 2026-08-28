@@ -19,6 +19,7 @@
   const sb = READY ? window.supabase.createClient(cfg.url, cfg.anonKey, {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
   }) : null;
+  window.__rivoSupabase = sb;
 
   const CACHE_KEY = "rivo_username";
   const MEDIA_BUCKET = "rivo-media";
