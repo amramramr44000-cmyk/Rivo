@@ -299,133 +299,161 @@
   });
 
 
-  function setupTurnstile(form, containerId, messageId) {
+  async function runHumanChallenge(seed, bits = 18) {
+    const target = Math.max(14, Math.min(20, Number(bits) || 18));
+    let nonce = 0;
+    const prefix = `${seed}:`;
+    while (nonce < 2000000) {
+      const raw = new TextEncoder().encode(prefix + nonce);
+      const buf = await crypto.subtle.digest("SHA-256", raw);
+      const bytes = new Uint8Array(buf);
+      let zeroBits = 0;
+      for (const b of bytes) {
+        if (b === 0) { zeroBits += 8; continue; }
+        let x = b;
+        while ((x & 0x80) === 0) { zeroBits++; x <<= 1; }
+        break;
+      }
+      if (zeroBits >= target) return String(nonce);
+      nonce++;
+      if ((nonce & 2047) === 0) await new Promise(r => setTimeout(r, 0));
+    }
+    throw new Error("Security check could not be completed. Please try again.");
+  }
+
+  function setupHumanCheck(form, buttonId, messageId) {
     const security = window.RIVO_SECURITY || {};
-    const container = document.getElementById(containerId);
+    const button = document.getElementById(buttonId);
     const message = document.getElementById(messageId);
     const submit = form?.querySelector('button[type="submit"]');
-    let widgetId = null;
-    let token = "";
-    const startedAt = performance.now();
+    const trapId = form.id === "signupForm" ? "signupWebsite" : "loginWebsite";
+    let verified = false;
+    let challenge = "";
+    let startedAt = performance.now();
+    let clickedAt = 0;
+    let pointerMoves = 0;
+    let keyEvents = 0;
 
     const setMessage = (text = "", type = "") => {
       if (!message) return;
       message.textContent = text;
       message.className = `captcha-note ${type}`.trim();
     };
-    const setSubmitState = () => {
+    const updateSubmit = () => {
       if (!submit) return;
-      const botTrapFilled = !!document.getElementById(form.id === "signupForm" ? "signupWebsite" : "loginWebsite")?.value;
-      submit.disabled = !!security.requireCaptcha && (!token || botTrapFilled);
+      const trapFilled = !!document.getElementById(trapId)?.value;
+      submit.disabled = !!security.requireHumanCheck && (!verified || trapFilled);
     };
     const reset = () => {
-      token = "";
-      setSubmitState();
-      if (widgetId !== null && window.turnstile) {
-        try { window.turnstile.reset(widgetId); } catch {}
-      }
+      verified = false;
+      clickedAt = 0;
+      button?.setAttribute("aria-pressed", "false");
+      button?.classList.remove("verified", "checking");
+      const status = button?.querySelector(".human-check-status");
+      if (status) status.textContent = "Verify";
+      challenge = `${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)}:${Date.now()}`;
+      startedAt = performance.now();
+      updateSubmit();
+    };
+    const fail = msg => { verified = false; button?.classList.remove("verified","checking"); setMessage(msg,"error"); updateSubmit(); };
+    const markVerified = () => {
+      verified = true;
+      button?.setAttribute("aria-pressed", "true");
+      button?.classList.remove("checking"); button?.classList.add("verified");
+      const status = button?.querySelector(".human-check-status");
+      if (status) status.textContent = "Verified";
+      setMessage("Human check passed.", "success");
+      updateSubmit();
     };
 
-    form.__rivoCaptcha = {
-      getToken: () => token,
+    form.__rivoHuman = {
+      isVerified: () => verified,
       reset,
-      isTrapClean: () => !document.getElementById(form.id === "signupForm" ? "signupWebsite" : "loginWebsite")?.value,
-      startedAt: () => startedAt
+      startedAt: () => startedAt,
+      signals: () => ({ pointerMoves, keyEvents, challenge, clickedAt, verified })
     };
 
-    document.getElementById(form.id === "signupForm" ? "signupWebsite" : "loginWebsite")?.addEventListener("input", setSubmitState);
-
-    if (!security.requireCaptcha) {
-      setMessage("Human verification is disabled in configuration.");
-      setSubmitState();
-      return form.__rivoCaptcha;
-    }
-
-    if (!security.siteKey) {
-      setMessage("Security check is not configured yet. Add the Turnstile site key in js/supabase-config.js.", "error");
-      if (submit) submit.disabled = true;
-      return form.__rivoCaptcha;
-    }
-
-    const render = () => {
-      if (!window.turnstile || !container || widgetId !== null) return;
-      try {
-        widgetId = window.turnstile.render(container, {
-          sitekey: security.siteKey,
-          theme: "dark",
-          size: "flexible",
-          callback: t => { token = String(t || ""); setMessage("Verification complete.", "success"); setSubmitState(); },
-          "expired-callback": () => { token = ""; setMessage("The verification expired. Please check again.", "error"); setSubmitState(); },
-          "error-callback": () => { token = ""; setMessage("Security verification failed. Please try again.", "error"); setSubmitState(); }
-        });
-        setSubmitState();
-      } catch (err) {
-        console.error("[Rivo] Turnstile render failed", err);
-        setMessage("Unable to load the security check. Please disable blockers or check the Turnstile setup.", "error");
-        if (submit) submit.disabled = true;
+    document.getElementById(trapId)?.addEventListener("input", updateSubmit);
+    form.addEventListener("pointermove", () => { pointerMoves = Math.min(pointerMoves + 1, 80); }, { passive: true });
+    form.addEventListener("keydown", () => { keyEvents = Math.min(keyEvents + 1, 80); }, { passive: true });
+    button?.addEventListener("click", async () => {
+      if (button.classList.contains("checking")) return;
+      const elapsed = performance.now() - startedAt;
+      if (elapsed < Number(security.minInteractionMs || 1800)) {
+        fail("Please interact with the form normally for a moment, then verify.");
+        return;
       }
-    };
+      if (document.getElementById(trapId)?.value) return;
+      clickedAt = Date.now();
+      button.classList.add("checking");
+      const status = button.querySelector(".human-check-status");
+      if (status) status.textContent = "Checking…";
+      setMessage("Running the security check…");
+      try {
+        await runHumanChallenge(challenge, security.challengeBits || 18);
+        const humanish = pointerMoves >= 1 || keyEvents >= 1 || elapsed > (Number(security.minInteractionMs || 1800) + 700);
+        if (!humanish) throw new Error("Interaction signal was insufficient.");
+        markVerified();
+      } catch (e) {
+        fail("Verification failed. Tap the box again and try normally.");
+      }
+    });
 
-    if (window.turnstile) render();
-    else window.addEventListener("load", render, { once: true });
-    return form.__rivoCaptcha;
+    reset();
+    if (!security.requireHumanCheck) markVerified();
+    else updateSubmit();
+    return form.__rivoHuman;
   }
 
   async function initLogin() {
     const form = $("#loginForm"); if (!form) return;
-    setupTurnstile(form, "loginTurnstile", "loginCaptchaMsg");
+    const human = setupHumanCheck(form, "loginHumanCheck", "loginCaptchaMsg");
     form.addEventListener("submit", async e => {
       e.preventDefault();
       const btn = form.querySelector("button[type=submit]");
-      const captcha = form.__rivoCaptcha;
       $("#loginMsg") && ($("#loginMsg").textContent = "");
-      if (captcha?.isTrapClean && !captcha.isTrapClean()) return;
-      if (window.RIVO_SECURITY?.requireCaptcha && !captcha?.getToken()) {
-        $("#loginMsg") && ($("#loginMsg").textContent = "Complete the human verification first.");
-        return;
+      if (human?.isVerified && !human.isVerified()) {
+        $("#loginMsg") && ($("#loginMsg").textContent = "Complete the human check first."); return;
       }
       btn.disabled = true;
       try {
-        await PF.login($("#loginUsername").value, $("#loginPassword").value, captcha?.getToken?.() || "");
+        await PF.login($("#loginUsername").value, $("#loginPassword").value);
         location.href = "profile.html";
       } catch (err) {
         $("#loginMsg") && ($("#loginMsg").textContent = err.message);
-        captcha?.reset?.();
+        human?.reset?.();
       } finally {
-        if (!window.RIVO_SECURITY?.requireCaptcha) btn.disabled = false;
+        if (!window.RIVO_SECURITY?.requireHumanCheck) btn.disabled = false;
       }
     });
   }
 
   async function initSignup() {
     const form = $("#signupForm"); if (!form) return;
-    const captcha = setupTurnstile(form, "signupTurnstile", "signupCaptchaMsg");
+    const human = setupHumanCheck(form, "signupHumanCheck", "signupCaptchaMsg");
     $("#signupUsername")?.addEventListener("input", () => {
       const v = PF.normalizeUsername($("#signupUsername").value);
-      $("#usernameHint") && ($("#usernameHint").textContent = PF.validUsername(v) ? "Username format is valid." : "4–26 chars: letters, numbers, . _ -");
+      $("#usernameHint") && ($("#usernameHint").textContent = PF.validUsername(v) ? "Username format is valid." : "3–26 chars: letters, numbers, . _ -");
     });
     form.addEventListener("submit", async e => {
       e.preventDefault();
       const btn = form.querySelector("button[type=submit]");
       $("#signupMsg") && ($("#signupMsg").textContent = "");
-      if (captcha?.isTrapClean && !captcha.isTrapClean()) return;
-      if (performance.now() - captcha?.startedAt?.() < 1200) {
-        $("#signupMsg") && ($("#signupMsg").textContent = "Please take a moment and complete the form normally.");
-        return;
+      if (human?.isVerified && !human.isVerified()) {
+        $("#signupMsg") && ($("#signupMsg").textContent = "Complete the human check first."); return;
       }
-      if (window.RIVO_SECURITY?.requireCaptcha && !captcha?.getToken()) {
-        $("#signupMsg") && ($("#signupMsg").textContent = "Complete the human verification first.");
-        return;
+      if ((performance.now() - human.startedAt()) < Number(window.RIVO_SECURITY?.minInteractionMs || 1800)) {
+        $("#signupMsg") && ($("#signupMsg").textContent = "Please take a moment and complete the form normally."); return;
       }
       btn.disabled = true;
       try {
         const password = $("#signupPassword").value;
         if (password !== $("#signupPassword2").value) throw new Error("Passwords do not match.");
-        await PF.createAccount({ username: $("#signupUsername").value, displayName: $("#signupDisplay").value, password, captchaToken: captcha?.getToken?.() || "" });
+        await PF.createAccount({ username: $("#signupUsername").value, displayName: $("#signupDisplay").value, password });
         location.href = "editor.html";
       } catch (err) {
         $("#signupMsg") && ($("#signupMsg").textContent = err.message);
-        captcha?.reset?.();
+        human?.reset?.();
         btn.disabled = false;
       }
     });

@@ -1,7 +1,6 @@
 /* Rivo / Supabase public browser configuration.
-   Replace both values with the Project URL and the anon/public key
-   from Supabase -> Project Settings -> API.
-   NEVER put a service_role/secret key in this file.
+   Replace values with the Project URL and anon/public key from
+   Supabase -> Project Settings -> API. NEVER put a service_role key here.
 */
 window.RIVO_SUPABASE = {
   url: "https://stfjcrcualeggmiygqur.supabase.co",
@@ -9,13 +8,14 @@ window.RIVO_SUPABASE = {
 };
 
 /*
-  Security / anti-bot configuration.
-  Create a Cloudflare Turnstile site key for the exact production hostname,
-  paste it here, and enable CAPTCHA protection in Supabase Auth.
-  NEVER put the Turnstile secret key in this file.
+  Rivo Human Check
+  A local, layered anti-automation gate. It intentionally uses no third-party
+  CAPTCHA provider. It is paired with Supabase Auth, honeypots, interaction
+  timing and client-side challenge work. For strongest production protection,
+  add server-side rate limits / edge verification later.
 */
 window.RIVO_SECURITY = {
-  provider: "turnstile",
-  siteKey: "",
-  requireCaptcha: true
+  requireHumanCheck: true,
+  minInteractionMs: 1800,
+  challengeBits: 18
 };

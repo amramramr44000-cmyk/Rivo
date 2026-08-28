@@ -99,7 +99,7 @@
   }
   function validUsername(value) {
     const u = normalizeUsername(value);
-    return /^[a-z0-9](?:[a-z0-9._-]{2,24})[a-z0-9]$/.test(u) &&
+    return /^[a-z0-9](?:[a-z0-9._-]{1,24})[a-z0-9]$/.test(u) &&
       !["admin","administrator","support","help","rivo","root","system","api","null","undefined"].includes(u);
   }
   function currentUsername() { return localStorage.getItem(CACHE_KEY) || ""; }
@@ -298,10 +298,10 @@
     return saveProfile({ ...current, ...patch });
   }
 
-  async function createAccount({ username, displayName, password, captchaToken = "" }) {
+  async function createAccount({ username, displayName, password }) {
     requireClient();
     const u = normalizeUsername(username);
-    if (!validUsername(u)) throw new Error("Username must use 4–26 chars: letters, numbers, . _ -.");
+    if (!validUsername(u)) throw new Error("Username must use 3–26 chars: letters, numbers, . _ -.");
     if (!String(displayName || "").trim()) throw new Error("Display name is required.");
     const passwordValue = String(password || "");
     if (passwordValue.length < 10) throw new Error("Password must be at least 10 characters.");
@@ -310,16 +310,12 @@
     if (classes < 3) throw new Error("Use a stronger password: mix uppercase, lowercase, numbers and/or symbols.");
     const weak = new Set(["password123", "password123!", "qwerty1234", "1234567890", "letmein123", "welcome123"]);
     if (weak.has(passwordValue.toLowerCase())) throw new Error("Choose a less predictable password.");
-    if (window.RIVO_SECURITY?.requireCaptcha && !String(captchaToken || "")) {
-      throw new Error("Complete the human verification first.");
-    }
     const { data: existing, error: lookupError } = await sb.rpc("rivo_username_exists", { p_username: u });
     if (lookupError) throw lookupError;
     if (existing) throw new Error("That username is already taken.");
 
     const syntheticEmail = `${u}@users.rivo.app`;
     const signUpOptions = {};
-    if (captchaToken) signUpOptions.captchaToken = String(captchaToken);
     const { data: auth, error: authError } = await sb.auth.signUp({
       email: syntheticEmail,
       password: passwordValue,
@@ -351,22 +347,18 @@
     return base;
   }
 
-  async function login(username, password, captchaToken = "") {
+  async function login(username, password) {
     requireClient();
     const u = normalizeUsername(username);
     if (!u) throw new Error("Enter your username.");
     const passwordValue = String(password || "");
     if (!passwordValue) throw new Error("Enter your password.");
-    if (window.RIVO_SECURITY?.requireCaptcha && !String(captchaToken || "")) {
-      throw new Error("Complete the human verification first.");
-    }
 
     // The auth email is deterministic from the username, so do not query
     // public.profiles while signed out. RLS correctly blocks that query for
     // guests, which was the cause of the post-logout "correct password" bug.
     const syntheticEmail = `${u}@users.rivo.app`;
     const signInOptions = {};
-    if (captchaToken) signInOptions.captchaToken = String(captchaToken);
     const { data, error } = await sb.auth.signInWithPassword({
       email: syntheticEmail,
       password: passwordValue,
