@@ -482,28 +482,100 @@ html[data-color-scheme="light"] .feature-card p,html[data-color-scheme="light"] 
 .security-check-head b{display:block;font-size:11px;letter-spacing:.01em;}
 .security-check-head small{display:block;color:var(--muted);font-size:9px;line-height:1.5;margin-top:2px;}
 .security-shield{width:27px;height:27px;border-radius:9px;display:grid;place-items:center;border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);background:color-mix(in srgb,var(--accent) 9%,transparent);color:var(--accent);font-weight:900;}
-.turnstile-box{min-height:65px;display:flex;align-items:center;justify-content:flex-start;overflow:hidden;}
 .captcha-note{font-size:9px;line-height:1.5;color:var(--muted);min-height:14px;margin-top:4px;}
 .captcha-note.error{color:#ff9aaa;}
 .captcha-note.success{color:#70dfb0;}
 .hp-field{position:absolute!important;left:-10000px!important;width:1px!important;height:1px!important;opacity:0!important;pointer-events:none!important;}
 .form-message{min-height:18px;}
-@media(max-width:430px){.security-check{padding:11px;border-radius:14px}.turnstile-box{min-height:62px;max-width:100%;overflow:hidden}}
-/* Rivo product polish: calmer, editorial-social palette */
-:root{--bg:#0a0c10;--surface:#11151b;--surface2:#171c24;--text:#f4f6f8;--muted:#929baa;--border:rgba(255,255,255,.08);--accent:#7f8da9;--accent2:#a5afc2;--danger:#ff748a;--success:#48d5a4;--shadow:0 24px 70px rgba(0,0,0,.30)}
-body{background:radial-gradient(circle at 15% -5%,rgba(126,141,169,.075),transparent 30%),radial-gradient(circle at 90% 10%,rgba(148,163,184,.045),transparent 24%),var(--bg)}
-.hero h1 span{background:linear-gradient(105deg,#f7f8fa,#c7ced9 52%,#97a5ba);-webkit-background-clip:text;background-clip:text;color:transparent}
-.btn-primary{background:linear-gradient(135deg,#8290aa,#66758e);box-shadow:0 10px 26px rgba(99,115,140,.18)}
-.auth-card,.feature-card,.about-item{box-shadow:0 22px 55px rgba(0,0,0,.24)}
-.security-check{margin:14px 0;padding:13px;border:1px solid rgba(255,255,255,.075);border-radius:15px;background:linear-gradient(145deg,rgba(255,255,255,.028),rgba(126,141,169,.035))}
-.security-check-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.security-check-head b{display:block;font-size:12px}.security-check-head small{display:block;color:var(--muted);font-size:9px;line-height:1.55;margin-top:2px}
-.security-shield{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;border:1px solid rgba(150,164,188,.2);background:rgba(150,164,188,.08);color:#b7c1d0;font-weight:900}
-.human-check-box{width:100%;min-height:54px;display:flex;align-items:center;gap:11px;padding:0 12px;border:1px solid rgba(255,255,255,.1);border-radius:12px;background:#0d1117;color:#eef1f5;text-align:left;transition:border-color .18s ease,background .18s ease,transform .18s ease,box-shadow .18s ease}.human-check-box:hover{border-color:rgba(180,193,214,.24);background:#11161e}.human-check-box:active{transform:translateY(1px)}.human-check-box.verified{border-color:rgba(72,213,164,.34);background:rgba(72,213,164,.05);box-shadow:0 0 0 3px rgba(72,213,164,.045)}.human-check-box.checking{border-color:rgba(163,175,195,.22)}
-.human-check-square{width:23px;height:23px;border-radius:6px;border:1px solid rgba(255,255,255,.22);background:#0a0e13;display:grid;place-items:center;flex:0 0 auto}.human-check-box.verified .human-check-square{border-color:rgba(72,213,164,.55);background:#17382f}.human-check-box.verified .human-check-square:after{content:"✓";font-size:14px;color:#7cf0bf;font-weight:900}.human-check-box>span:nth-child(2){font-size:12px;font-weight:700}.human-check-status{margin-inline-start:auto;font-size:10px;color:#8e98a8}.human-check-box.verified .human-check-status{color:#74e8b8}
-.captcha-note{font-size:9px;line-height:1.5;color:var(--muted);min-height:14px;margin-top:6px}.captcha-note.error{color:#ff9aaa}.captcha-note.success{color:#75e8b9}
-.hp-field{position:absolute!important;width:1px!important;height:1px!important;opacity:0!important;pointer-events:none!important;left:-10000px!important;top:auto!important}
-
-/* Final social-product polish */
-.topbar{background:rgba(12,15,20,.92);border-radius:16px}.glass{background:linear-gradient(180deg,rgba(18,22,28,.94),rgba(13,16,21,.94));box-shadow:0 18px 52px rgba(0,0,0,.26)}
-.feature-card,.about-item{border-radius:16px}.feature-card:hover,.about-item:hover{transform:translateY(-2px);border-color:rgba(255,255,255,.12)}
-.auth-card{border-radius:18px}.field input{border-radius:10px;background:#0d1116}.hero-stage{border-radius:24px;background:radial-gradient(circle at 50% 28%,rgba(127,141,169,.10),transparent 33%),#0b0f14}.hero-stage:before{opacity:.35}.landing-profile{border-radius:20px;transform:rotate(1deg)}
+@media(max-width:430px){.security-check{margin:10px 0}}
+/* Rivo visual refresh — calm social-product system */
+:root{
+  --bg:#0b0d12;
+  --surface:#12151c;
+  --surface2:#181c24;
+  --text:#f5f6f8;
+  --muted:#929aa8;
+  --border:rgba(255,255,255,.085);
+  --accent:#6f7ff2;
+  --accent2:#9aa6ff;
+  --danger:#ff7186;
+  --success:#3fd3a0;
+  --shadow:0 20px 60px rgba(0,0,0,.28);
+}
+body{
+  background:linear-gradient(180deg,#0b0d12 0%,#0a0c10 100%);
+}
+.topbar{
+  background:rgba(13,16,22,.94);
+  border-color:rgba(255,255,255,.07);
+  border-radius:14px;
+  box-shadow:0 10px 30px rgba(0,0,0,.18);
+}
+.glass{
+  background:#12151c;
+  border-color:rgba(255,255,255,.075);
+  box-shadow:0 18px 48px rgba(0,0,0,.22);
+}
+.auth-card{
+  border-radius:20px;
+  box-shadow:0 24px 70px rgba(0,0,0,.30);
+}
+.field input,.field textarea,.field select{
+  background:#0e1117;
+  border-radius:12px;
+  border-color:rgba(255,255,255,.085);
+}
+.field input:focus,.field textarea:focus,.field select:focus{
+  border-color:rgba(111,127,242,.58);
+  box-shadow:0 0 0 3px rgba(111,127,242,.10);
+}
+.btn-primary{
+  background:#6f7ff2;
+  box-shadow:0 8px 22px rgba(111,127,242,.18);
+}
+.btn-primary:hover{background:#7a88f5;}
+.hero h1 span{
+  background:linear-gradient(100deg,#ffffff 0%,#dfe4ff 60%,#aeb8ff 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.security-check{
+  margin:12px 0;
+  padding:0;
+  border:0;
+  background:transparent;
+}
+.human-check-box{
+  min-height:52px;
+  padding:0 12px;
+  border:1px solid rgba(255,255,255,.10);
+  border-radius:12px;
+  background:#0f1319;
+  color:#eef1f5;
+}
+.human-check-box:hover{background:#131821;border-color:rgba(255,255,255,.16)}
+.human-check-square{
+  width:22px;height:22px;border-radius:6px;
+  border:1px solid rgba(255,255,255,.22);
+  background:#0b0e13;
+}
+.human-check-box>span:nth-child(2){font-size:12px;font-weight:650}
+.human-check-status{font-size:10px;color:#858e9e}
+.human-check-box.checking{opacity:.88}
+.human-check-box.verified{
+  border-color:rgba(63,211,160,.38);
+  background:rgba(63,211,160,.055);
+  box-shadow:none;
+}
+.human-check-box.verified .human-check-square{
+  border-color:rgba(63,211,160,.62);
+  background:#17382f;
+}
+.human-check-box.verified .human-check-square:after{
+  content:"✓";font-size:14px;color:#78ebc0;font-weight:900;
+}
+.captcha-note{min-height:15px;margin:5px 2px 0;font-size:9px;color:var(--muted)}
+.captcha-note.success{color:#70ddb1}.captcha-note.error{color:#ff97a8}
+.tip{color:#7f8896}
+.feature-card,.about-item{border-radius:16px}
+.landing-profile{transform:none;border-radius:18px}
+.hero-stage{border-radius:22px}
