@@ -1398,7 +1398,9 @@
     const mediaHtml=medias.length?`<div class="post-media count-${Math.min(5,medias.length)}">${medias.slice(0,5).map(m=>`<img src="${esc(m.url)}" alt="" loading="lazy">`).join("")}</div>`:"";
     const note=post.profile_reposted?`<div class="repost-note">↻ Reposted to this profile</div>`:repNames.length?`<div class="repost-note">↻ Reposted by <b>${esc(repNames[0].displayName||repNames[0].username)}</b>${repNames.length>1?` and ${repNames.length-1} more`:""}</div>`:"";
     const reactButtons=POST_REACTIONS.map(r=>`<button type="button" class="reaction-chip ${myReaction===r?'active':''}" data-post-react="${esc(r)}">${r}<span>${Number((post.reactions||{})[r]||0)}</span></button>`).join('');
-    return `<article class="post-card glass" data-post-id="${esc(post.id)}"><div class="post-main"><div class="post-author">${profileMini(author)}<div class="post-author-copy"><b>${esc(author.displayName||author.username||"User")}</b><a href="profile.html?u=${encodeURIComponent(author.username||"")}">@${esc(author.username||"")}</a></div><span class="post-author-meta">${formatSocialTime(post.created_at)}</span></div>${note}<div class="post-content">${esc(post.content||"")}</div>${mediaHtml}<div class="post-reaction-row">${reactButtons}</div><div class="post-actions"><button class="post-action" data-post-comments>💬 ${Number(post.comments_count||0)} Comment</button><button class="post-action ${reposted?'active':''}" data-post-repost>↻ ${Number(post.reposts_count||0)} Repost</button><span class="post-action" aria-hidden="true">${reposted?'✓ Reposted':''}</span></div></div><div class="post-comments hidden"></div></article>`;
+    const isOwner = !!author?.username && PF.normalizeUsername(author.username) === PF.normalizeUsername(PF.currentUsername() || "");
+    const ownerActions = isOwner ? `<button type="button" class="post-action post-delete-action" data-post-delete>🗑 Delete</button>` : "";
+    return `<article class="post-card glass" data-post-id="${esc(post.id)}"><div class="post-main"><div class="post-author">${profileMini(author)}<div class="post-author-copy"><b>${esc(author.displayName||author.username||"User")}</b><a href="profile.html?u=${encodeURIComponent(author.username||"")}">@${esc(author.username||"")}</a></div><span class="post-author-meta">${formatSocialTime(post.created_at)}</span>${ownerActions}</div>${note}<div class="post-content">${esc(post.content||"")}</div>${mediaHtml}<div class="post-reaction-row">${reactButtons}</div><div class="post-actions"><button class="post-action" data-post-comments>💬 ${Number(post.comments_count||0)} Comment</button><button class="post-action ${reposted?'active':''}" data-post-repost>↻ ${Number(post.reposts_count||0)} Repost</button><span class="post-action" aria-hidden="true">${reposted?'✓ Reposted':''}</span></div></div><div class="post-comments hidden"></div></article>`;
   }
 
   async function renderPostComments(card, postId){
@@ -1412,6 +1414,17 @@
     card.querySelectorAll('[data-post-react]').forEach(btn=>btn.addEventListener('click',async()=>{if(!PF.currentUsername()){location.href='login.html';return}try{await PF.reactPost(post.id,btn.dataset.postReact);await refreshPostCard(post.id)}catch(e){notify(e.message,'error')}}));
     card.querySelector('[data-post-comments]')?.addEventListener('click',async()=>{await renderPostComments(card,post.id)});
     card.querySelector('[data-post-repost]')?.addEventListener('click',async()=>{if(!PF.currentUsername()){location.href='login.html';return}try{await PF.repostPost(post.id);await refreshPostCard(post.id)}catch(e){notify(e.message,'error')}});
+    card.querySelector('[data-post-delete]')?.addEventListener('click',async()=>{
+      if(!PF.currentUsername()) return;
+      if(!window.confirm('Delete this post? This cannot be undone.')) return;
+      try{
+        await PF.deletePost(post.id);
+        card.remove();
+        const feed=card.closest('#postFeed,.post-feed');
+        if(feed && !feed.querySelector('[data-post-id]')) await renderPostFeed(feed);
+        notify('Post deleted','success');
+      }catch(e){notify(e.message || 'Could not delete post','error')}
+    });
   }
 
   async function refreshPostCard(id){
@@ -1430,7 +1443,23 @@
     if(composer){if(me){composer.innerHTML=renderComposer(me);let media=[];const picker=$('#postImagePicker'),preview=$('#postMediaPreview'),count=$('#postImageCount');const paint=()=>{preview.innerHTML=media.map((m,i)=>`<div><img src="${esc(m.url)}"><button type="button" data-remove-media="${i}">×</button></div>`).join('');count.textContent=`${media.length}/5 photos`;preview.querySelectorAll('[data-remove-media]').forEach(b=>b.onclick=()=>{media.splice(Number(b.dataset.removeMedia),1);paint()})};picker?.addEventListener('change',async e=>{const files=[...(e.target.files||[])];if(files.length+media.length>5){notify('Maximum 5 images per post','error');return}for(const f of files){try{media.push(await PF.uploadPostImage(f))}catch(err){notify(err.message,'error')}}paint();picker.value=''});$('#publishPost')?.addEventListener('click',async()=>{const text=$('#postText').value.trim();if(!text&&!media.length){notify('Write something or add a photo','error');return}try{$('#publishPost').disabled=true;await PF.createPost(text,media);$('#postText').value='';media=[];paint();notify('Post published','success');await renderPostFeed(feed)}catch(e){notify(e.message,'error')}finally{$('#publishPost').disabled=false}})}else composer.innerHTML=`<div class="empty-state"><h2>Join the conversation</h2><p>Sign in to create posts and interact.</p><a class="btn btn-primary" href="login.html">Sign in</a></div>`}
     await renderPostFeed(feed);
   }
-  function communityCard(c){const button=c.is_member?`<button class="btn btn-sm btn-primary" data-open-community="${esc(c.id)}">Open chat</button>`:c.request_pending?`<span class="relationship-badge request-state">Request pending</span>`:`<button class="btn btn-sm btn-primary" data-join-community="${esc(c.id)}">${c.join_policy==='request'?'Request to join':'Join community'}</button>`;const policy=c.join_policy==='friends'?'Friends of owner':c.join_policy==='request'?'Approval required':'Open to everyone';return `<article class="community-card glass"><div class="community-card-head"><div class="community-icon">◈</div><div><h3>${esc(c.name)}</h3><span class="community-meta">${Number(c.members_count||0)} members · ${esc(policy)}</span></div></div><p>${esc(c.description||'A new Rivo community.')}</p><div class="community-actions">${button}</div></article>`}
+  function communityAvatar(c, sizeClass="community-avatar"){
+    const fallback=esc((c?.name||"R").trim().slice(0,1).toUpperCase());
+    return c?.image_url
+      ? `<span class="${sizeClass}"><img src="${esc(c.image_url)}" alt=""></span>`
+      : `<span class="${sizeClass} community-avatar-fallback">${fallback}</span>`;
+  }
+  function communityCard(c){
+    const owner=!!c?.owner?.username && PF.normalizeUsername(c.owner.username)===PF.normalizeUsername(PF.currentUsername()||"");
+    const button=c.is_member
+      ? `<button class="btn btn-sm btn-primary" data-open-community="${esc(c.id)}">Open chat</button>`
+      : c.request_pending
+        ? `<span class="relationship-badge request-state">Request pending</span>`
+        : `<button class="btn btn-sm btn-primary" data-join-community="${esc(c.id)}">${c.join_policy==='request'?'Request to join':'Join community'}</button>`;
+    const policy=c.join_policy==='friends'?'Friends of owner':c.join_policy==='request'?'Approval required':'Open to everyone';
+    const deleteBtn=owner?`<button type="button" class="btn btn-sm btn-danger" data-delete-community="${esc(c.id)}">Delete</button>`:"";
+    return `<article class="community-card glass" data-community-card="${esc(c.id)}"><div class="community-card-head">${communityAvatar(c)}<div class="community-card-copy"><h3>${esc(c.name)}</h3><span class="community-meta">${Number(c.members_count||0)} members · ${esc(policy)}</span></div></div><p>${esc(c.description||'A new Rivo community.')}</p><div class="community-actions">${button}${deleteBtn}</div></article>`;
+  }
   async function openCommunityRoom(id){
     const room=$('#communityRoom');
     if(!room)return;
@@ -1438,19 +1467,31 @@
     if(!c?.is_member){room.classList.add('hidden');return;}
     const me=PF.currentUsername();
     room.classList.remove('hidden');
-    room.innerHTML=`<div class="room-head"><div class="room-title"><h2>${esc(c.name)}</h2><p>${esc(c.description||'Community chat')} · ${Number(c.members_count||0)} members</p></div><button class="icon-btn" id="closeCommunityRoom">×</button></div><div class="room-body"><div class="room-chat"><div id="roomMessages" class="room-messages"></div><form id="roomCompose" class="room-compose"><input id="roomInput" class="field-input" maxlength="2000" placeholder="Message everyone…"><button class="btn btn-sm btn-primary">Send</button></form></div><aside class="room-sidebar"><h3>Members</h3><div id="memberList" class="member-list"></div><div id="requestListCommunity" class="request-list"></div></aside></div>`;
-    let stopCommunityRealtime=async()=>{}; $('#closeCommunityRoom')?.addEventListener('click',async()=>{await stopCommunityRealtime();room.classList.add('hidden');});
+    const owner=!!c?.owner?.username && PF.normalizeUsername(c.owner.username)===PF.normalizeUsername(me||"");
+    room.innerHTML=`<div class="room-head"><div class="room-title"><div class="room-title-line">${communityAvatar(c,"room-avatar")}<div><h2>${esc(c.name)}</h2><p>${esc(c.description||'Community chat')} · ${Number(c.members_count||0)} members</p></div></div></div><div class="room-head-actions"><button class="icon-btn room-mobile-back" id="backToCommunityList" type="button" aria-label="Back to communities">‹</button>${owner?`<button class="btn btn-sm btn-danger" id="deleteCommunityFromRoom" type="button">Delete</button>`:''}<button class="icon-btn room-close-desktop" id="closeCommunityRoom" type="button" aria-label="Close">×</button></div></div><div class="room-body"><div class="room-chat"><div id="roomMessages" class="room-messages"></div><form id="roomCompose" class="room-compose"><input id="roomInput" class="field-input" maxlength="2000" placeholder="Message everyone…"><button class="btn btn-sm btn-primary">Send</button></form></div><aside class="room-sidebar"><h3>Members</h3><div id="memberList" class="member-list"></div><div id="requestListCommunity" class="request-list"></div></aside></div>`;
+    let stopCommunityRealtime=async()=>{};
+    const closeRoom=async()=>{await stopCommunityRealtime();room.classList.add('hidden');document.body.classList.remove('community-chat-open');history.replaceState(null,'','communities.html');};
+    $('#closeCommunityRoom')?.addEventListener('click',closeRoom);
+    $('#backToCommunityList')?.addEventListener('click',closeRoom);
+    const deleteCommunity=async()=>{
+      if(!owner) return;
+      if(!window.confirm(`Delete community "${c.name}"? This cannot be undone.`)) return;
+      try{await PF.deleteCommunity(id);notify('Community deleted','success');await closeRoom();location.reload()}catch(e){notify(e.message||'Could not delete community','error')}
+    };
+    $('#deleteCommunityFromRoom')?.addEventListener('click',deleteCommunity);
+    document.body.classList.add('community-chat-open');
     const draw=async()=>{
       const msgs=await PF.getCommunityMessages(id);
       $('#roomMessages').innerHTML=msgs.map(m=>`<div class="room-message ${m.author?.username===me?'mine':''}">${m.author?.username!==me?profileMini(m.author):''}<div class="room-bubble"><b>${esc(m.author?.displayName||m.author?.username||'User')}</b><p>${esc(m.content)}</p></div></div>`).join('')||`<div class="message-list-empty">No messages yet.</div>`;
+      const box=$('#roomMessages'); if(box) box.scrollTop=box.scrollHeight;
     };
     await draw();
     stopCommunityRealtime=await PF.subscribeCommunityMessages(id,async()=>{try{await draw()}catch{}});
     $('#roomCompose').addEventListener('submit',async e=>{e.preventDefault();const input=$('#roomInput');if(!input.value.trim())return;try{await PF.sendCommunityMessage(id,input.value);input.value='';await draw()}catch(err){notify(err.message,'error')}});
     const members=await PF.listCommunityMembers(id);
-    $('#memberList').innerHTML=members.map(m=>`<div class="member-row">${profileMini(m)}<div class="member-copy"><b>${esc(m.displayName||m.username)}</b><span>${m.role==='owner'?'Owner':'Member'}</span></div>${c.owner?.username===me&&m.role!=='owner'?`<button class="btn btn-sm member-kick" data-kick-member="${esc(m.username)}">Remove</button>`:''}</div>`).join('');
+    $('#memberList').innerHTML=members.map(m=>`<div class="member-row">${profileMini(m)}<div class="member-copy"><b>${esc(m.displayName||m.username)}</b><span>${m.role==='owner'?'Owner':'Member'}</span></div>${owner&&m.role!=='owner'?`<button class="btn btn-sm member-kick" data-kick-member="${esc(m.username)}">Remove</button>`:''}</div>`).join('');
     $('#memberList').querySelectorAll('[data-kick-member]').forEach(b=>b.onclick=async()=>{try{await PF.kickCommunityMember(id,b.dataset.kickMember);await openCommunityRoom(id);notify('Member removed','success')}catch(e){notify(e.message,'error')}});
-    if(c.owner?.username===me){
+    if(owner){
       const req=await PF.listCommunityRequests(id);
       const reqBox=$('#requestListCommunity');
       reqBox.innerHTML=req.length?`<h3>Join requests</h3>${req.map(r=>`<div class="member-row"><div class="member-copy"><b>${esc(r.displayName||r.username)}</b><span>@${esc(r.username)}</span></div><button class="btn btn-sm" data-req-accept="${esc(r.username)}">✓</button><button class="btn btn-sm btn-danger" data-req-decline="${esc(r.username)}">×</button></div>`).join('')}`:'';
@@ -1459,7 +1500,45 @@
     }
   }
 
-  async function initCommunitiesPage(){const list=$('#communityList');const create=$('#newCommunityBtn');const me=await PF.currentProfile().catch(()=>null);if(create&&!me)create.classList.add('hidden');create?.addEventListener('click',()=>openCommunityCreateModal());const draw=async()=>{const cs=await PF.listCommunities();list.innerHTML=cs.length?cs.map(communityCard).join(''):`<div class="empty-state glass"><h2>No communities yet</h2><p>Create the first one.</p></div>`;list.querySelectorAll('[data-join-community]').forEach(b=>b.onclick=async()=>{if(!PF.currentUsername()){location.href='login.html';return}try{const c=await PF.joinCommunity(b.dataset.joinCommunity);if(c?.is_member) await openCommunityRoom(b.dataset.joinCommunity);await draw()}catch(e){notify(e.message,'error')}});list.querySelectorAll('[data-open-community]').forEach(b=>b.onclick=async()=>{try{await openCommunityRoom(b.dataset.openCommunity)}catch(e){notify(e.message,'error')}})};await draw();const q=new URLSearchParams(location.search).get('community');if(q)await openCommunityRoom(q)}
-  function openCommunityCreateModal(){let modal=$('#communityCreateModal');if(!modal){modal=document.createElement('div');modal.id='communityCreateModal';modal.className='modal-backdrop';modal.innerHTML=`<div class="modal-card glass"><div class="modal-head"><div><span class="eyebrow">NEW COMMUNITY</span><h2>Create a community</h2></div><button class="icon-btn" data-modal-close>×</button></div><form id="communityCreateForm" class="modal-form-grid"><label>Name<input class="field-input" id="communityName" maxlength="80" required></label><label>Description<textarea class="field-input" id="communityDescription" maxlength="500" rows="4"></textarea></label><label>Who can join<select class="field-input" id="communityPolicy"><option value="public">Everyone</option><option value="friends">Friends of the owner</option><option value="request">Approval required</option></select></label><button class="btn btn-primary">Create community</button></form></div>`;document.body.appendChild(modal);modal.addEventListener('click',e=>{if(e.target===modal||e.target.closest('[data-modal-close]'))modal.classList.remove('open')});$('#communityCreateForm').addEventListener('submit',async e=>{e.preventDefault();try{const c=await PF.createCommunity($('#communityName').value,$('#communityDescription').value,$('#communityPolicy').value);modal.classList.remove('open');location.href=`communities.html?community=${encodeURIComponent(c.id)}`}catch(err){notify(err.message,'error')}})}modal.classList.add('open')}
-
+  async function initCommunitiesPage(){
+    const list=$('#communityList'),create=$('#newCommunityBtn');
+    const me=await PF.currentProfile().catch(()=>null);
+    if(create&&!me)create.classList.add('hidden');
+    create?.addEventListener('click',()=>openCommunityCreateModal());
+    const draw=async()=>{
+      const cs=await PF.listCommunities();
+      list.innerHTML=cs.length?cs.map(communityCard).join(''):`<div class="empty-state glass"><h2>No communities yet</h2><p>Create the first one.</p></div>`;
+      list.querySelectorAll('[data-join-community]').forEach(b=>b.onclick=async()=>{if(!PF.currentUsername()){location.href='login.html';return}try{const c=await PF.joinCommunity(b.dataset.joinCommunity);if(c?.is_member) await openCommunityRoom(b.dataset.joinCommunity);await draw()}catch(e){notify(e.message,'error')}});
+      list.querySelectorAll('[data-open-community]').forEach(b=>b.onclick=async()=>{try{await openCommunityRoom(b.dataset.openCommunity)}catch(e){notify(e.message,'error')}});
+      list.querySelectorAll('[data-delete-community]').forEach(b=>b.onclick=async()=>{
+        if(!window.confirm('Delete this community? This cannot be undone.')) return;
+        try{await PF.deleteCommunity(b.dataset.deleteCommunity);notify('Community deleted','success');await draw()}catch(e){notify(e.message||'Could not delete community','error')}
+      });
+    };
+    await draw();
+    const q=new URLSearchParams(location.search).get('community');
+    if(q) await openCommunityRoom(q);
+  }
+  function openCommunityCreateModal(){
+    let modal=$('#communityCreateModal');
+    if(!modal){
+      modal=document.createElement('div');modal.id='communityCreateModal';modal.className='modal-backdrop';
+      modal.innerHTML=`<div class="modal-card glass"><div class="modal-head"><div><span class="eyebrow">NEW COMMUNITY</span><h2>Create a community</h2></div><button class="icon-btn" data-modal-close>×</button></div><form id="communityCreateForm" class="modal-form-grid"><div class="community-image-picker"><span class="community-image-preview" id="communityImagePreview">◈</span><label class="btn btn-sm" for="communityImagePicker">Choose image</label><input id="communityImagePicker" type="file" accept="image/*" hidden><small>Optional community picture</small></div><label>Name<input class="field-input" id="communityName" maxlength="80" required></label><label>Description<textarea class="field-input" id="communityDescription" maxlength="500" rows="4"></textarea></label><label>Who can join<select class="field-input" id="communityPolicy"><option value="public">Everyone</option><option value="friends">Friends of the owner</option><option value="request">Approval required</option></select></label><button class="btn btn-primary">Create community</button></form></div>`;
+      document.body.appendChild(modal);
+      modal.addEventListener('click',e=>{if(e.target===modal||e.target.closest('[data-modal-close]'))modal.classList.remove('open')});
+      let imagePayload=null;
+      $('#communityImagePicker',modal)?.addEventListener('change',async e=>{
+        const file=e.target.files?.[0]; if(!file)return;
+        try{const result=await PF.uploadCommunityImage(file);imagePayload=result;$('#communityImagePreview',modal).innerHTML=`<img src="${esc(result.url)}" alt="">`;}catch(err){notify(err.message||'Could not upload image','error')}
+      });
+      $('#communityCreateForm',modal).addEventListener('submit',async e=>{
+        e.preventDefault();
+        try{
+          const c=await PF.createCommunity($('#communityName',modal).value,$('#communityDescription',modal).value,$('#communityPolicy',modal).value,imagePayload);
+          modal.classList.remove('open');location.href=`communities.html?community=${encodeURIComponent(c.id)}`;
+        }catch(err){notify(err.message||'Could not create community','error')}
+      });
+    }
+    modal.classList.add('open');
+  }
 })();

@@ -960,10 +960,29 @@
   async function listPosts(username=null, limit=30, offset=0) { return callRpc("rivo_list_posts", { p_username: username || null, p_limit: limit, p_offset: offset }); }
   async function getPost(id) { return callRpc("rivo_get_post", { p_post_id: Number(id) }); }
   async function createPost(content, media=[]) { return callRpc("rivo_create_post", { p_content: String(content||""), p_media: media.slice(0,5) }); }
+  async function deletePost(id) { return callRpc("rivo_delete_post", { p_post_id:Number(id) }); }
   async function reactPost(id, reaction) { return callRpc("rivo_toggle_post_reaction", { p_post_id:Number(id), p_reaction:reaction }); }
   async function commentPost(id, content) { return callRpc("rivo_add_post_comment", { p_post_id:Number(id), p_content:String(content||"") }); }
   async function repostPost(id) { return callRpc("rivo_toggle_post_repost", { p_post_id:Number(id) }); }
-  async function createCommunity(name, description, joinPolicy) { return callRpc("rivo_create_community", { p_name:name, p_description:description, p_join_policy:joinPolicy }); }
+  async function uploadCommunityImage(file) {
+    requireClient();
+    const me=await currentProfile();
+    if(!me?.id) throw new Error("No signed-in profile.");
+    if(!(file instanceof File) || !file.type.startsWith("image/")) throw new Error("Choose a valid image.");
+    if(file.size > 8*1024*1024) throw new Error("Community image must be 8 MB or smaller.");
+    const dataUrl=await compressImage(file,900,.86);
+    const blob=dataUrlToBlob(dataUrl);
+    const path=`${me.id}/communities/${Date.now()}-${crypto.randomUUID()}.webp`;
+    const url=await uploadBlob(blob,path,"image/webp");
+    return {url,path,type:"image/webp"};
+  }
+  async function createCommunity(name, description, joinPolicy, image=null) {
+    return callRpc("rivo_create_community", {
+      p_name:name,p_description:description,p_join_policy:joinPolicy,
+      p_image_url:image?.url||null,p_image_path:image?.path||null
+    });
+  }
+  async function deleteCommunity(id) { return callRpc("rivo_delete_community", { p_id:Number(id) }); }
   async function listCommunities() { return callRpc("rivo_list_communities", { p_limit:60 }); }
   async function getCommunity(id) { return callRpc("rivo_get_community", { p_id:Number(id) }); }
   async function joinCommunity(id) { return callRpc("rivo_join_community", { p_id:Number(id) }); }
@@ -993,6 +1012,6 @@
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, listPosts, getPost, createPost, reactPost, commentPost, repostPost, createCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, subscribeCommunityMessages
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, subscribeCommunityMessages
   };
 })();
