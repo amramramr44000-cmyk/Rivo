@@ -16,6 +16,6 @@ window.RIVO_SUPABASE = {
 */
 window.RIVO_SECURITY = {
   requireHumanCheck: true,
-  minInteractionMs: 1800,
-  challengeBits: 18
+  minInteractionMs: 1500,
+  challengeBits: 17
 };

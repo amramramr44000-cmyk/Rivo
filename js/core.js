@@ -99,7 +99,7 @@
   }
   function validUsername(value) {
     const u = normalizeUsername(value);
-    return /^[a-z0-9](?:[a-z0-9._-]{1,24})[a-z0-9]$/.test(u) &&
+    return /^(?=.{3,26}$)[a-z0-9](?:[a-z0-9._-]*[a-z0-9])$/.test(u) &&
       !["admin","administrator","support","help","rivo","root","system","api","null","undefined"].includes(u);
   }
   function currentUsername() { return localStorage.getItem(CACHE_KEY) || ""; }
@@ -145,18 +145,28 @@
       const cached = cacheRead(CURRENT_PROFILE_CACHE_KEY, CURRENT_PROFILE_CACHE_TTL);
       if (cached?.id) return cached;
     }
-    const { data: { session }, error: sessionError } = await sb.auth.getSession();
-    if (sessionError || !session?.user) return null;
-    const { data, error } = await sb.from("profiles")
-      .select("id,username,public_data,private_data,created_at,updated_at")
-      .eq("id", session.user.id).maybeSingle();
-    if (error) throw error;
-    if (!data) return null;
-    cacheUsername(data.username);
-    const merged = mergeProfile(data, true);
-    merged.id = data.id;
-    cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
-    return merged;
+    let session = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { data: sessionData, error: sessionError } = await sb.auth.getSession();
+      if (!sessionError && sessionData?.session?.user) { session = sessionData.session; break; }
+      if (attempt < 2) await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
+    }
+    if (!session?.user) return null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const { data, error } = await sb.from("profiles")
+        .select("id,username,public_data,private_data,created_at,updated_at")
+        .eq("id", session.user.id).maybeSingle();
+      if (error) throw error;
+      if (data) {
+        cacheUsername(data.username);
+        const merged = mergeProfile(data, true);
+        merged.id = data.id;
+        cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
+        return merged;
+      }
+      if (attempt < 3) await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+    }
+    return null;
   }
 
   async function getProfile(username, options = {}) {
@@ -301,7 +311,7 @@
   async function createAccount({ username, displayName, password }) {
     requireClient();
     const u = normalizeUsername(username);
-    if (!validUsername(u)) throw new Error("Username must use 3–26 chars: letters, numbers, . _ -.");
+    if (!validUsername(u)) throw new Error("Username must be 3–26 characters: letters, numbers, . _ -.");
     if (!String(displayName || "").trim()) throw new Error("Display name is required.");
     const passwordValue = String(password || "");
     if (passwordValue.length < 10) throw new Error("Password must be at least 10 characters.");
@@ -359,15 +369,22 @@
     // guests, which was the cause of the post-logout "correct password" bug.
     const syntheticEmail = `${u}@users.rivo.app`;
     const signInOptions = {};
+    cacheDelete(CURRENT_PROFILE_CACHE_KEY);
+    cacheUsername("");
     const { data, error } = await sb.auth.signInWithPassword({
       email: syntheticEmail,
       password: passwordValue,
       options: signInOptions
     });
     if (error || !data.user) throw new Error("Incorrect username or password.");
-    cacheDelete(CURRENT_PROFILE_CACHE_KEY);
     cacheUsername(u);
-    return currentProfile({ force: true });
+    const profile = await currentProfile({ force: true });
+    if (!profile) {
+      await sb.auth.signOut();
+      cacheUsername("");
+      throw new Error("Your account was authenticated, but the profile data is still syncing. Please try again.");
+    }
+    return profile;
   }
 
   async function deleteProfile(username) {

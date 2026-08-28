@@ -362,7 +362,7 @@
       button?.classList.remove("checking"); button?.classList.add("verified");
       const status = button?.querySelector(".human-check-status");
       if (status) status.textContent = "Verified";
-      setMessage("Human check passed.", "success");
+      setMessage("Verified", "success");
       updateSubmit();
     };
 
@@ -388,7 +388,7 @@
       button.classList.add("checking");
       const status = button.querySelector(".human-check-status");
       if (status) status.textContent = "Checking…";
-      setMessage("Running the security check…");
+      setMessage("Checking…");
       try {
         await runHumanChallenge(challenge, security.challengeBits || 18);
         const humanish = pointerMoves >= 1 || keyEvents >= 1 || elapsed > (Number(security.minInteractionMs || 1800) + 700);
@@ -417,8 +417,9 @@
       }
       btn.disabled = true;
       try {
-        await PF.login($("#loginUsername").value, $("#loginPassword").value);
-        location.href = "profile.html";
+        const profile = await PF.login($("#loginUsername").value, $("#loginPassword").value);
+        if (!profile?.username) throw new Error("Could not load your profile yet. Please try again.");
+        location.href = `profile.html?u=${encodeURIComponent(profile.username)}`;
       } catch (err) {
         $("#loginMsg") && ($("#loginMsg").textContent = err.message);
         human?.reset?.();
@@ -779,11 +780,28 @@
   }
 
   async function initProfile() {
-    const username = PF.normalizeUsername(new URLSearchParams(location.search).get("u") || "");
+    let username = PF.normalizeUsername(new URLSearchParams(location.search).get("u") || "");
     const root = $("#profileRoot");
-    if (!root || !username) { if (root) root.innerHTML = `<div class="empty-state glass"><h2>Profile not found</h2></div>`; return; }
-    let p = await PF.getProfile(username);
-    if (!p) { root.innerHTML = `<div class="empty-state glass"><h2>Profile not found</h2><p>This username does not exist on this device.</p></div>`; return; }
+    if (!root) return;
+    if (!username) {
+      const me = PF.currentUsername();
+      if (me) { location.replace(`profile.html?u=${encodeURIComponent(me)}`); return; }
+      root.innerHTML = `<div class="empty-state glass"><h2>Profile not found</h2><p>Choose a profile from Explore or sign in.</p><a class="btn btn-sm" href="../index.html">Back home</a></div>`;
+      return;
+    }
+    let p = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < 3 && !p; attempt++) {
+      try { p = await PF.getProfile(username, { force: attempt > 0 }); }
+      catch (e) { lastError = e; }
+      if (!p && attempt < 2) await new Promise(r => setTimeout(r, 350 * (attempt + 1)));
+    }
+    if (!p && username === PF.currentUsername()) {
+      try { p = await PF.currentProfile({ force: true }); } catch (e) { lastError = lastError || e; }
+    }
+    if (!p) {
+      root.innerHTML = `<div class="empty-state glass"><h2>${lastError ? "Could not load profile" : "Profile not found"}</h2><p>${lastError ? "Please try again in a moment." : "This username does not exist."}</p><a class="btn btn-sm" href="../index.html">Back home</a></div>`; return;
+    }
     try { p.story = (await PF.getStory(username, { countView:false })) || p.story || null; } catch {}
     if (!templates[p.template]) p = {...p, template:"discord-noir"};
     p.sections = (p.sections || []).filter(s => !["skills", "projects"].includes(s.type));
