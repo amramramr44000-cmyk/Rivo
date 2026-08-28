@@ -82,15 +82,8 @@ Supabase does not permit deleting `storage.objects` directly from PostgreSQL. St
 
 This build fixes the signed-out login failure by removing the pre-authenticated `profiles` lookup. The username is normalized into the same synthetic Auth email used at registration, then Supabase Auth performs the actual credential check. The old session/profile cache is also cleared on logout so switching accounts cannot reuse stale profile data.
 
-New account creation now uses a stronger password policy (10–128 characters with at least three character classes), a hidden honeypot, minimum human interaction time, and Cloudflare Turnstile. The Turnstile token is passed to Supabase Auth, so the checkbox is not trusted as client-only UI. Supabase supports CAPTCHA protection on sign-up and sign-in endpoints and accepts the Turnstile token through the Auth client.
+New account creation now uses a stronger password policy (10–128 characters with at least three character classes), a hidden honeypot, minimum interaction time, and a custom Rivo Human Check. The checkbox triggers a short SHA-256 proof-of-work plus interaction-signal checks before the Auth request is allowed. This adds friction to simple automation without introducing a third-party CAPTCHA dependency. For high-risk production deployments, also add server-side rate limiting / abuse monitoring because no browser-only control can be made impossible to automate.
 
-### One-time Turnstile setup
+### Rivo Human Check
 
-1. Create a Cloudflare Turnstile site for the exact production hostname and copy only the **Site Key**.
-2. Put the Site Key into `js/supabase-config.js` as `window.RIVO_SECURITY.siteKey`. Never put the Turnstile Secret Key in browser code.
-3. In Supabase Dashboard, open Authentication / Bot and Abuse Protection, enable CAPTCHA protection, select Cloudflare Turnstile, and enter the **Secret Key** there.
-4. Keep email confirmations disabled for the current username/password architecture, because the project uses deterministic synthetic Auth emails and does not expose a real mailbox for verification.
-
-Example: `siteKey: "YOUR_CLOUDFLARE_TURNSTILE_SITE_KEY"`
-
-The app intentionally fails closed when `requireCaptcha` is true but the Site Key is missing. This prevents deployment without the human-verification layer being configured.
+No Cloudflare or other CAPTCHA setup is required. The browser presents a single familiar “I’m human” checkbox and runs the layered local checks already included in the project. Keep the Supabase Auth rate limits enabled in production.

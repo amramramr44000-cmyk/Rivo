@@ -8,15 +8,14 @@ create extension if not exists pgcrypto;
 -- * RLS intentionally prevents guest SELECT access to profiles. Login therefore
 --   must not query public.profiles before authentication; the browser derives
 --   the deterministic synthetic Auth email from the normalized username.
--- * CAPTCHA is enforced by Supabase Auth when enabled in the Dashboard.
---   The browser passes a Cloudflare Turnstile token via supabase-js options.
+-- * Bot protection is layered in the browser with a dedicated Rivo human-check.
 -- * Do not add a guest SELECT policy for auth_email. That would weaken account
 --   privacy and was the root of the previous login implementation's RLS conflict.
 
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
-  username text not null unique check (username ~ '^[a-z0-9](?:[a-z0-9._-]{2,24})[a-z0-9]$'),
+  username text not null unique check (username ~ '^[a-z0-9](?:[a-z0-9._-]{1,24})[a-z0-9]$'),
   auth_email text not null unique,
   public_data jsonb not null default '{}'::jsonb,
   private_data jsonb not null default jsonb_build_object(
