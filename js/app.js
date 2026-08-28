@@ -280,8 +280,288 @@
     });
   }
 
+
+  // -----------------------------
+  // Rivo Calls UI / WebRTC
+  // -----------------------------
+  function initCallSystem() {
+    if (window.__rivoCallsReady) return;
+    window.__rivoCallsReady = true;
+    let inboxClose = null;
+    let active = null;
+    let mediaStream = null;
+    let remoteStream = null;
+    let callTimer = null;
+    let callStartedAt = 0;
+    let localCallCancelled = false;
+
+    const esc2 = s => esc(s);
+    const ensureUI = () => {
+      let host = $("#rivoCallUI");
+      if (host) return host;
+      host = document.createElement("div");
+      host.id = "rivoCallUI";
+      host.innerHTML = `
+        <div class="call-backdrop" data-call-backdrop>
+          <section class="call-panel glass" role="dialog" aria-modal="true" aria-label="Rivo call">
+            <header class="call-panel-head"><div><span class="eyebrow">RIVO CALL</span><h2 data-call-title>Ready to call</h2><small data-call-subtitle>Private voice & video</small></div><button class="icon-btn" type="button" data-call-close aria-label="Close">×</button></header>
+            <div class="call-stage" data-call-stage>
+              <div class="call-remote-placeholder" data-call-placeholder><div class="call-avatar-large" data-call-avatar>?</div><b data-call-name>Contact</b><small data-call-state>Calling…</small></div>
+              <video class="call-remote-video" data-call-remote autoplay playsinline></video>
+              <video class="call-local-video" data-call-local autoplay muted playsinline></video>
+              <audio data-call-remote-audio autoplay></audio>
+            </div>
+            <div class="call-controls">
+              <button type="button" class="call-control" data-call-mute title="Mute microphone" aria-label="Mute microphone"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="3" width="10" height="12" rx="5"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8.5 21h7"></path></svg></button>
+              <button type="button" class="call-control" data-call-camera title="Camera on/off" aria-label="Camera on/off"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="12" height="10" rx="2"></rect><path d="m15 10 6-3v10l-6-3z"></path></svg></button>
+              <button type="button" class="call-control end" data-call-end title="End call" aria-label="End call"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.4 4.5 10 4l1.4 4-2.1 1.4a11.6 11.6 0 0 0 5.3 5.3l1.4-2.1 4 1.4-.5 2.6a2.2 2.2 0 0 1-2.4 1.8C10.2 17.5 6.5 13.8 5.6 6.9a2.2 2.2 0 0 1 1.8-2.4Z"></path></svg></button>
+            </div>
+            <div class="call-incoming-actions hidden" data-call-incoming><button type="button" class="btn btn-primary" data-call-accept>Accept</button><button type="button" class="btn btn-danger" data-call-decline>Decline</button></div>
+          </section>
+        </div>`;
+      document.body.appendChild(host);
+      $("[data-call-backdrop]",host).addEventListener("click", e => { if (e.target === e.currentTarget && !active?.connected) closeCallUI(false); });
+      $("[data-call-close]",host).onclick = () => { if (active) endCall(true); else closeCallUI(false); };
+      $("[data-call-end]",host).onclick = () => endCall(true);
+      $("[data-call-mute]",host).onclick = () => toggleMute();
+      $("[data-call-camera]",host).onclick = () => toggleCamera();
+      $("[data-call-accept]",host).onclick = () => active && acceptIncoming();
+      $("[data-call-decline]",host).onclick = () => active && declineIncoming();
+      return host;
+    };
+
+    const els = () => {
+      const host = ensureUI();
+      return {
+        host, backdrop:$('[data-call-backdrop]',host), title:$('[data-call-title]',host), subtitle:$('[data-call-subtitle]',host),
+        name:$('[data-call-name]',host), avatar:$('[data-call-avatar]',host), state:$('[data-call-state]',host),
+        remote:$('[data-call-remote]',host), local:$('[data-call-local]',host), audio:$('[data-call-remote-audio]',host),
+        incoming:$('[data-call-incoming]',host), mute:$('[data-call-mute]',host), camera:$('[data-call-camera]',host)
+      };
+    };
+    const show = () => els().backdrop.classList.add("open");
+    const hide = () => els().backdrop.classList.remove("open");
+    const closeCallUI = (reset=true) => {
+      const e = els(); hide();
+      if (!reset) return;
+      e.remote.srcObject = null; e.local.srcObject = null; e.audio.srcObject = null;
+      e.remote.classList.remove("live"); e.local.classList.remove("live"); e.incoming.classList.add("hidden");
+      if (callTimer) clearInterval(callTimer); callTimer=null; callStartedAt=0;
+    };
+    const setState = (text, connected=false) => { const e=els(); e.state.textContent=text; e.host.classList.toggle("call-connected",connected); };
+    const setPerson = (p) => { const e=els(); e.name.textContent=p?.displayName || p?.username || "Contact"; e.avatar.innerHTML=p?.avatar ? `<img src="${esc2(p.avatar)}" alt="">` : esc2(PF.initials(p)); };
+    const notifyCall = (msg, type="") => window.PFUI?.notify?.(msg,type);
+
+    const cleanStreams = () => {
+      mediaStream?.getTracks?.().forEach(t=>t.stop());
+      remoteStream?.getTracks?.().forEach(t=>t.stop());
+      mediaStream=null; remoteStream=null;
+    };
+    const startTimer = () => {
+      callStartedAt = Date.now();
+      if (callTimer) clearInterval(callTimer);
+      callTimer=setInterval(()=>{
+        const sec=Math.floor((Date.now()-callStartedAt)/1000); const mm=String(Math.floor(sec/60)).padStart(2,"0"); const ss=String(sec%60).padStart(2,"0");
+        const e=els(); e.subtitle.textContent=`Connected · ${mm}:${ss}`;
+      },1000);
+    };
+    const rtcConfig = () => ({
+      iceServers: Array.isArray(window.RIVO_CALL_ICE_SERVERS) && window.RIVO_CALL_ICE_SERVERS.length
+        ? window.RIVO_CALL_ICE_SERVERS
+        : [{urls:["stun:stun.l.google.com:19302","stun:stun1.l.google.com:19302"]}],
+      bundlePolicy: "max-bundle",
+      rtcpMuxPolicy: "require",
+      iceCandidatePoolSize: 6
+    });
+    const callMediaConstraints = isVideo => ({
+      audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true, channelCount:1 },
+      video: isVideo ? { width:{ideal:1280,max:1280}, height:{ideal:720,max:720}, frameRate:{ideal:24,max:30}, facingMode:"user" } : false
+    });
+    async function tuneVideoSender(pc) {
+      const sender = pc.getSenders().find(s => s.track?.kind === "video");
+      if (!sender?.getParameters || !sender.setParameters) return;
+      const params = sender.getParameters();
+      params.degradationPreference = "maintain-framerate";
+      params.encodings = (params.encodings?.length ? params.encodings : [{}]).map(e => ({...e, maxBitrate: 900000, maxFramerate: 24, scaleResolutionDownBy: 1}));
+      try { await sender.setParameters(params); } catch {}
+    }
+    async function createPeer(isVideo) {
+      const pc = new RTCPeerConnection(rtcConfig());
+      remoteStream = new MediaStream();
+      const e=els();
+      e.remote.srcObject=remoteStream; e.audio.srcObject=remoteStream;
+      pc.ontrack = ev => { ev.streams?.[0]?.getTracks?.().forEach(t=>remoteStream.addTrack(t)); e.remote.classList.toggle("live", isVideo); };
+      pc.onicecandidate = ev => { if (ev.candidate && active?.channel) active.channel.send({callId:active.callId, from:active.meId, to:active.peerId, type:"candidate", payload:ev.candidate}); };
+      pc.oniceconnectionstatechange = async () => {
+        if (!active) return;
+        const state = pc.iceConnectionState;
+        if (state === "checking") setState("Connecting…");
+        if (state === "connected" || state === "completed") { active.connected=true; setState("Connected",true); if (!callStartedAt) startTimer(); }
+        if (state === "failed") {
+          try { setState("Reconnecting…"); const offer=await pc.createOffer({iceRestart:true}); await pc.setLocalDescription(offer); await sendToCall("ice-restart-offer",{sdp:offer.sdp}); } catch {}
+          setTimeout(() => { if (active && pc.iceConnectionState === "failed") endCall(true); }, 7000);
+        }
+      };
+      pc.onconnectionstatechange = () => {
+        if (!active) return;
+        const state=pc.connectionState;
+        if (state === "connected") { active.connected=true; setState("Connected",true); if (!callStartedAt) startTimer(); }
+        if (state === "disconnected") {
+          setState("Reconnecting…");
+          setTimeout(() => { if (active && pc.connectionState === "disconnected") { try { pc.restartIce(); } catch {} } }, 1200);
+        }
+      };
+      mediaStream = await navigator.mediaDevices.getUserMedia(callMediaConstraints(isVideo));
+      mediaStream.getTracks().forEach(t=>pc.addTrack(t,mediaStream));
+      await tuneVideoSender(pc);
+      e.local.srcObject=mediaStream; e.local.classList.toggle("live",!!isVideo);
+      return pc;
+    }
+    async function applyCallNetworkAdaptation() {
+      if (!active?.pc || !active.isVideo || active._statsTimer) return;
+      active._statsTimer = setInterval(async () => {
+        if (!active?.pc) return;
+        try {
+          const stats = await active.pc.getStats(); let rtt=0, lost=0, sent=0;
+          stats.forEach(st => {
+            if (st.type === "candidate-pair" && st.state === "succeeded" && st.currentRoundTripTime) rtt=Math.max(rtt,st.currentRoundTripTime);
+            if (st.type === "outbound-rtp" && (st.kind === "video" || st.mediaType === "video")) { lost += st.packetsLost||0; sent += st.packetsSent||0; }
+          });
+          const ratio = sent ? lost / Math.max(1,sent+lost) : 0;
+          const sender=active.pc.getSenders().find(x=>x.track?.kind==="video");
+          if (sender?.getParameters && sender.setParameters) {
+            const params=sender.getParameters(); const weak=rtt>0.35 || ratio>0.05;
+            params.encodings=(params.encodings?.length?params.encodings:[{}]).map(e=>({...e,maxBitrate:weak?420000:900000,maxFramerate:weak?18:24,scaleResolutionDownBy:weak?1.5:1}));
+            try{await sender.setParameters(params)}catch{}
+          }
+          if (rtt>0.6 || ratio>0.12) setState("Weak connection · adjusting quality…",true);
+          else if (active.connected) setState("Connected",true);
+        } catch {}
+      },3500);
+    }
+
+    async function sendToCall(type,payload) { if (active?.channel) await active.channel.send({callId:active.callId,from:active.meId,to:active.peerId,type,payload}); }
+
+    async function beginCall(username,type="audio") {
+      if (active) { notifyCall("A call is already active.","error"); return; }
+      if (!window.isSecureContext && location.hostname !== "localhost") { notifyCall("Calls need HTTPS to access the microphone/camera.","error"); return; }
+      const me=await PF.currentProfile(); const peer=await PF.getCallUser(username); const isVideo=type === "video";
+      const channelName=`rivo-call-${[me.id,peer.userId].sort().join("-")}`;
+      const callId=crypto.randomUUID();
+      const e=els(); setPerson(peer); e.title.textContent=isVideo?"Starting video call":"Starting voice call"; e.subtitle.textContent=isVideo?"Video · waiting for answer":"Voice · waiting for answer"; setState("Ringing…"); e.incoming.classList.add("hidden"); show();
+      active={role:"caller",meId:me.id,peerId:peer.userId,peer,callId,isVideo,connected:false,channel:null,pc:null,pendingCandidates:[]};
+      try {
+        active.channel=await PF.openCallChannel(channelName, async msg => { await handleSignal(msg); });
+        active.pc=await createPeer(isVideo);
+        applyCallNetworkAdaptation();
+        const offer=await active.pc.createOffer();
+        await active.pc.setLocalDescription(offer);
+        await new Promise(resolve => {
+          if (active.pc.iceGatheringState === "complete") return resolve();
+          const done = () => { if (active.pc.iceGatheringState === "complete") { active.pc.removeEventListener("icegatheringstatechange", done); resolve(); } };
+          active.pc.addEventListener("icegatheringstatechange", done);
+          setTimeout(() => { active.pc?.removeEventListener("icegatheringstatechange", done); resolve(); }, 4500);
+        });
+        const readyOffer=active.pc.localDescription || offer;
+        const inbox=await PF.openCallChannel(`rivo-call-inbox-${peer.userId}`, async msg=>{ if(msg.callId===callId) await handleSignal(msg); });
+        active.inbox=inbox;
+        await inbox.send({callId,from:me.id,to:peer.userId,type:"offer",payload:{sdp:readyOffer.sdp,isVideo,displayName:me.displayName||me.username,avatar:me.avatar||"",username:me.username}});
+      } catch(err) { notifyCall(err.message||"Could not start the call","error"); endCall(false); }
+    }
+
+    async function handleSignal(msg) {
+      if (!active || msg.callId !== active.callId) return;
+      try {
+        if (msg.type === "answer" && active.role === "caller") {
+          await active.pc.setRemoteDescription({type:"answer",sdp:msg.payload.sdp});
+          for (const candidate of active.pendingCandidates.splice(0)) { try { await active.pc.addIceCandidate(candidate); } catch {} }
+        } else if (msg.type === "candidate" && active.pc) {
+          if (active.pc.remoteDescription) await active.pc.addIceCandidate(msg.payload);
+          else active.pendingCandidates.push(msg.payload);
+        } else if (msg.type === "hangup") {
+          notifyCall("Call ended."); endCall(false);
+        } else if (msg.type === "decline") {
+          notifyCall("Call declined."); endCall(false);
+        } else if (msg.type === "busy") {
+          notifyCall("This person is already on a call.", "error"); endCall(false);
+        }
+      } catch {}
+    }
+
+    async function receiveOffer(msg) {
+      if (active) {
+        try { const temp=await PF.openCallChannel(`rivo-call-${[msg.from,msg.to].sort().join("-")}`); await temp.send({callId:msg.callId,from:msg.to,to:msg.from,type:"busy"}); await temp.close(); } catch {}
+        return;
+      }
+      const me=await PF.currentProfile();
+      const callerUsername = msg.payload?.username || "";
+      if (!callerUsername || !(await PF.canReceiveCallFrom(callerUsername))) return;
+      const peer=await PF.getProfile(msg.from===me.id ? "" : callerUsername);
+      const isVideo=!!msg.payload?.isVideo;
+      const e=els(); setPerson({username:msg.payload?.username||"Contact",displayName:msg.payload?.displayName||"Contact",avatar:msg.payload?.avatar||""});
+      e.title.textContent=isVideo?"Incoming video call":"Incoming voice call"; e.subtitle.textContent="Incoming call"; setState("Calling…"); e.incoming.classList.remove("hidden"); show();
+      active={role:"callee",meId:me.id,peerId:msg.from,peer:peer||{username:msg.payload?.username||"Contact",displayName:msg.payload?.displayName||"Contact",avatar:msg.payload?.avatar||""},callId:msg.callId,isVideo,connected:false,channel:null,pc:null,pendingCandidates:[],offer:msg.payload};
+    }
+
+    async function acceptIncoming() {
+      if (!active || active.role !== "callee") return;
+      const e=els(); e.incoming.classList.add("hidden"); e.title.textContent=active.isVideo?"Connecting video":"Connecting voice"; setState("Connecting…");
+      try {
+        const channelName=`rivo-call-${[active.meId,active.peerId].sort().join("-")}`;
+        active.channel=await PF.openCallChannel(channelName, async msg=>{ if(msg.callId===active.callId) await handleSignal(msg); });
+        active.pc=await createPeer(active.isVideo);
+        applyCallNetworkAdaptation();
+        await active.pc.setRemoteDescription({type:"offer",sdp:active.offer.sdp});
+        const answer=await active.pc.createAnswer(); await active.pc.setLocalDescription(answer);
+        await sendToCall("answer",{sdp:answer.sdp});
+      } catch(err) { notifyCall(err.message||"Could not accept the call","error"); endCall(true); }
+    }
+    async function declineIncoming() { if(!active) return; try { const channel=await PF.openCallChannel(`rivo-call-inbox-${active.meId}`); await channel.send({callId:active.callId,from:active.meId,to:active.peerId,type:"decline"}); await channel.close(); } catch {} endCall(false); }
+
+    async function endCall(send=true) {
+      const old=active; active=null;
+      try { if(send && old?.channel) await old.channel.send({callId:old.callId,from:old.meId,to:old.peerId,type:"hangup"}); } catch {}
+      try { await old?.channel?.close?.(); } catch {} try { await old?.inbox?.close?.(); } catch {}
+      try { if (old?._statsTimer) clearInterval(old._statsTimer); old?.pc?.close?.(); } catch {} cleanStreams(); localCallCancelled=false; closeCallUI(true);
+    }
+    function setControlState(btn, activeState, kind) {
+      if (!btn) return;
+      btn.classList.toggle("is-off", !activeState);
+      if (kind === "mic") btn.innerHTML = activeState
+        ? '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="3" width="10" height="12" rx="5"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8.5 21h7"></path></svg>'
+        : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4l16 16M7 8v4a5 5 0 0 0 8.5 3.6M17 11V8M5 11a7 7 0 0 0 11.2 5.6M12 18v3M8.5 21h7"></path></svg>';
+      if (kind === "camera") btn.innerHTML = activeState
+        ? '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="12" height="10" rx="2"></rect><path d="m15 10 6-3v10l-6-3z"></path></svg>'
+        : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4l16 16M3 7h9v10H3zM15 10l6-3v10l-6-3z"></path></svg>';
+    }
+    function toggleMute() { if(!mediaStream)return; const t=mediaStream.getAudioTracks()[0]; if(!t)return; t.enabled=!t.enabled; setControlState(els().mute,t.enabled,"mic"); }
+    function toggleCamera() { if(!mediaStream)return; const t=mediaStream.getVideoTracks()[0]; if(!t)return; t.enabled=!t.enabled; setControlState(els().camera,t.enabled,"camera"); }
+
+    const wireDelegation = () => {
+      document.addEventListener("click", async e => {
+        const b=e.target.closest?.("[data-call-user]");
+        if (b) { e.preventDefault(); try { await beginCall(b.dataset.callUser,b.dataset.callType||"audio"); } catch(err) { notifyCall(err.message||"Could not call","error"); } return; }
+        const a=e.target.closest?.("[data-call-action]");
+        if (a) { if(!activeUserForMessages()) return; try { await beginCall(activeUserForMessages(),a.dataset.callAction||"audio"); } catch(err){notifyCall(err.message||"Could not call","error");} }
+      });
+    };
+    const activeUserForMessages = () => window.__rivoActiveMessageUser || "";
+    window.RivoCalls = { start: beginCall, end:()=>endCall(true) };
+    wireDelegation();
+    (async()=>{
+      try {
+        const me=await PF.currentProfile(); if(!me?.id) return;
+        inboxClose=await PF.subscribeCallInbox(me.id, async msg=>{
+          if (msg.type === "offer" && msg.to===me.id) await receiveOffer(msg);
+          else if (active && msg.callId === active.callId) await handleSignal(msg);
+        });
+        window.addEventListener("beforeunload",()=>{try{inboxClose?.();}catch{}});
+      } catch {}
+    })();
+  }
+
   document.addEventListener("DOMContentLoaded", async () => {
-    nav(); initMenu(); initStorySystem();
+    nav(); initMenu(); initStorySystem(); initCallSystem();
     $$('[data-profile-link]').forEach(a => { const me = PF.currentUsername(); if (me) a.href = `profile.html?u=${encodeURIComponent(me)}`; });
     $("[data-logout]")?.addEventListener("click", e => { e.preventDefault(); PF.clearSession(); location.href = "../index.html"; });
     const path = location.pathname.split("/").pop();
@@ -753,8 +1033,9 @@
           ? `<span class="btn btn-ghost messages-closed-badge" role="note" aria-label="This user only accepts messages from friends">🔒 Friends only</span>`
           : `<a class="btn" href="messages.html?u=${encodeURIComponent(p.username)}">Message</a>`)
       : "";
+    const callAction = canInteract ? `<button type="button" class="icon-btn profile-call-btn" data-call-user="${esc(p.username)}" data-call-type="audio" aria-label="Call ${esc(p.displayName || p.username)}" title="Call ${esc(p.displayName || p.username)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.4 4.5 10 4l1.4 4-2.1 1.4a11.6 11.6 0 0 0 5.3 5.3l1.4-2.1 4 1.4-.5 2.6a2.2 2.2 0 0 1-2.4 1.8C10.2 17.5 6.5 13.8 5.6 6.9a2.2 2.2 0 0 1 1.8-2.4Z"></path></svg></button>` : "";
     const friendActionWrap = canInteract
-      ? `<div class="profile-head-actions profile-social-actions">${quickLike}${messageAction}${action}${mini}</div>`
+      ? `<div class="profile-head-actions profile-social-actions">${quickLike}${messageAction}${action}${callAction}${mini}</div>`
       : "";
     const standaloneMini = !canInteract && mini
       ? `<div class="profile-mini-standalone">${mini}${ownerLikesBadge}</div>`
@@ -1085,6 +1366,7 @@
     }
 
     async function openConversation(username) {
+      window.__rivoActiveMessageUser = PF.normalizeUsername(username);
       activeUser = PF.normalizeUsername(username);
       const c = conversations.find(x => x.username === activeUser);
       activeUserId = c?.userId || "";
@@ -1326,6 +1608,9 @@
     const select = $("#messagePrivacy");
     const save = $("#messagePrivacySave");
     const hint = $("#messagePrivacyHint");
+    const callSelect = $("#callPrivacy");
+    const callSave = $("#callPrivacySave");
+    const callHint = $("#callPrivacyHint");
     const messageHint = v => v === "nobody"
       ? "Nobody can message you — not even friends. Your profile shows a \u201cMessages closed\u201d badge instead of a Message button."
       : v === "friends"
@@ -1333,6 +1618,9 @@
         : "Anyone with a Rivo account can message you.";
     const currentSetting = me.messageSettings?.whoCanMessage === "friends" ? "friends"
       : me.messageSettings?.whoCanMessage === "nobody" ? "nobody" : "everyone";
+    const currentCallSetting = me.callSettings?.whoCanCall === "friends" ? "friends"
+      : me.callSettings?.whoCanCall === "nobody" ? "nobody" : "everyone";
+    const callHintText = v => v === "nobody" ? "Nobody can start a voice or video call with you." : v === "friends" ? "Only your accepted friends can start a call with you." : "Anyone with a Rivo account can start a call with you.";
     const mode = localStorage.getItem("rivo_color_scheme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
     $("#themeDark") && ($("#themeDark").checked = mode === "dark");
     $("#themeLight") && ($("#themeLight").checked = mode === "light");
@@ -1367,6 +1655,9 @@
     try { const isAdmin = await PF.adminStatus(); $$("[data-admin-link]").forEach(a => a.classList.toggle("hidden", !isAdmin)); } catch {}
     if (select) select.value = currentSetting;
     if (hint) hint.textContent = messageHint(currentSetting);
+    if (callSelect) callSelect.value = currentCallSetting;
+    if (callHint) callHint.textContent = callHintText(currentCallSetting);
+    callSelect?.addEventListener("change", () => { if (callHint) callHint.textContent = callHintText(callSelect.value); });
     save?.addEventListener("click", async () => {
       try {
         save.disabled = true;
@@ -1376,6 +1667,11 @@
         notify("Message privacy saved", "success");
       } catch (e) { notify(e.message, "error"); }
       finally { save.disabled = false; save.textContent = "Save message privacy"; }
+    });
+    callSave?.addEventListener("click", async () => {
+      try { callSave.disabled=true; callSave.textContent="Saving…"; const v=await PF.setCallSetting(callSelect.value); if(callHint) callHint.textContent=callHintText(v); notify("Call privacy saved","success"); }
+      catch(e){ notify(e.message,"error"); }
+      finally { callSave.disabled=false; callSave.textContent="Save call privacy"; }
     });
   }
   const POST_REACTIONS = ["❤️","😂","👍","😮","😢"];

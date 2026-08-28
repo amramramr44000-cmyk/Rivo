@@ -139,6 +139,7 @@
       const priv = row?.private_data || {};
       p.friendRequests = priv.friendRequests || { incoming: [], outgoing: [] };
       p.messageSettings = { whoCanMessage: ["friends","nobody"].includes(priv.messageSettings?.whoCanMessage) ? priv.messageSettings.whoCanMessage : "everyone" };
+      p.callSettings = { whoCanCall: ["friends","nobody"].includes(priv.callSettings?.whoCanCall) ? priv.callSettings.whoCanCall : "everyone" };
     }
     return p;
   }
@@ -449,6 +450,19 @@
   function normalizeWhoCanMessage(value) {
     return value === "friends" ? "friends" : value === "nobody" ? "nobody" : "everyone";
   }
+  function normalizeWhoCanCall(value) {
+    return value === "friends" ? "friends" : value === "nobody" ? "nobody" : "everyone";
+  }
+  async function getCallSettings() {
+    const me = await currentProfile();
+    return { whoCanCall: normalizeWhoCanCall(me?.callSettings?.whoCanCall) };
+  }
+  async function setCallSetting(value) {
+    const v = normalizeWhoCanCall(value);
+    await callRpc("rivo_set_call_setting", { p_who_can_call: v });
+    invalidateProfileCache(currentUsername());
+    return v;
+  }
   async function getMessageSettings() {
     const me = await currentProfile();
     return { whoCanMessage: normalizeWhoCanMessage(me?.messageSettings?.whoCanMessage) };
@@ -564,6 +578,46 @@
       if (channel) { try { await sb.removeChannel(channel); } catch {} }
     };
   }
+
+  // -----------------------------
+  // Lightweight WebRTC call signaling
+  // -----------------------------
+  async function getCallUser(username) {
+    const p = await getProfile(username, { force: false });
+    if (!p?.userId || !p?.username) throw new Error("User is unavailable for calling.");
+    const allowed = await callRpc("rivo_can_call_user", { p_target_username: normalizeUsername(username) });
+    if (!allowed) throw new Error("This user is not accepting calls from you.");
+    return p;
+  }
+  async function canReceiveCallFrom(username) {
+    return !!(await callRpc("rivo_can_receive_call", { p_caller_username: normalizeUsername(username) }));
+  }
+
+  async function openCallChannel(channelName, onSignal) {
+    requireClient();
+    const session = (await sb.auth.getSession()).data?.session;
+    if (!session?.user?.id) throw new Error("Please sign in to call.");
+    await syncRealtimeAuth(session);
+    const channel = sb.channel(String(channelName), {
+      config: { broadcast: { self: false } }
+    });
+    channel.on("broadcast", { event: "signal" }, ({ payload }) => {
+      try { onSignal?.(payload || {}); } catch {}
+    });
+    await channel.subscribe();
+    return {
+      send: payload => channel.send({ type: "broadcast", event: "signal", payload }),
+      close: async () => { try { await sb.removeChannel(channel); } catch {} }
+    };
+  }
+
+  async function subscribeCallInbox(userId, onSignal) {
+    const id = String(userId || "").trim();
+    if (!id) return async () => {};
+    const box = await openCallChannel(`rivo-call-inbox-${id}`, onSignal);
+    return box.close;
+  }
+
   async function subscribePresence(username, onChange) {
     requireClient();
     const me = normalizeUsername(username);
@@ -1009,10 +1063,10 @@
     defaults, badgeCatalog, templates, getProfile, listProfiles, putProfile: saveProfile, deleteProfile,
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
     updateProfile, saveProfile, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
-    removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, sendMessage,
+    removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox
   };
 })();
