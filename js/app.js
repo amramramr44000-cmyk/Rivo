@@ -400,6 +400,208 @@
       };
     };
 
+    const closeRouteMenu = () => {
+      const e = E();
+      e.routeMenu.classList.add("hidden");
+      e.route.classList.remove("active");
+    };
+
+    const closeUI = () => {
+      const e = E();
+      e.b.classList.remove("open");
+      e.remote.classList.remove("live");
+      e.local.classList.remove("live");
+      e.remote.srcObject = null;
+      e.local.srcObject = null;
+      if (callTimer) clearInterval(callTimer);
+      if (qualityTimer) clearInterval(qualityTimer);
+      callTimer = null;
+      qualityTimer = null;
+      callStartedAt = 0;
+      e.qualityText.textContent = "—";
+      e.quality.className = "call-quality";
+    };
+
+    const show = () => E().b.classList.add("open");
+
+    const state = (t, connected = false) => {
+      const e = E();
+      e.state.textContent = t;
+      e.h.classList.toggle("call-connected", connected);
+    };
+
+    const person = p => {
+      const e = E();
+      e.name.textContent = p?.displayName || p?.username || "Contact";
+      e.av.innerHTML = p?.avatar
+        ? `<img src="${PF.safeUrl(p.avatar)}" alt="">`
+        : PF.initials(p?.displayName || p?.username || "?");
+    };
+
+    const notifyCall = (m, t = "") => window.PFUI?.notify?.(m, t);
+
+    const timer = () => {
+      callStartedAt = Date.now();
+      if (callTimer) clearInterval(callTimer);
+      callTimer = setInterval(() => {
+        const s = Math.floor((Date.now() - callStartedAt) / 1000);
+        const mm = String(Math.floor(s / 60)).padStart(2, "0");
+        const ss = String(s % 60).padStart(2, "0");
+        const e = E();
+        e.sub.textContent = `Connected · ${mm}:${ss}`;
+      }, 1000);
+    };
+
+    const qualityLabel = q => {
+      const v = String(q || "unknown").toLowerCase();
+      if (v.includes("excellent")) return ["Excellent", "excellent"];
+      if (v.includes("good")) return ["Good", "good"];
+      if (v.includes("poor")) return ["Weak", "poor"];
+      if (v.includes("lost")) return ["Reconnecting", "lost"];
+      return ["Checking", "unknown"];
+    };
+
+    const updateQuality = q => {
+      const e = E();
+      const [label, cls] = qualityLabel(q);
+      e.qualityText.textContent = label;
+      e.quality.className = `call-quality ${cls}`;
+    };
+
+    const startQualityMonitor = room => {
+      if (qualityTimer) clearInterval(qualityTimer);
+      const refresh = () => {
+        try {
+          updateQuality(room?.localParticipant?.connectionQuality || "unknown");
+        } catch {
+          updateQuality("unknown");
+        }
+      };
+      refresh();
+      qualityTimer = setInterval(refresh, 2500);
+    };
+
+    async function token(roomName, participantName) {
+      const cfg = window.RIVO_CALL_CONFIG || {};
+      const session = (await window.__rivoSupabase?.auth.getSession())?.data?.session;
+      if (!cfg.tokenUrl || !session?.access_token) {
+        throw new Error("Call service is not configured.");
+      }
+
+      const r = await fetch(cfg.tokenUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({ roomName, participantName })
+      });
+
+      const d = await r.json().catch(() => ({}));
+
+      if (!r.ok) {
+        throw new Error(d.error || "Could not authorize the call.");
+      }
+
+      return d;
+    }
+
+    async function attachAudioTrack(track) {
+      const media = track.attach();
+      media.autoplay = true;
+      media.playsInline = true;
+      media.setAttribute("playsinline", "");
+      media.setAttribute("data-rivo-call-audio", "true");
+      media.className = "call-remote-audio";
+      media.style.position = "fixed";
+      media.style.width = "1px";
+      media.style.height = "1px";
+      media.style.opacity = "0";
+      media.style.pointerEvents = "none";
+      media.style.left = "-9999px";
+      document.body.appendChild(media);
+      try {
+        await media.play();
+      } catch {}
+      active.audioEls = active.audioEls || [];
+      active.audioEls.push(media);
+      return media;
+    }
+
+    async function buildAudioRouteMenu() {
+      const e = E();
+      e.routeMenu.innerHTML = "";
+
+      const supported = !!LK?.supportsAudioOutputSelection?.();
+      const devices = (navigator.mediaDevices?.enumerateDevices)
+        ? await navigator.mediaDevices.enumerateDevices().catch(() => [])
+        : [];
+
+      const outputs = devices.filter(d => d.kind === "audiooutput");
+
+      const makeItem = (label, deviceId, disabled = false) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "call-route-item";
+        b.textContent = label;
+        b.disabled = disabled;
+        b.onclick = async () => {
+          try {
+            if (!active?.room) return;
+            if (!deviceId || deviceId === "default") {
+              const ok = await active.room.switchActiveDevice("audiooutput", "default", false);
+              if (ok !== false) {
+                e.routeLabel.textContent = "Device";
+                notifyCall("Audio routed to device", "success");
+              }
+            } else {
+              await active.room.switchActiveDevice("audiooutput", deviceId, false);
+              e.routeLabel.textContent = label.length > 14 ? "Output" : label;
+              notifyCall(`Audio output: ${label}`, "success");
+            }
+                } catch {
+            notifyCall("This device does not allow audio output switching.", "error");
+          }
+        };
+        e.routeMenu.appendChild(b);
+      };
+
+      makeItem("Automatic / Device", "default");
+
+      if (supported && outputs.length) {
+        outputs
+          .filter(d => d.deviceId !== "default")
+          .slice(0, 6)
+          .forEach(d => makeItem(d.label || "Audio device", d.deviceId));
+      } else if (!supported) {
+        const note = document.createElement("div");
+        note.className = "call-route-note";
+        note.textContent = "Your browser controls the speaker/earpiece automatically.";
+        e.routeMenu.appendChild(note);
+      }
+
+      const hint = document.createElement("div");
+      hint.className = "call-route-note";
+      hint.textContent = "Wired/Bluetooth headsets are preferred by the phone when available.";
+      e.routeMenu.appendChild(hint);
+    }
+
+    async function toggleAudioRoute(ev) {
+      ev?.stopPropagation();
+      const e = E();
+      const opening = e.routeMenu.classList.contains("hidden");
+      if (!opening) {
+          return;
+      }
+      if (!active?.room) {
+        notifyCall("Audio routing is available after the call connects.", "error");
+        return;
+      }
+      await buildAudioRouteMenu();
+      e.routeMenu.classList.remove("hidden");
+      e.route.classList.add("active");
+    }
+
     async function connectMedia() {
       if (!LK) throw new Error("LiveKit client failed to load.");
       if (!active?.roomName) throw new Error("Call room is missing.");
@@ -442,8 +644,7 @@
 
           e.stage.appendChild(media);
 
-          try { if (typeof media.setSinkId === "function") await media.setSinkId("default"); } catch {}
-      try { await media.play(); } catch {}
+          try { await media.play(); } catch {}
         } else if (track.kind === LK.Track.Kind.Audio) {
           await attachAudioTrack(track);
         }
@@ -815,7 +1016,7 @@
 
     window.RivoCalls = {
       start: beginCall,
-      end: () => endCall(true),
+      end: () => endCall(true)
     };
 
     (async () => {
