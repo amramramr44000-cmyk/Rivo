@@ -25,6 +25,14 @@ create table if not exists public.profiles (
   updated_at timestamptz not null default now()
 );
 
+-- Keep the live database constraint synchronized with the application validator.
+-- CREATE TABLE IF NOT EXISTS does not modify an existing constraint, so this
+-- explicit migration also fixes databases created by an older Rivo build.
+alter table public.profiles drop constraint if exists profiles_username_check;
+alter table public.profiles
+  add constraint profiles_username_check
+  check (username ~ '^[a-z0-9](?:[a-z0-9._-]{1,24})[a-z0-9]$');
+
 create index if not exists profiles_username_idx on public.profiles(lower(username));
 create index if not exists profiles_updated_idx on public.profiles(updated_at desc);
 
@@ -50,6 +58,27 @@ drop policy if exists "profiles_delete_own" on public.profiles;
 create policy "profiles_delete_own"
 on public.profiles for delete to authenticated
 using (auth.uid() = id);
+
+-- Used only as a rollback when signup created an Auth user but the
+-- corresponding profile insert failed. The caller can delete only itself.
+create or replace function public.rivo_delete_current_auth_user()
+returns boolean
+language plpgsql
+security definer
+set search_path=public,auth
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  delete from auth.users where id = auth.uid();
+  return true;
+end;
+$$;
+
+revoke all on function public.rivo_delete_current_auth_user() from public;
+grant execute on function public.rivo_delete_current_auth_user() to authenticated;
 
 create or replace function public.rivo_username_exists(p_username text)
 returns boolean
