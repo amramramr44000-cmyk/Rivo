@@ -1604,84 +1604,42 @@
     root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship }) + `<section class="profile-posts-wrap"><div class="section-head"><div><div class="section-kicker">POSTS</div><h2>${isMe ? "Your posts" : "Posts"}</h2></div>${isMe ? `<a class="btn btn-sm" href="posts.html">+ New post</a>` : ""}</div><div id="profilePostFeed" class="post-feed"><div class="empty-state glass"><h2>Loading posts…</h2></div></div></section>`;
     bindPlayer(root);
     await renderPostFeed($("#profilePostFeed"), p.username, { allowCompose:false });
-    await bindProfileActions(p, { root });
-    await startProfileRealtimeSync(root, username);
+    $(`[data-add-friend]`)?.addEventListener("click", async () => {
+      try {
+        await PF.sendFriendRequest(p.username);
+        notify("Friend request sent", "success");
+        const updated = await PF.getProfile(p.username);
+        const selfFresh = await PF.currentProfile();
+        const rel = PF.friendshipState(selfFresh, p.username);
+        root.innerHTML = renderProfileCard(updated, { isMe:false, friendProfiles, relationship:rel }) + `<section class="profile-posts-wrap"><div class="section-head"><div><div class="section-kicker">POSTS</div><h2>Posts</h2></div></div><div id="profilePostFeed" class="post-feed"></div></section>`;
+        bindPlayer(root);
+        await renderPostFeed($("#profilePostFeed"), updated.username, { allowCompose:false });
+        bindProfileActions(updated);
+      } catch (err) { notify(err.message, "error"); }
+    });
+    bindProfileActions(p);
+    $(`[data-friends-open]`)?.addEventListener("click", () => openFriendsModal(friendProfiles));
   }
 
-  async function renderProfileRoot(root, username, force = true) {
-    const fresh = await PF.getProfile(username, { force });
-    if (!fresh) return;
-    try { fresh.story = (await PF.getStory(username, { countView:false })) || fresh.story || null; } catch {}
-    const me = PF.currentUsername();
-    const isMe = me === fresh.username;
-    const viewer = isMe ? fresh : await PF.currentProfile({ force:true });
-    const relationship = isMe ? "self" : PF.friendshipState(viewer, fresh.username);
-    const friendProfiles = await PF.getProfiles(fresh.friends || []);
-    root.innerHTML = renderProfileCard(fresh, { isMe, friendProfiles, relationship }) + `<section class="profile-posts-wrap"><div class="section-head"><div><div class="section-kicker">POSTS</div><h2>${isMe ? "Your posts" : "Posts"}</h2></div>${isMe ? `<a class="btn btn-sm" href="posts.html">+ New post</a>` : ""}</div><div id="profilePostFeed" class="post-feed"></div></section>`;
-    bindPlayer(root);
-    await renderPostFeed($("#profilePostFeed"), fresh.username, { allowCompose:false });
-    await bindProfileActions(fresh, { root });
-  }
-
-  async function startProfileRealtimeSync(root, username) {
-    try {
-      if (root.__rivoSocialUnsub) await root.__rivoSocialUnsub();
-      root.__rivoSocialUnsub = PF.subscribeSocialChanges(async () => {
-        if (!root.isConnected) return;
-        // Only the current user's row is subscribed for privacy. This covers
-        // incoming/outgoing friend state and friend acceptance immediately.
-        if (username === PF.currentUsername()) {
-          await renderProfileRoot(root, username, true);
+  async function bindProfileActions(profile) {
+    $("[data-like-profile]")?.addEventListener("click", async () => {
+      try {
+        const result = await PF.toggleLike(profile.username);
+        const fresh = await PF.getProfile(profile.username);
+        const viewer = await PF.currentProfile();
+        const rel = PF.friendshipState(viewer, profile.username);
+        const friends = (fresh?.friends || []);
+        const friendProfiles = await PF.getProfiles(friends);
+        const root = $("#profileRoot");
+        if (root && fresh) {
+          root.innerHTML = renderProfileCard(fresh, { isMe:false, friendProfiles, relationship:rel }) + `<section class="profile-posts-wrap"><div class="section-head"><div><div class="section-kicker">POSTS</div><h2>Posts</h2></div></div><div id="profilePostFeed" class="post-feed"></div></section>`;
+          bindPlayer(root);
+          await renderPostFeed($("#profilePostFeed"), fresh.username, { allowCompose:false });
+          $("[data-friends-open]")?.addEventListener("click", () => openFriendsModal(friendProfiles));
         }
-      });
-    } catch {}
-  }
-
-  async function bindProfileActions(profile, ctx = {}) {
-    const root = ctx.root || $("#profileRoot");
-    const addButton = root?.querySelector("[data-add-friend]");
-    if (addButton) {
-      addButton.onclick = async () => {
-        if (addButton.disabled) return;
-        addButton.disabled = true;
-        addButton.textContent = "Sending…";
-        try {
-          const result = await PF.sendFriendRequest(profile.username);
-          notify(result === true ? "Friend request sent" : "Friend request updated", "success");
-          await renderProfileRoot(root, profile.username, true);
-        } catch (err) {
-          addButton.disabled = false;
-          addButton.textContent = "+ Add Friend";
-          notify(err?.message || "Could not send friend request.", "error");
-        }
-      };
-    }
-
-    const likeButton = root?.querySelector("[data-like-profile]");
-    if (likeButton) {
-      likeButton.onclick = async () => {
-        if (likeButton.disabled) return;
-        likeButton.disabled = true;
-        try {
-          const result = await PF.toggleLike(profile.username);
-          await renderProfileRoot(root, profile.username, true);
-          notify(result?.liked ? "Profile liked" : "Like removed", "success");
-        } catch (err) {
-          notify(err?.message || "Could not update like.", "error");
-          likeButton.disabled = false;
-        }
-      };
-    }
-
-    const friendsButton = root?.querySelector("[data-friends-open]");
-    if (friendsButton) {
-      friendsButton.onclick = async () => {
-        try {
-          const fresh = await PF.getProfile(profile.username, { force:true });
-          openFriendsModal(await PF.getProfiles(fresh?.friends || []));
-        } catch (e) { notify(e?.message || "Could not load friends.", "error"); }
-      };
-    }
+        notify(result.liked ? "Profile liked" : "Like removed", "success");
+      } catch (err) { notify(err.message, "error"); }
+    });
   }
 
   function openFriendsModal(profiles) {
@@ -1720,7 +1678,6 @@
   async function initFriends() {
     const me = await PF.currentProfile(); if (!me) { location.href = "login.html"; return; }
     const requestBox = $("#requestList"), friendBox = $("#friendList"), search = $("#friendSearch");
-    let socialUnsubscribe = null;
     const render = async query => {
       const fresh = await PF.currentProfile();
       const incoming = fresh.friendRequests?.incoming || [], friends = fresh.friends || [];
@@ -1749,9 +1706,7 @@
       $$('[data-reject]').forEach(b => b.onclick = async () => { try { await PF.rejectFriendRequest(b.dataset.reject); notify("Request declined", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
       $$('[data-remove]').forEach(b => b.onclick = async () => { try { await PF.removeFriend(b.dataset.remove); notify("Friend removed", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
     };
-    search?.addEventListener("input", () => render(search.value));
-    await render("");
-    try { socialUnsubscribe = PF.subscribeSocialChanges(async () => { try { await render(search?.value || ""); } catch {} }); } catch {}
+    search?.addEventListener("input", () => render(search.value)); await render("");
   }
 
   async function initMessages() {

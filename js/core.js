@@ -152,28 +152,43 @@
       const cached = cacheRead(CURRENT_PROFILE_CACHE_KEY, CURRENT_PROFILE_CACHE_TTL);
       if (cached?.id) return cached;
     }
+
     let session = null;
     for (let attempt = 0; attempt < 3; attempt++) {
       const { data: sessionData, error: sessionError } = await sb.auth.getSession();
-      if (!sessionError && sessionData?.session?.user) { session = sessionData.session; break; }
+      if (!sessionError && sessionData?.session?.user) {
+        session = sessionData.session;
+        break;
+      }
       if (attempt < 2) await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
     }
     if (!session?.user) return null;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const { data, error } = await sb.from("profiles")
-        .select("id,username,public_data,private_data,created_at,updated_at")
-        .eq("id", session.user.id).maybeSingle();
-      if (error) throw error;
-      if (data) {
-        cacheUsername(data.username);
-        const merged = mergeProfile(data, true);
-        merged.id = data.id;
+
+    // Read the current user's full profile through a SECURITY DEFINER RPC.
+    // This avoids browser-side RLS failures that previously surfaced as
+    // "Access denied" after Like/Friend operations on some clients.
+    let lastError = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const { data, error } = await sb.rpc("rivo_get_current_profile");
+        if (error) throw error;
+        if (!data) return null;
+
+        const row = typeof data === "string" ? JSON.parse(data) : data;
+        if (!row?.id || row.id !== session.user.id) throw new Error("Profile access was not authorized.");
+
+        cacheUsername(row.username || "");
+        const merged = mergeProfile(row, true);
+        merged.id = row.id;
         cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
         return merged;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
       }
-      if (attempt < 3) await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
     }
-    return null;
+
+    throw lastError || new Error("Could not load your profile.");
   }
 
   async function getProfile(username, options = {}) {
@@ -482,105 +497,76 @@
     return false;
   }
 
-  async function callRpc(name, args, options = {}) {
+  async function callRpc(name, args) {
     requireClient();
-    const retries = Number.isInteger(options.retries) ? Math.max(0, options.retries) : 2;
-    let lastError = null;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        const { data, error } = await sb.rpc(name, args || {});
-        if (error) throw error;
-        return data;
-      } catch (error) {
-        lastError = error;
-        if (attempt < retries) await new Promise(r => setTimeout(r, 220 * (attempt + 1)));
-      }
-    }
-    throw lastError || new Error(`Request failed: ${name}`);
-  }
-
-  async function refreshSocialState() {
-    cacheDelete(CURRENT_PROFILE_CACHE_KEY);
-    try { return await currentProfile({ force: true }); }
-    catch (e) { console.warn("[Rivo] social refresh failed", e); return null; }
+    const { data, error } = await sb.rpc(name, args || {});
+    if (error) throw error;
+    return data;
   }
 
   async function sendFriendRequest(targetUsername) {
     const u = normalizeUsername(targetUsername);
     if (!u) throw new Error("Invalid username.");
-    const result = await callRpc("rivo_send_friend_request", { p_target_username: u }, { retries: 3 });
+
+    // The server is authoritative.  After sending (or auto-matching a
+    // reciprocal request), immediately re-read the current profile so the
+    // incoming/outgoing lists cannot remain stale in the UI.
+    const result = await callRpc("rivo_send_friend_request", {
+      p_target_username: u
+    });
+
     invalidateProfileCache(u);
-    await refreshSocialState();
+    cacheDelete(CURRENT_PROFILE_CACHE_KEY);
+    await currentProfile({ force: true });
     return result;
   }
-
   async function acceptFriendRequest(fromUsername) {
     const u = normalizeUsername(fromUsername);
     if (!u) throw new Error("Invalid friend request.");
-    const result = await callRpc("rivo_accept_friend_request", { p_from_username: u }, { retries: 3 });
-    invalidateProfileCache(u);
-    await refreshSocialState();
-    return result;
+    let lastError = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const sessionResult = await sb.auth.getSession();
+        const session = sessionResult?.data?.session;
+        if (!session?.access_token) throw new Error("Your session expired. Please sign in again.");
+        await syncRealtimeAuth(session);
+        const { data, error } = await sb.rpc("rivo_accept_friend_request", {
+          p_from_username: u
+        });
+        if (error) throw error;
+        invalidateProfileCache(u);
+        cacheDelete(CURRENT_PROFILE_CACHE_KEY);
+        // Read the authoritative row immediately so the UI reflects the
+        // accepted state instead of waiting for a TTL/cache expiry.
+        await currentProfile({ force: true });
+        return data;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
+        }
+      }
+    }
+    throw lastError || new Error("Could not accept friend request.");
   }
-
   async function rejectFriendRequest(fromUsername) {
     const u = normalizeUsername(fromUsername);
-    if (!u) throw new Error("Invalid friend request.");
-    const result = await callRpc("rivo_reject_friend_request", { p_from_username: u }, { retries: 2 });
+    const result = await callRpc("rivo_reject_friend_request", { p_from_username: u });
     invalidateProfileCache(u);
-    await refreshSocialState();
     return result;
   }
-
   async function removeFriend(username) {
     const u = normalizeUsername(username);
-    if (!u) throw new Error("Invalid username.");
-    const result = await callRpc("rivo_remove_friend", { p_username: u }, { retries: 2 });
+    const result = await callRpc("rivo_remove_friend", { p_username: u });
     invalidateProfileCache(u);
-    await refreshSocialState();
     return result;
   }
-
   async function toggleLike(username) {
     const u = normalizeUsername(username);
-    if (!u) throw new Error("Invalid username.");
-    const result = await callRpc("rivo_toggle_like", { p_username: u }, { retries: 3 });
+    const result = await callRpc("rivo_toggle_like", { p_username: u });
     invalidateProfileCache(u);
     return result;
   }
-
-  function subscribeSocialChanges(onChange) {
-    requireClient();
-    let stopped = false;
-    let channel = null;
-    let timer = null;
-    const start = async () => {
-      const session = (await sb.auth.getSession()).data?.session;
-      if (stopped || !session?.user?.id) return;
-      const uid = session.user.id;
-      channel = sb.channel(`rivo-social-${uid}`);
-      channel.on("postgres_changes", {
-        event: "UPDATE",
-        schema: "public",
-        table: "profiles",
-        filter: `id=eq.${uid}`
-      }, () => {
-        clearTimeout(timer);
-        timer = setTimeout(async () => {
-          const fresh = await refreshSocialState();
-          try { await onChange?.(fresh); } catch {}
-        }, 120);
-      });
-      await channel.subscribe();
-    };
-    start().catch(() => {});
-    return async () => {
-      stopped = true;
-      clearTimeout(timer);
-      if (channel) { try { await sb.removeChannel(channel); } catch {} }
-    };
-  }
-
   function friendshipState(profile, targetUsername) {
     const u = normalizeUsername(targetUsername);
     if (!profile || !u) return "none";
@@ -1212,7 +1198,7 @@
     defaults, badgeCatalog, templates, getProfile, listProfiles, putProfile: saveProfile, deleteProfile,
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
     updateProfile, saveProfile, refreshRivoData, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
-    removeFriend, toggleLike, friendshipState, subscribeSocialChanges, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
+    removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminGetUserDetails,
