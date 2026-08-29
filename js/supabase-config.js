@@ -16,9 +16,9 @@ window.RIVO_SUPABASE = {
 */
 window.RIVO_SECURITY = {
   requireHumanCheck: true,
-  minInteractionMs: 1200,
-  signupCaptchaEndpoint: "https://stfjcrcualeggmiygqur.supabase.co/functions/v1/rivo-signup-captcha",
-  signupEndpoint: "https://stfjcrcualeggmiygqur.supabase.co/functions/v1/rivo-signup"
+  minInteractionMs: 1500,
+  challengeBits: 17,
+  signupCaptchaEndpoint: "https://stfjcrcualeggmiygqur.supabase.co/functions/v1/rivo-signup-captcha"
 };
 
 /*
