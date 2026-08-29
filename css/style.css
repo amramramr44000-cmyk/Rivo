@@ -2351,3 +2351,21 @@ body,main,.container,.messages-shell,.messages-layout{max-width:100%;overflow-x:
   .profile-card[data-card-style="split"] .profile-banner{clip-path:none;}
   .profile-card[data-card-style="ticket"]{clip-path:none;border-radius:18px;}
 }
+
+
+/* v21 targeted additions: account menu, voice messages, post reports and admin editor */
+.menu-auth-logout{display:flex;width:100%;align-items:center;justify-content:flex-start;border:0;background:transparent;color:inherit;padding:12px 14px;border-radius:12px;font:inherit;text-align:left;cursor:pointer}
+.menu-auth-logout:hover{background:rgba(255,255,255,.06)}
+.voice-message-bar{display:flex;align-items:center;gap:10px;padding:8px 10px;border-top:1px solid var(--border);background:color-mix(in srgb,var(--card-bg) 94%,transparent)}
+.voice-message-bar.hidden{display:none}
+.voice-message-bar #voiceMessageTime{font-variant-numeric:tabular-nums;opacity:.8;margin-left:auto}
+.voice-record-btn{flex:0 0 auto}
+.voice-record-btn svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.voice-record-btn.recording{transform:scale(1.04);box-shadow:0 0 0 4px rgba(255,80,80,.10)}
+.voice-message-bubble{display:flex;align-items:center;gap:8px;min-width:180px;max-width:100%}
+.voice-play-btn{width:34px;height:34px;border-radius:50%;border:1px solid var(--border);background:transparent;color:inherit;cursor:pointer;flex:0 0 auto}
+.voice-audio{width:140px;max-width:42vw;height:32px}
+.voice-duration{font-variant-numeric:tabular-nums;font-size:11px;opacity:.7;white-space:nowrap}
+.post-report-action{opacity:.72}
+.admin-edit-section{margin:18px 0;padding:14px;border:1px solid var(--border);border-radius:16px;background:color-mix(in srgb,var(--card-bg) 88%,transparent)}
+@media(max-width:760px){.voice-message-bar{flex-wrap:wrap}.voice-audio{width:120px}.voice-message-bubble{min-width:0}.admin-grid{grid-template-columns:1fr}.admin-edit-section .form-grid{grid-template-columns:1fr}}
