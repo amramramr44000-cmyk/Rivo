@@ -158,3 +158,10 @@ The LiveKit client SDK is loaded from jsDelivr in the HTML pages. For production
 - In-call audio output routing is exposed where the browser supports audio output selection; wired/Bluetooth devices are allowed to follow the phone/browser routing policy.
 - A true in-app mini-call mode lets the user keep the call visible while interacting with the current Rivo page.
 - Reconnection policy and initial connection retry settings were strengthened.
+
+
+## Rivo v12 final touches
+
+- Call UI has no minimize button.
+- Call audio uses the browser/device default output at full media volume; no in-app earpiece selector is forced. Bluetooth/wired audio remains controlled by the device when available.
+- Added `supabase_friend_request_v12_fix.sql` to repair/replace the friend-request acceptance RPC safely. Run this migration once in Supabase SQL Editor if accepting requests is still failing in the deployed database.
