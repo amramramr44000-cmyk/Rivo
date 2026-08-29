@@ -474,7 +474,7 @@
     return saveProfile({ ...current, ...patch });
   }
 
-  async function createAccount({ username, displayName, password, birthDate }) {
+  async function createAccount({ username, displayName, password, birthDate, captcha }) {
     requireClient();
     const u = normalizeUsername(username);
     if (!validUsername(u)) throw new Error("Username must be 3–26 characters: letters, numbers, . _ -.");
@@ -491,50 +491,41 @@
     if (classes < 3) throw new Error("Use a stronger password: mix uppercase, lowercase, numbers and/or symbols.");
     const weak = new Set(["password123", "password123!", "qwerty1234", "1234567890", "letmein123", "welcome123"]);
     if (weak.has(passwordValue.toLowerCase())) throw new Error("Choose a less predictable password.");
-    const { data: existing, error: lookupError } = await sb.rpc("rivo_username_exists", { p_username: u });
-    if (lookupError) throw lookupError;
-    if (existing) throw new Error("That username is already taken.");
+    if (!captcha?.challengeId || !captcha?.verificationToken) throw new Error("Complete the security check first.");
+    const endpoint = String(window.RIVO_SECURITY?.signupEndpoint || "").trim();
+    if (!endpoint) throw new Error("Secure signup is not configured.");
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "apikey": window.RIVO_SUPABASE?.anonKey || "" },
+        body: JSON.stringify({
+          username: u,
+          displayName: String(displayName).trim().slice(0, 28),
+          password: passwordValue,
+          birthDate: birthDateValue,
+          challengeId: String(captcha.challengeId),
+          verificationToken: String(captcha.verificationToken)
+        })
+      });
+      let payload = {};
+      try { payload = await res.json(); } catch {}
+      if (!res.ok) throw new Error(payload?.error || "Account creation failed. Please try again.");
+    } catch (error) {
+      throw error instanceof Error ? error : new Error("Account creation failed. Please try again.");
+    }
 
+    // The public Auth signup endpoint is no longer the account-creation path.
+    // The server-created account is signed in normally after successful signup.
     const syntheticEmail = `${u}@users.rivo.app`;
-    const signUpOptions = {};
-    const { data: auth, error: authError } = await sb.auth.signUp({
+    const { data: auth, error: authError } = await sb.auth.signInWithPassword({
       email: syntheticEmail,
-      password: passwordValue,
-      options: signUpOptions
+      password: passwordValue
     });
-    if (authError) throw authError;
-    if (!auth.user || !auth.session) {
-      throw new Error("Supabase email confirmations are enabled. Disable email confirmation in Supabase Auth, then create the account again.");
-    }
-
-    const now = new Date().toISOString();
-    const base = structuredClone(defaults);
-    base.username = u;
-    base.displayName = String(displayName).trim().slice(0, 28);
-    base.birthDate = birthDateValue;
-    base.createdAt = now; base.updatedAt = now;
-    const { error } = await sb.from("profiles").insert({
-      id: auth.user.id,
-      username: u,
-      auth_email: syntheticEmail,
-      public_data: publicData(base),
-      private_data: { birthDate: birthDateValue, friendRequests: { incoming: [], outgoing: [] } }
-    });
-    if (error) {
-      const msg = String(error.message || "");
-      // The profile row is created immediately after Auth. If it fails, remove
-      // the just-created Auth user as well, so signup never leaves an orphan
-      // auth.users record that blocks the same username/email on retry.
-      try { await sb.rpc("rivo_delete_current_auth_user"); } catch {}
-      try { await sb.auth.signOut(); } catch {}
-      if (msg.includes("duplicate")) throw new Error("That username is already taken.");
-      if (msg.includes("profiles_username_check") || msg.includes("violates check constraint")) {
-        throw new Error("That username is not accepted by the database. Please use 3–26 lowercase letters, numbers, . _ - and no symbol at the beginning or end.");
-      }
-      throw error;
-    }
+    if (authError || !auth.user) throw new Error("Account created, but automatic sign-in failed. Please sign in manually.");
     cacheUsername(u);
-    return base;
+    const profile = await currentProfile({ force: true });
+    if (!profile) throw new Error("Account created, but your profile is still syncing. Please try again.");
+    return profile;
   }
 
   async function login(username, password) {

@@ -1215,88 +1215,137 @@
     throw new Error("Security check could not be completed. Please try again.");
   }
 
-  function setupHumanCheck(form, buttonId, messageId) {
-    const security = window.RIVO_SECURITY || {};
+  function setupSignupCaptcha(form, buttonId, messageId) {
     const button = document.getElementById(buttonId);
     const message = document.getElementById(messageId);
+    const modal = document.getElementById("signupCaptchaModal");
+    const image = document.getElementById("signupCaptchaImage");
+    const input = document.getElementById("signupCaptchaInput");
+    const errorBox = document.getElementById("signupCaptchaError");
+    const verify = document.getElementById("signupCaptchaVerify");
+    const refresh = document.getElementById("signupCaptchaRefresh");
     const submit = form?.querySelector('button[type="submit"]');
-    const trapId = form.id === "signupForm" ? "signupWebsite" : "loginWebsite";
+    const security = window.RIVO_SECURITY || {};
+    const trap = document.getElementById("signupWebsite");
     let verified = false;
-    let challenge = "";
+    let challengeId = "";
     let startedAt = performance.now();
-    let clickedAt = 0;
-    let pointerMoves = 0;
-    let keyEvents = 0;
+    let loading = false;
 
-    const setMessage = (text = "", type = "") => {
-      if (!message) return;
-      message.textContent = text;
-      message.className = `captcha-note ${type}`.trim();
+    const setNote = (text="", type="") => {
+      if (message) { message.textContent = text; message.className = `captcha-note ${type}`.trim(); }
+    };
+    const open = () => {
+      if (!modal) return;
+      modal.hidden = false; modal.setAttribute("aria-hidden", "false");
+      document.body.classList.add("rivo-captcha-open");
+      loadChallenge(true);
+    };
+    const close = () => {
+      if (!modal) return;
+      modal.hidden = true; modal.setAttribute("aria-hidden", "true");
+      document.body.classList.remove("rivo-captcha-open");
     };
     const updateSubmit = () => {
-      if (!submit) return;
-      const trapFilled = !!document.getElementById(trapId)?.value;
-      submit.disabled = !!security.requireHumanCheck && (!verified || trapFilled);
+      if (submit) submit.disabled = !!security.requireHumanCheck && (!verified || !!trap?.value);
     };
     const reset = () => {
-      verified = false;
-      clickedAt = 0;
+      verified = false; challengeId = ""; window.__rivoSignupCaptcha = null; loading = false; startedAt = performance.now();
       button?.setAttribute("aria-pressed", "false");
-      button?.classList.remove("verified", "checking");
+      button?.classList.remove("verified","checking");
       const status = button?.querySelector(".human-check-status");
       if (status) status.textContent = "Verify";
-      challenge = `${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)}:${Date.now()}`;
-      startedAt = performance.now();
+      if (input) input.value = "";
+      if (image) image.removeAttribute("src");
+      close(); setNote("");
       updateSubmit();
     };
-    const fail = msg => { verified = false; button?.classList.remove("verified","checking"); setMessage(msg,"error"); updateSubmit(); };
     const markVerified = () => {
       verified = true;
       button?.setAttribute("aria-pressed", "true");
       button?.classList.remove("checking"); button?.classList.add("verified");
       const status = button?.querySelector(".human-check-status");
       if (status) status.textContent = "Verified";
-      setMessage("Verified", "success");
-      updateSubmit();
+      setNote("Verification complete.", "success"); updateSubmit();
     };
-
+    async function loadChallenge(force=false) {
+      if (loading) return;
+      loading = true;
+      if (errorBox) errorBox.textContent = "";
+      if (verify) verify.disabled = true;
+      if (refresh) refresh.disabled = true;
+      try {
+        const endpoint = String(security.signupCaptchaEndpoint || "").trim();
+        if (!endpoint) throw new Error("Security check is not configured.");
+        const res = await fetch(endpoint, { method:"POST", headers:{"Content-Type":"application/json","apikey":window.RIVO_SUPABASE?.anonKey || ""}, body:JSON.stringify({refresh:!!force}) });
+        const payload = await res.json().catch(()=>({}));
+        if (!res.ok) throw new Error(payload?.error || "Could not load the verification image.");
+        challengeId = String(payload.challengeId || "");
+        if (!challengeId || !payload.image) throw new Error("Could not load the verification image.");
+        if (image) image.src = payload.image;
+        if (input) { input.value = ""; setTimeout(()=>input.focus(), 40); }
+      } catch (e) {
+        if (errorBox) errorBox.textContent = e?.message || "Could not load verification.";
+      } finally {
+        loading = false;
+        if (verify) verify.disabled = false;
+        if (refresh) refresh.disabled = false;
+      }
+    }
+    async function verifyCaptcha() {
+      if (loading) return;
+      const code = String(input?.value || "").trim();
+      if (!/^[A-Za-z0-9]{4,6}$/.test(code)) { if (errorBox) errorBox.textContent = "Enter the 4–6 character code."; return; }
+      if (!challengeId) { await loadChallenge(); return; }
+      try {
+        if (verify) verify.disabled = true;
+        if (errorBox) errorBox.textContent = "Checking…";
+        const endpoint = String(security.signupCaptchaEndpoint || "").trim();
+        const res = await fetch(endpoint, {
+          method:"POST", headers:{"Content-Type":"application/json","apikey":window.RIVO_SUPABASE?.anonKey || ""},
+          body:JSON.stringify({ action:"verify", challengeId, captchaCode:code })
+        });
+        const payload = await res.json().catch(()=>({}));
+        if (!res.ok || !payload?.verificationToken) throw new Error(payload?.error || "Verification failed. Try a new code.");
+        verified = true;
+        window.__rivoSignupCaptcha = { challengeId, verificationToken: String(payload.verificationToken) };
+        markVerified(); close();
+      } catch (e) { if (errorBox) errorBox.textContent = e?.message || "Verification failed. Try a new code."; }
+      finally { if (verify) verify.disabled = false; }
+    }
+    button?.addEventListener("click", () => { if (!verified) open(); });
+    verify?.addEventListener("click", verifyCaptcha);
+    refresh?.addEventListener("click", () => loadChallenge(true));
+    modal?.querySelectorAll("[data-captcha-close]").forEach(el => el.addEventListener("click", close));
+    input?.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); verifyCaptcha(); } });
+    trap?.addEventListener("input", updateSubmit);
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && modal && !modal.hidden) close(); });
     form.__rivoHuman = {
       isVerified: () => verified,
       reset,
       startedAt: () => startedAt,
-      signals: () => ({ pointerMoves, keyEvents, challenge, clickedAt, verified })
+      captcha: () => window.__rivoSignupCaptcha || null
     };
-
-    document.getElementById(trapId)?.addEventListener("input", updateSubmit);
-    form.addEventListener("pointermove", () => { pointerMoves = Math.min(pointerMoves + 1, 80); }, { passive: true });
-    form.addEventListener("keydown", () => { keyEvents = Math.min(keyEvents + 1, 80); }, { passive: true });
-    button?.addEventListener("click", async () => {
-      if (button.classList.contains("checking")) return;
-      const elapsed = performance.now() - startedAt;
-      if (elapsed < Number(security.minInteractionMs || 1800)) {
-        fail("Please interact with the form normally for a moment, then verify.");
-        return;
-      }
-      if (document.getElementById(trapId)?.value) return;
-      clickedAt = Date.now();
-      button.classList.add("checking");
-      const status = button.querySelector(".human-check-status");
-      if (status) status.textContent = "Checking…";
-      setMessage("Checking…");
-      try {
-        await runHumanChallenge(challenge, security.challengeBits || 18);
-        const humanish = pointerMoves >= 1 || keyEvents >= 1 || elapsed > (Number(security.minInteractionMs || 1800) + 700);
-        if (!humanish) throw new Error("Interaction signal was insufficient.");
-        markVerified();
-      } catch (e) {
-        fail("Verification failed. Tap the box again and try normally.");
-      }
-    });
-
     reset();
-    if (!security.requireHumanCheck) markVerified();
-    else updateSubmit();
+    if (!security.requireHumanCheck) markVerified(); else updateSubmit();
     return form.__rivoHuman;
+  }
+
+  // Kept unchanged for login: signup uses the image CAPTCHA above.
+  function setupHumanCheck(form, buttonId, messageId) {
+    const security = window.RIVO_SECURITY || {};
+    const button = document.getElementById(buttonId);
+    const message = document.getElementById(messageId);
+    const submit = form?.querySelector('button[type="submit"]');
+    const trapId = form.id === "signupForm" ? "signupWebsite" : "loginWebsite";
+    let verified = false, challenge = "", startedAt = performance.now(), clickedAt = 0, pointerMoves = 0, keyEvents = 0;
+    const setMessage = (text="", type="") => { if (message) { message.textContent=text; message.className=`captcha-note ${type}`.trim(); } };
+    const updateSubmit = () => { if (submit) submit.disabled=!!security.requireHumanCheck && (!verified || !!document.getElementById(trapId)?.value); };
+    const reset = () => { verified=false; clickedAt=0; challenge=`${crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2)}:${Date.now()}`; startedAt=performance.now(); button?.setAttribute("aria-pressed","false"); button?.classList.remove("verified","checking"); const st=button?.querySelector(".human-check-status"); if(st)st.textContent="Verify"; updateSubmit(); };
+    const markVerified = () => { verified=true; button?.setAttribute("aria-pressed","true"); button?.classList.add("verified"); const st=button?.querySelector(".human-check-status"); if(st)st.textContent="Verified"; setMessage("Verified","success"); updateSubmit(); };
+    button?.addEventListener("click", async () => { if(button.classList.contains("checking"))return; const elapsed=performance.now()-startedAt; if(elapsed<Number(security.minInteractionMs||1200)){setMessage("Please interact with the form normally for a moment.","error");return;} if(document.getElementById(trapId)?.value)return; button.classList.add("checking"); try { await runHumanChallenge(challenge, security.challengeBits||17); if(!(pointerMoves>=1 || keyEvents>=1 || elapsed>Number(security.minInteractionMs||1200)+500))throw new Error(); markVerified(); } catch { verified=false; button.classList.remove("checking"); setMessage("Verification failed. Try again.","error"); updateSubmit(); } finally { button.classList.remove("checking"); } });
+    form.addEventListener("pointermove",()=>pointerMoves=Math.min(pointerMoves+1,80),{passive:true}); form.addEventListener("keydown",()=>keyEvents=Math.min(keyEvents+1,80),{passive:true}); document.getElementById(trapId)?.addEventListener("input",updateSubmit);
+    form.__rivoHuman={isVerified:()=>verified,reset,startedAt:()=>startedAt,signals:()=>({pointerMoves,keyEvents,challenge,clickedAt,verified})}; reset(); if(!security.requireHumanCheck)markVerified(); else updateSubmit(); return form.__rivoHuman;
   }
 
   async function initLogin() {
@@ -1429,7 +1478,7 @@
     }
     setupPasswordToggles();
     setupBirthDatePicker();
-    const human = setupHumanCheck(form, "signupHumanCheck", "signupCaptchaMsg");
+    const human = setupSignupCaptcha(form, "signupHumanCheck", "signupCaptchaMsg");
     if (existingSession?.user && submitButton) submitButton.disabled = true;
     $("#signupUsername")?.addEventListener("input", () => {
       const v = PF.normalizeUsername($("#signupUsername").value);
@@ -1456,7 +1505,7 @@
         if (password !== $("#signupPassword2").value) throw new Error("Passwords do not match.");
         const birthDate = $("#signupBirthDateValue").value;
         if (!birthDate) throw new Error("Birth date is required.");
-        await PF.createAccount({ username: $("#signupUsername").value, displayName: $("#signupDisplay").value, password, birthDate });
+        await PF.createAccount({ username: $("#signupUsername").value, displayName: $("#signupDisplay").value, password, birthDate, captcha: human?.captcha?.() });
         location.href = "editor.html";
       } catch (err) {
         $("#signupMsg") && ($("#signupMsg").textContent = err.message);
