@@ -1588,7 +1588,14 @@
     const relationship = isMe ? "self" : PF.friendshipState(viewer, p.username);
     const friends = (p.friends || []);
     const friendProfiles = await PF.getProfiles(friends);
-    if (!isMe) await PF.addView(username);
+    if (!isMe) {
+      // View-counting must never block access to a public profile. If the
+      // analytics RPC is unavailable or denied by a stale migration, the
+      // profile still opens normally.
+      try { await PF.addView(username); } catch (viewError) {
+        console.warn("Profile view counter unavailable:", viewError);
+      }
+    }
     p = !isMe ? await PF.getProfile(username, {force:true}) : await PF.currentProfile({force:true});
     try { p.story = (await PF.getStory(username, { countView:false })) || p.story || null; } catch {}
     p.likes ||= {count:0, users:[]};
@@ -1681,7 +1688,21 @@
       if (q) profiles = profiles.filter(p => p.username.includes(q) || (p.displayName || "").toLowerCase().includes(q));
       requestBox.innerHTML = requests.length ? requests.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><div class="hero-actions"><button class="btn btn-sm btn-primary" data-accept="${esc(p.username)}">Accept</button><button class="btn btn-sm btn-danger" data-reject="${esc(p.username)}">Decline</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No pending requests.</div>`;
       friendBox.innerHTML = profiles.length ? profiles.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><p>${esc(p.bio || "")}</p><div class="hero-actions"><a class="btn btn-sm btn-primary" href="profile.html?u=${encodeURIComponent(p.username)}">View</a><button class="btn btn-sm btn-danger" data-remove="${esc(p.username)}">Remove</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No friends found.</div>`;
-      $$('[data-accept]').forEach(b => b.onclick = async () => { try { await PF.acceptFriendRequest(b.dataset.accept); notify("Friend added", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
+      $$('[data-accept]').forEach(b => b.onclick = async () => {
+        if (b.disabled) return;
+        const original = b.textContent;
+        b.disabled = true;
+        b.textContent = "Accepting…";
+        try {
+          await PF.acceptFriendRequest(b.dataset.accept);
+          notify("Friend added", "success");
+          await render(search?.value);
+        } catch (e) {
+          b.disabled = false;
+          b.textContent = original || "Accept";
+          notify(e?.message || "Could not accept friend request. Please try again.", "error");
+        }
+      });
       $$('[data-reject]').forEach(b => b.onclick = async () => { try { await PF.rejectFriendRequest(b.dataset.reject); notify("Request declined", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
       $$('[data-remove]').forEach(b => b.onclick = async () => { try { await PF.removeFriend(b.dataset.remove); notify("Friend removed", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
     };

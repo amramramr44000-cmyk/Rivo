@@ -184,11 +184,22 @@
       const cached = cacheRead(PROFILE_CACHE_PREFIX + u, PROFILE_CACHE_TTL);
       if (cached) return cached;
     }
-    const { data, error } = await sb.rpc("rivo_get_public_profile", { p_username: u });
-    if (error) throw error;
-    if (!data) return null;
-    cacheWrite(PROFILE_CACHE_PREFIX + u, data);
-    return data;
+    let lastError = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const { data, error } = await sb.rpc("rivo_get_public_profile", { p_username: u });
+        if (error) throw error;
+        if (!data) return null;
+        cacheWrite(PROFILE_CACHE_PREFIX + u, data);
+        return data;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+        }
+      }
+    }
+    throw lastError || new Error("Could not load profile.");
   }
 
   async function getProfiles(usernames) {
@@ -486,9 +497,32 @@
   }
   async function acceptFriendRequest(fromUsername) {
     const u = normalizeUsername(fromUsername);
-    const result = await callRpc("rivo_accept_friend_request", { p_from_username: u });
-    invalidateProfileCache(u);
-    return result;
+    if (!u) throw new Error("Invalid friend request.");
+    let lastError = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const sessionResult = await sb.auth.getSession();
+        const session = sessionResult?.data?.session;
+        if (!session?.access_token) throw new Error("Your session expired. Please sign in again.");
+        await syncRealtimeAuth(session);
+        const { data, error } = await sb.rpc("rivo_accept_friend_request", {
+          p_from_username: u
+        });
+        if (error) throw error;
+        invalidateProfileCache(u);
+        cacheDelete(CURRENT_PROFILE_CACHE_KEY);
+        // Read the authoritative row immediately so the UI reflects the
+        // accepted state instead of waiting for a TTL/cache expiry.
+        await currentProfile({ force: true });
+        return data;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
+        }
+      }
+    }
+    throw lastError || new Error("Could not accept friend request.");
   }
   async function rejectFriendRequest(fromUsername) {
     const u = normalizeUsername(fromUsername);
