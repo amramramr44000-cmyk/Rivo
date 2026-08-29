@@ -2386,3 +2386,122 @@ body,main,.container,.messages-shell,.messages-layout{max-width:100%;overflow-x:
   .thread-call-actions .call-action{width:36px;height:36px;flex:0 0 36px}
   .voice-message-bubble{min-width:0;width:min(235px,78vw)}
 }
+
+
+/* v23: clean post-image preview + mobile notification portal */
+.post-media-thumb{
+  display:block;
+  width:100%;
+  padding:0;
+  margin:0;
+  border:0;
+  background:none;
+  cursor:zoom-in;
+  border-radius:inherit;
+  overflow:hidden;
+}
+.post-media-thumb img{
+  display:block;
+  width:100%;
+  height:auto;
+  max-height:560px;
+  object-fit:cover;
+}
+.post-image-viewer{
+  position:fixed;
+  inset:0;
+  z-index:2147482000;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+}
+.post-image-viewer.open{display:flex}
+.post-image-viewer-backdrop{
+  position:absolute;
+  inset:0;
+  background:rgba(0,0,0,.78);
+  backdrop-filter:blur(8px);
+}
+.post-image-viewer-image{
+  position:relative;
+  z-index:2;
+  display:block;
+  max-width:min(92vw,900px);
+  max-height:84vh;
+  width:auto;
+  height:auto;
+  object-fit:contain;
+  border-radius:18px;
+  box-shadow:0 24px 90px rgba(0,0,0,.55);
+}
+.post-image-viewer-close{
+  position:absolute;
+  z-index:3;
+  top:16px;
+  right:16px;
+  width:42px;
+  height:42px;
+  border:1px solid rgba(255,255,255,.18);
+  border-radius:14px;
+  background:rgba(10,13,19,.72);
+  color:#fff;
+  font-size:25px;
+  line-height:1;
+  display:grid;
+  place-items:center;
+}
+@media(max-width:760px){
+  .post-image-viewer{padding:14px}
+  .post-image-viewer-image{max-width:96vw;max-height:80vh;border-radius:14px}
+  .post-image-viewer-close{top:calc(10px + env(safe-area-inset-top));right:10px}
+  .notification-popover{z-index:2147483000 !important}
+}
+
+/* v24 targeted mobile polish: post images stay frameless inside posts */
+.post-media-thumb,
+.post-media-thumb:focus,
+.post-media-thumb:active{
+  border:0 !important;
+  outline:0 !important;
+  background:transparent !important;
+  box-shadow:none !important;
+}
+.post-media-thumb img{
+  border:0 !important;
+  box-shadow:none !important;
+}
+
+/* v24: notification panel must float above mobile navigation, never behind it */
+@media (max-width:760px){
+  .notification-popover{
+    position:fixed !important;
+    top:58px !important;
+    left:10px !important;
+    right:10px !important;
+    width:auto !important;
+    max-height:min(68vh,520px) !important;
+    overflow:hidden !important;
+    z-index:2147483647 !important;
+    margin:0 !important;
+  }
+  .notification-list{
+    max-height:calc(min(68vh,520px) - 76px) !important;
+    overflow:auto !important;
+    padding-bottom:8px !important;
+  }
+  .notification-head{
+    position:sticky;
+    top:0;
+    z-index:2;
+  }
+
+  /* simple image lightbox: no card/frame around the image */
+  .post-image-viewer-image{
+    border:0 !important;
+    border-radius:8px !important;
+    box-shadow:none !important;
+    max-width:94vw !important;
+    max-height:82vh !important;
+  }
+}
