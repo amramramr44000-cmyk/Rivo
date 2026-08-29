@@ -1041,10 +1041,11 @@
       }
 
       const a = e.target.closest?.("[data-call-action]");
-      if (a && activeUserForMessages()) {
+      const messageCallUser = window.__rivoActiveMessageUser || "";
+      if (a && messageCallUser) {
         try {
           await beginCall(
-            activeUserForMessages(),
+            messageCallUser,
             a.dataset.callAction || "audio"
           );
         } catch (err) {
@@ -2100,29 +2101,98 @@ const finishVoiceRecording = () => {
   stopVoiceStream();
   clearInterval(recordingTimer); recordingTimer=null; mediaRecorder=null;
 };
-voiceRecordBtn?.addEventListener("click", async () => {
+let voicePressActive = false;
+let voicePointerId = null;
+let voiceJustFinished = false;
+
+const startVoiceRecording = async () => {
+  if (mediaRecorder && mediaRecorder.state === "recording") return;
   if (!activeUser) { notify("Choose a conversation first.", "error"); return; }
-  if (mediaRecorder && mediaRecorder.state === "recording") { finishVoiceRecording(); return; }
-  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { notify("Voice recording is not supported in this browser.", "error"); return; }
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    notify("Voice recording is not supported in this browser.", "error"); return;
+  }
   try {
-    recordingStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
-    const preferred=["audio/webm;codecs=opus","audio/ogg;codecs=opus","audio/webm","audio/mp4"].find(t=>MediaRecorder.isTypeSupported(t));
-    mediaRecorder = new MediaRecorder(recordingStream, preferred ? {mimeType:preferred, audioBitsPerSecond:64000} : undefined);
-    const chunks=[]; recordingStartedAt=Date.now(); voiceDraft=null;
-    mediaRecorder.ondataavailable = e => { if(e.data?.size) chunks.push(e.data); };
+    recordingStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true }
+    });
+    const preferred = ["audio/webm;codecs=opus","audio/ogg;codecs=opus","audio/webm","audio/mp4"]
+      .find(t => MediaRecorder.isTypeSupported(t));
+    mediaRecorder = new MediaRecorder(
+      recordingStream,
+      preferred ? { mimeType: preferred, audioBitsPerSecond: 64000 } : undefined
+    );
+    const chunks = [];
+    recordingStartedAt = Date.now();
+    voiceDraft = null;
+    mediaRecorder.ondataavailable = e => { if (e.data?.size) chunks.push(e.data); };
     mediaRecorder.onstop = () => {
-      const duration=Math.min(Date.now()-recordingStartedAt, 5*60*1000);
-      const blob=new Blob(chunks,{type:mediaRecorder?.mimeType || "audio/webm"});
-      if(blob.size){ voiceDraft={blob,duration}; if(voiceBar) voiceBar.classList.remove("hidden"); if(voiceMessageState) voiceMessageState.textContent="Voice ready"; if(voiceMessageSend) voiceMessageSend.disabled=false; if(voiceRecordBtn) voiceRecordBtn.classList.remove("recording"); }
+      const duration = Math.min(Date.now() - recordingStartedAt, 5 * 60 * 1000);
+      const mime = mediaRecorder?.mimeType || "audio/webm";
+      const blob = new Blob(chunks, { type: mime });
+      if (blob.size && duration >= 350) {
+        voiceDraft = { blob, duration };
+        if (voiceBar) voiceBar.classList.remove("hidden");
+        if (voiceMessageState) voiceMessageState.textContent = "Voice ready";
+        if (voiceMessageSend) voiceMessageSend.disabled = false;
+      } else {
+        clearVoiceDraft();
+      }
+      if (voiceRecordBtn) voiceRecordBtn.classList.remove("recording");
     };
     mediaRecorder.start(250);
     voiceBar?.classList.remove("hidden");
-    if(voiceMessageState) voiceMessageState.textContent="Recording…";
-    if(voiceMessageTime) voiceMessageTime.textContent="0:00";
+    if (voiceMessageState) voiceMessageState.textContent = "Recording… release to stop";
+    if (voiceMessageTime) voiceMessageTime.textContent = "0:00";
     voiceRecordBtn?.classList.add("recording");
-    recordingTimer=setInterval(()=>{ const ms=Math.min(Date.now()-recordingStartedAt,5*60*1000); if(voiceMessageTime) voiceMessageTime.textContent=formatVoiceTime(ms); if(ms>=5*60*1000) finishVoiceRecording(); },250);
-  } catch(err){ stopVoiceStream(); notify("Microphone permission is required to record a voice message.","error"); }
+    recordingTimer = setInterval(() => {
+      const ms = Math.min(Date.now() - recordingStartedAt, 5 * 60 * 1000);
+      if (voiceMessageTime) voiceMessageTime.textContent = formatVoiceTime(ms);
+      if (ms >= 5 * 60 * 1000) stopVoiceRecording();
+    }, 250);
+  } catch {
+    stopVoiceStream();
+    notify("Microphone permission is required to record a voice message.", "error");
+  }
+};
+
+const stopVoiceRecording = () => {
+  if (!mediaRecorder) return;
+  try { if (mediaRecorder.state !== "inactive") mediaRecorder.stop(); } catch {}
+  stopVoiceStream();
+  clearInterval(recordingTimer);
+  recordingTimer = null;
+  mediaRecorder = null;
+};
+
+const endVoicePress = async () => {
+  if (!voicePressActive) return;
+  voicePressActive = false;
+  voiceRecordBtn?.classList.remove("recording");
+  stopVoiceRecording();
+  voiceJustFinished = true;
+  setTimeout(() => { voiceJustFinished = false; }, 250);
+};
+
+voiceRecordBtn?.addEventListener("pointerdown", async e => {
+  if (e.button !== 0 && e.pointerType !== "touch") return;
+  e.preventDefault();
+  voicePressActive = true;
+  voicePointerId = e.pointerId;
+  voiceRecordBtn.setPointerCapture?.(e.pointerId);
+  await startVoiceRecording();
 });
+voiceRecordBtn?.addEventListener("pointerup", async e => {
+  if (voicePointerId !== null && e.pointerId !== voicePointerId) return;
+  e.preventDefault();
+  await endVoicePress();
+  voicePointerId = null;
+});
+voiceRecordBtn?.addEventListener("pointercancel", endVoicePress);
+voiceRecordBtn?.addEventListener("lostpointercapture", () => {
+  if (voicePressActive) endVoicePress();
+});
+voiceRecordBtn?.addEventListener("contextmenu", e => e.preventDefault());
+
 voiceMessageCancel?.addEventListener("click",()=>{ finishVoiceRecording(); clearVoiceDraft(); if(voiceRecordBtn) voiceRecordBtn.classList.remove("recording"); });
 voiceMessageSend?.addEventListener("click",async()=>{
   if(!voiceDraft || !activeUser) return;
