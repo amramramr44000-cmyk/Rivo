@@ -1323,6 +1323,99 @@
     });
   }
 
+  function setupPasswordToggles() {
+    $$('[data-password-toggle]').forEach(btn => {
+      const targetId = btn.getAttribute('data-password-toggle');
+      const input = targetId ? document.getElementById(targetId) : null;
+      if (!input || btn.dataset.ready === '1') return;
+      btn.dataset.ready = '1';
+      btn.addEventListener('click', () => {
+        const reveal = input.type === 'password';
+        input.type = reveal ? 'text' : 'password';
+        btn.setAttribute('aria-pressed', String(reveal));
+        btn.setAttribute('aria-label', reveal ? 'Hide password' : 'Show password');
+        btn.classList.toggle('is-visible', reveal);
+      });
+    });
+  }
+
+  function setupBirthDatePicker() {
+    const trigger = $('#signupBirthDate');
+    const hidden = $('#signupBirthDateValue');
+    const modal = $('#signupBirthPicker');
+    const year = $('#birthYear');
+    const month = $('#birthMonth');
+    const day = $('#birthDay');
+    const preview = $('#birthDatePreview');
+    const apply = $('#birthDateApply');
+    if (!trigger || !hidden || !modal || !year || !month || !day || !preview || !apply) return;
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const minYear = currentYear - 120;
+    const monthNames = [
+      'January','February','March','April','May','June',
+      'July','August','September','October','November','December'
+    ];
+    year.innerHTML = '';
+    for (let y = currentYear; y >= minYear; y--) {
+      const opt = document.createElement('option'); opt.value = String(y); opt.textContent = String(y); year.appendChild(opt);
+    }
+    month.innerHTML = '';
+    monthNames.forEach((name, i) => {
+      const opt = document.createElement('option'); opt.value = String(i + 1); opt.textContent = name; month.appendChild(opt);
+    });
+
+    const syncDays = (preferred = 1) => {
+      const y = Number(year.value); const m = Number(month.value);
+      const count = new Date(y, m, 0).getDate();
+      const keep = Math.min(Math.max(1, Number(preferred) || 1), count);
+      day.innerHTML = '';
+      for (let d = 1; d <= count; d++) { const opt = document.createElement('option'); opt.value = String(d); opt.textContent = String(d); day.appendChild(opt); }
+      day.value = String(keep);
+    };
+    syncDays(1);
+
+    const formatPreview = () => {
+      const y = Number(year.value), m = Number(month.value), d = Number(day.value);
+      if (!y || !m || !d) { preview.textContent = 'Choose year, month and day'; return ''; }
+      const date = new Date(Date.UTC(y, m - 1, d));
+      const value = date.toISOString().slice(0, 10);
+      preview.textContent = `${monthNames[m - 1]} ${d}, ${y}`;
+      return value;
+    };
+
+    let draft = '';
+    const open = () => {
+      if (hidden.value) {
+        const [y,m,d] = hidden.value.split('-').map(Number);
+        if (y) year.value = String(y);
+        if (m) month.value = String(m);
+        syncDays(d || 1); day.value = String(d || 1);
+      }
+      draft = formatPreview();
+      modal.hidden = false; modal.setAttribute('aria-hidden', 'false'); trigger.setAttribute('aria-expanded', 'true');
+      document.body.classList.add('date-picker-open');
+      setTimeout(() => year.focus(), 0);
+    };
+    const close = () => { modal.hidden = true; modal.setAttribute('aria-hidden', 'true'); trigger.setAttribute('aria-expanded', 'false'); document.body.classList.remove('date-picker-open'); };
+    trigger.addEventListener('click', open);
+    [year, month].forEach(select => select.addEventListener('change', () => { syncDays(Number(day.value)); draft = formatPreview(); }));
+    day.addEventListener('change', () => { draft = formatPreview(); });
+    modal.querySelectorAll('[data-birth-close]').forEach(el => el.addEventListener('click', close));
+    apply.addEventListener('click', () => {
+      const value = draft || formatPreview();
+      if (!value) return;
+      hidden.value = value;
+      const label = trigger.querySelector('.date-picker-value');
+      const placeholder = trigger.querySelector('.date-picker-placeholder');
+      if (label) { label.textContent = preview.textContent; label.classList.remove('hidden'); }
+      if (placeholder) placeholder.classList.add('hidden');
+      close();
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !modal.hidden) close(); });
+  }
+
   async function initSignup() {
     const form = $("#signupForm"); if (!form) return;
     const existingSession = (await window.__rivoSupabase?.auth.getSession())?.data?.session || null;
@@ -1334,6 +1427,8 @@
       existingNotice.innerHTML = `You are already signed in. <a href="settings.html">Open Settings</a> to sign out before creating another account.`;
       form.prepend(existingNotice);
     }
+    setupPasswordToggles();
+    setupBirthDatePicker();
     const human = setupHumanCheck(form, "signupHumanCheck", "signupCaptchaMsg");
     if (existingSession?.user && submitButton) submitButton.disabled = true;
     $("#signupUsername")?.addEventListener("input", () => {
@@ -1359,7 +1454,9 @@
       try {
         const password = $("#signupPassword").value;
         if (password !== $("#signupPassword2").value) throw new Error("Passwords do not match.");
-        await PF.createAccount({ username: $("#signupUsername").value, displayName: $("#signupDisplay").value, password });
+        const birthDate = $("#signupBirthDateValue").value;
+        if (!birthDate) throw new Error("Birth date is required.");
+        await PF.createAccount({ username: $("#signupUsername").value, displayName: $("#signupDisplay").value, password, birthDate });
         location.href = "editor.html";
       } catch (err) {
         $("#signupMsg") && ($("#signupMsg").textContent = err.message);
@@ -1690,7 +1787,7 @@
           <div class="profile-identity">
             <div class="profile-topline"><span class="status-dot ${p.status === "Offline" ? "offline" : ""}"></span><span>${esc(p.status === "Custom" ? (p.customStatus || "Online") : (p.status || "Online"))}</span>${isMe ? `<span class="you-label">YOUR PROFILE</span>` : ""}</div>
             <h1>${esc(p.displayName || p.username)}</h1>
-            <div class="profile-username">@${esc(p.username)}</div>
+            <div class="profile-username profile-username-meta"><span>@${esc(p.username)}</span>${p.createdAt ? `<span class="account-since" title="Account age">${esc(formatAccountSince(p.createdAt))}</span>` : ""}</div>
             <p>${esc(p.bio || "")}</p>
             <div class="badges-inline">${badges}</div>
           </div>
@@ -1709,7 +1806,42 @@
     </article>`;
   }
 
-  async function initProfile() {
+  function formatAccountSince(value) {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return "";
+    const now = new Date();
+    let years = now.getFullYear() - d.getFullYear();
+    let months = years * 12 + (now.getMonth() - d.getMonth());
+    if (now.getDate() < d.getDate()) months -= 1;
+    months = Math.max(0, months);
+    if (months >= 12) {
+      const y = Math.floor(months / 12);
+      return y === 1 ? "منذ سنة" : `منذ ${y} سنوات`;
+    }
+    if (months >= 1) {
+      return months === 1 ? "منذ شهر" : `منذ ${months} أشهر`;
+    }
+    const days = Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
+    return days <= 1 ? "منذ يوم" : `منذ ${days} يوم`;
+  }
+
+  function showAdminProfileIntro(root, enabled) {
+    if (!enabled || !root) return;
+    const old = root.querySelector(".rivo-owner-intro");
+    if (old) old.remove();
+    const overlay = document.createElement("div");
+    overlay.className = "rivo-owner-intro";
+    overlay.setAttribute("aria-label", "Owner Rivo");
+    overlay.innerHTML = `<div class="rivo-owner-aura" aria-hidden="true"></div><div class="rivo-owner-scribble" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="rivo-owner-mark"><span class="rivo-owner-kicker">RIVO</span><div class="rivo-owner-title">Owner Rivo</div><div class="rivo-owner-sub">Official Administration</div></div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("is-visible"));
+    window.setTimeout(() => {
+      overlay.classList.add("is-leaving");
+      window.setTimeout(() => overlay.remove(), 700);
+    }, 2600);
+  }
+
+async function initProfile() {
     let username = PF.normalizeUsername(new URLSearchParams(location.search).get("u") || "");
     const root = $("#profileRoot");
     if (!root) return;
@@ -1747,9 +1879,11 @@
     p.likes ||= {count:0, users:[]};
     p.likes.users ||= [];
     p.likes.count = Number.isFinite(Number(p.likes.count)) ? Math.max(0, Number(p.likes.count)) : p.likes.users.length;
+    let isRivoAdminProfile = false;
+    try { isRivoAdminProfile = await PF.isAdminProfile(p.username); } catch {}
     root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship }) + `<section class="profile-posts-wrap"><div class="section-head"><div><div class="section-kicker">POSTS</div><h2>${isMe ? "Your posts" : "Posts"}</h2></div>${isMe ? `<a class="btn btn-sm" href="posts.html">+ New post</a>` : ""}</div><div id="profilePostFeed" class="post-feed"><div class="empty-state glass"><h2>Loading posts…</h2></div></div></section>`;
     bindPlayer(root);
-    await renderPostFeed($("#profilePostFeed"), p.username, { allowCompose:false });
+    await renderPostFeed($("#profilePostFeed"), p.username, { allowCompose:false }); showAdminProfileIntro(root, isRivoAdminProfile);
     $(`[data-add-friend]`)?.addEventListener("click", async () => {
       try {
         await PF.sendFriendRequest(p.username);
@@ -2437,8 +2571,8 @@ voiceMessageSend?.addEventListener("click",async()=>{
         const d = await PF.adminGetUserDetails(username);
         if (!d) { detail.innerHTML = `<div class="empty-state"><h2>User not found</h2></div>`; return; }
         const visitorRows = (d.visitors || []).length ? d.visitors.map(v => `<div class="visitor-row"><span>${esc(v.display_name || v.username)}</span><span>@${esc(v.username)} · ${esc(new Date(v.last_seen).toLocaleDateString())}</span></div>`).join("") : `<div class="empty-state"><p>No identified visitors yet.</p></div>`;
-        detail.innerHTML = `<div class="admin-detail"><div class="admin-detail-head"><div><span class="eyebrow">ACCOUNT</span><h2 style="margin:5px 0 0">${esc(d.displayName || d.username)}</h2><div class="admin-detail-meta">@${esc(d.username)} · joined ${esc(new Date(d.created_at).toLocaleDateString())}</div></div><span class="admin-badge ${d.is_banned?'banned':''}">${d.is_banned?'Banned':'Active'}</span></div><div class="admin-stats"><div class="admin-stat"><span>Profile views</span><b>${esc(d.views)}</b></div><div class="admin-stat"><span>Profile likes</span><b>${esc(d.likes)}</b></div><div class="admin-stat"><span>Friends</span><b>${esc(d.friends)}</b></div></div><section class="admin-edit-section"><div class="section-kicker">ACCOUNT EDIT</div><div class="form-grid"><label class="field"><span>Username</span><input id="adminUsername" class="field-input" value="${esc(d.username)}" maxlength="26"></label><label class="field"><span>Display name</span><input id="adminDisplayName" class="field-input" value="${esc(d.displayName || d.username)}" maxlength="80"></label></div><label class="field"><span>New password (leave blank to keep current password)</span><input id="adminPassword" class="field-input" type="password" minlength="8" maxlength="128" placeholder="Set a new password"></label><button class="btn btn-primary" id="adminSaveAccount">Save account</button><small class="muted">For security, the existing password is never displayed or retrievable; admins can only set a new password.</small></section><div class="field"><span>Adjust public counters</span><div class="form-grid"><input id="adminViews" class="field-input" type="number" min="0" value="${esc(d.views)}" placeholder="Views"><input id="adminLikes" class="field-input" type="number" min="0" value="${esc(d.likes)}" placeholder="Likes"></div></div><div class="admin-actions"><button class="btn btn-primary" id="adminSaveStats">Save counters</button><button class="btn" id="adminToggleBan">${d.is_banned?'Unban account':'Block account'}</button><a class="btn" href="profile.html?u=${encodeURIComponent(d.username)}" target="_blank" rel="noreferrer">Open profile</a></div><section><div class="section-head"><div><div class="section-kicker">VISITORS</div><h3>Recent profile visitors</h3></div></div><div class="visitor-list">${visitorRows}</div></section><section class="admin-card danger-zone"><div class="section-kicker">DANGER ZONE</div><h3>Delete account permanently</h3><p class="muted">Removes the auth account and cascading profile data. This cannot be undone.</p><button class="btn btn-danger" id="adminDeleteUser">Delete ${esc(d.username)}</button></section></div>`;
-        $("#adminSaveAccount").onclick = async () => { try { const result = await PF.adminUpdateUser(d.username, $("#adminUsername").value, $("#adminDisplayName").value, $("#adminPassword").value); notify(result?.passwordChanged ? "Account and password updated" : "Account updated", "success"); selected = result?.username || $("#adminUsername").value.trim().toLowerCase(); await loadUsers(""); await selectUser(selected); } catch(e) { notify(e.message || "Could not update account", "error"); } };
+        detail.innerHTML = `<div class="admin-detail"><div class="admin-detail-head"><div><span class="eyebrow">ACCOUNT</span><h2 style="margin:5px 0 0">${esc(d.displayName || d.username)}</h2><div class="admin-detail-meta">@${esc(d.username)} · joined ${esc(new Date(d.created_at).toLocaleDateString())}</div></div><span class="admin-badge ${d.is_banned?'banned':''}">${d.is_banned?'Banned':'Active'}</span></div><div class="admin-stats"><div class="admin-stat"><span>Profile views</span><b>${esc(d.views)}</b></div><div class="admin-stat"><span>Profile likes</span><b>${esc(d.likes)}</b></div><div class="admin-stat"><span>Friends</span><b>${esc(d.friends)}</b></div></div><section class="admin-edit-section"><div class="section-kicker">ACCOUNT EDIT</div><div class="form-grid"><label class="field"><span>Username</span><input id="adminUsername" class="field-input" value="${esc(d.username)}" maxlength="26"></label><label class="field"><span>Display name</span><input id="adminDisplayName" class="field-input" value="${esc(d.displayName || d.username)}" maxlength="80"></label></div><div class="form-grid"><label class="field"><span>Birth date</span><input id="adminBirthDate" class="field-input" type="date" value="${esc(d.birthDate || "")}" max="${new Date().toISOString().slice(0,10)}"></label><label class="field"><span>New password</span><div class="input-with-action"><input id="adminPassword" class="field-input" type="password" minlength="8" maxlength="28" placeholder="Set a new password"><button type="button" class="icon-btn field-eye" id="adminPasswordToggle" aria-label="Show password" title="Show password">◉</button></div></label></div><button class="btn btn-primary" id="adminSaveAccount">Save account</button><small class="muted">For security, the current password can never be displayed or recovered. Enter a new password to replace it.</small></section><div class="field"><span>Adjust public counters</span><div class="form-grid"><input id="adminViews" class="field-input" type="number" min="0" value="${esc(d.views)}" placeholder="Views"><input id="adminLikes" class="field-input" type="number" min="0" value="${esc(d.likes)}" placeholder="Likes"></div></div><div class="admin-actions"><button class="btn btn-primary" id="adminSaveStats">Save counters</button><button class="btn" id="adminToggleBan">${d.is_banned?'Unban account':'Block account'}</button><a class="btn" href="profile.html?u=${encodeURIComponent(d.username)}" target="_blank" rel="noreferrer">Open profile</a></div><section><div class="section-head"><div><div class="section-kicker">VISITORS</div><h3>Recent profile visitors</h3></div></div><div class="visitor-list">${visitorRows}</div></section><section class="admin-card danger-zone"><div class="section-kicker">DANGER ZONE</div><h3>Delete account permanently</h3><p class="muted">Removes the auth account and cascading profile data. This cannot be undone.</p><button class="btn btn-danger" id="adminDeleteUser">Delete ${esc(d.username)}</button></section></div>`;
+        $("#adminSaveAccount").onclick = async () => { try { const result = await PF.adminUpdateUser(d.username, $("#adminUsername").value, $("#adminDisplayName").value, $("#adminPassword").value, $("#adminBirthDate")?.value || ""); notify(result?.passwordChanged ? "Account and password updated" : "Account updated", "success"); selected = result?.username || $("#adminUsername").value.trim().toLowerCase(); await loadUsers(""); await selectUser(selected); } catch(e) { notify(e.message || "Could not update account", "error"); } }; $("#adminPasswordToggle")?.addEventListener("click", () => { const i=$("#adminPassword"); if (!i) return; i.type=i.type==="password"?"text":"password"; $("#adminPasswordToggle").setAttribute("aria-label", i.type==="password"?"Show password":"Hide password"); });
         $("#adminSaveStats").onclick = async () => { try { await PF.adminSetStats(d.username, $("#adminViews").value, $("#adminLikes").value); notify("Counters updated", "success"); await selectUser(d.username); } catch(e) { notify(e.message,"error"); } };
         $("#adminToggleBan").onclick = async () => { try { await PF.adminSetBanned(d.username, !d.is_banned); notify(d.is_banned?"Account unblocked":"Account blocked", "success"); await selectUser(d.username); } catch(e) { notify(e.message,"error"); } };
         $("#adminDeleteUser").onclick = async () => { if (!confirm(`Delete @${d.username} permanently?`)) return; try { await PF.adminDeleteUser(d.username); notify("Account deleted", "success"); selected=""; users = users.filter(u=>u.username!==d.username); drawUsers(); detail.innerHTML = `<div class="empty-state"><h2>Account deleted</h2></div>`; } catch(e) { notify(e.message,"error"); } };
@@ -2453,7 +2587,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
   async function initSettings() {
     const me = await PF.currentProfile(); if (!me) { location.href = "login.html"; return; }
     $("#settingsUsername") && ($("#settingsUsername").textContent = "@" + me.username);
-    $("#settingsDisplay") && ($("#settingsDisplay").textContent = me.displayName || me.username);
+    $("#settingsDisplay") && ($("#settingsDisplay").textContent = me.displayName || me.username); $("#settingsBirthDate") && ($("#settingsBirthDate").textContent = me.birthDate ? new Date(me.birthDate+"T00:00:00").toLocaleDateString(undefined,{year:"numeric",month:"long",day:"numeric"}) : "Not set");
     $("#settingsLogout")?.addEventListener("click", async () => { await PF.clearSession(); location.href = "../index.html"; });
     const select = $("#messagePrivacy");
     const save = $("#messagePrivacySave");

@@ -143,6 +143,7 @@
       p.friendRequests = priv.friendRequests || { incoming: [], outgoing: [] };
       p.messageSettings = { whoCanMessage: ["friends","nobody"].includes(priv.messageSettings?.whoCanMessage) ? priv.messageSettings.whoCanMessage : "everyone" };
       p.callSettings = { whoCanCall: ["friends","nobody"].includes(priv.callSettings?.whoCanCall) ? priv.callSettings.whoCanCall : "everyone" };
+      p.birthDate = typeof priv.birthDate === "string" ? priv.birthDate : (p.birthDate || "");
     }
     return p;
   }
@@ -473,14 +474,19 @@
     return saveProfile({ ...current, ...patch });
   }
 
-  async function createAccount({ username, displayName, password }) {
+  async function createAccount({ username, displayName, password, birthDate }) {
     requireClient();
     const u = normalizeUsername(username);
     if (!validUsername(u)) throw new Error("Username must be 3–26 characters: letters, numbers, . _ -.");
     if (!String(displayName || "").trim()) throw new Error("Display name is required.");
+    const birthDateValue = String(birthDate || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(birthDateValue)) throw new Error("Birth date is required.");
+    const parsedBirthDate = new Date(`${birthDateValue}T00:00:00Z`);
+    if (Number.isNaN(parsedBirthDate.getTime())) throw new Error("Enter a valid birth date.");
+    if (parsedBirthDate > new Date()) throw new Error("Birth date cannot be in the future.");
     const passwordValue = String(password || "");
-    if (passwordValue.length < 10) throw new Error("Password must be at least 10 characters.");
-    if (passwordValue.length > 128) throw new Error("Password must be 128 characters or fewer.");
+    if (passwordValue.length < 8) throw new Error("Password must be at least 8 characters.");
+    if (passwordValue.length > 28) throw new Error("Password must be 28 characters or fewer.");
     const classes = [/[a-z]/.test(passwordValue), /[A-Z]/.test(passwordValue), /\d/.test(passwordValue), /[^A-Za-z0-9]/.test(passwordValue)].filter(Boolean).length;
     if (classes < 3) throw new Error("Use a stronger password: mix uppercase, lowercase, numbers and/or symbols.");
     const weak = new Set(["password123", "password123!", "qwerty1234", "1234567890", "letmein123", "welcome123"]);
@@ -504,14 +510,15 @@
     const now = new Date().toISOString();
     const base = structuredClone(defaults);
     base.username = u;
-    base.displayName = String(displayName).trim().slice(0, 60);
+    base.displayName = String(displayName).trim().slice(0, 28);
+    base.birthDate = birthDateValue;
     base.createdAt = now; base.updatedAt = now;
     const { error } = await sb.from("profiles").insert({
       id: auth.user.id,
       username: u,
       auth_email: syntheticEmail,
       public_data: publicData(base),
-      private_data: { friendRequests: { incoming: [], outgoing: [] } }
+      private_data: { birthDate: birthDateValue, friendRequests: { incoming: [], outgoing: [] } }
     });
     if (error) {
       await sb.auth.signOut();
@@ -1150,6 +1157,20 @@
     return Array.isArray(data) ? data : [];
   }
 
+  async function isAdminProfile(username) {
+    requireClient();
+    const u = normalizeUsername(username);
+    if (!u) return false;
+    try {
+      const { data, error } = await sb.rpc("rivo_is_admin_profile", { p_username: u });
+      if (error) throw error;
+      return !!data;
+    } catch (error) {
+      console.warn("[Rivo] isAdminProfile check failed", { username: u, code: error?.code, message: error?.message });
+      return false;
+    }
+  }
+
   async function adminStatus() {
     requireClient();
     const { data, error } = await sb.rpc("rivo_admin_is_admin", {});
@@ -1187,14 +1208,16 @@
     return data;
   }
 
-async function adminUpdateUser(username, newUsername, displayName, newPassword) {
+async function adminUpdateUser(username, newUsername, displayName, newPassword, birthDate) {
   requireClient();
+  const cleanBirthDate = typeof birthDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(birthDate) ? birthDate : "";
   const { data, error } = await sb.functions.invoke("rivo-admin-update-user", {
     body: {
       username: normalizeUsername(username),
       newUsername: normalizeUsername(newUsername),
       displayName: String(displayName || "").trim().slice(0,80),
-      newPassword: String(newPassword || "")
+      newPassword: String(newPassword || ""),
+      birthDate: cleanBirthDate
     }
   });
   if (error) throw error;
@@ -1335,7 +1358,7 @@ async function getVoiceUrl(path) {
     removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
-    subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
+    subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
     setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, reportPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl
   };
 })();
