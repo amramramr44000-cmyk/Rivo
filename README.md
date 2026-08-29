@@ -164,3 +164,7 @@ The LiveKit client SDK is loaded from jsDelivr in the HTML pages. For production
 - Removed the in-call minimize button and its mini-call behavior from the UI.
 - Removed the in-call audio-output selector UI so the browser/device keeps its normal audio output behavior.
 - No call signaling, LiveKit connection, token flow, media quality, or database logic was intentionally changed in this pass.
+
+
+## v14 data/access repair
+Run `supabase_v14_access_repair.sql` once in the Supabase SQL Editor. It only restores required RPC grants and the public media read policy; it does not delete or rewrite existing user data.

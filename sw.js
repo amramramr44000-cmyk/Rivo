@@ -1,4 +1,4 @@
-const CACHE = "rivo-shell-v11";
+const CACHE = "rivo-shell-v14";
 const ASSETS = [
   "./", "./index.html", "./css/style.css", "./js/core.js", "./js/app.js", "./js/supabase-config.js",
   "./pages/login.html", "./pages/signup.html", "./pages/profile.html", "./pages/explore.html", "./pages/friends.html", "./pages/messages.html", "./pages/posts.html", "./pages/communities.html", "./pages/editor.html", "./pages/settings.html", "./pages/admin.html",
@@ -10,7 +10,34 @@ self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
   if (url.origin !== location.origin) return;
-  event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request).then(res => { const copy=res.clone(); caches.open(CACHE).then(c=>c.put(event.request,copy)).catch(()=>{}); return res; }).catch(()=>caches.match("./index.html"))));
+
+  const isAppAsset =
+    url.pathname.endsWith(".html") ||
+    url.pathname.endsWith(".js") ||
+    url.pathname.endsWith(".css");
+
+  // Always prefer the latest deployed app code. Cache remains only as an
+  // offline fallback, preventing an old shell from surviving indefinitely.
+  if (isAppAsset) {
+    event.respondWith(
+      fetch(event.request).then(response => {
+        const copy = response.clone();
+        caches.open(CACHE).then(cache => cache.put(event.request, copy)).catch(() => {});
+        return response;
+      }).catch(() => caches.match(event.request).then(cached => cached || caches.match("./index.html")))
+    );
+    return;
+  }
+
+  event.respondWith(
+    caches.match(event.request).then(cached =>
+      cached || fetch(event.request).then(response => {
+        const copy = response.clone();
+        caches.open(CACHE).then(cache => cache.put(event.request, copy)).catch(() => {});
+        return response;
+      }).catch(() => caches.match("./index.html"))
+    )
+  );
 });
 self.addEventListener("notificationclick", event => {
   event.notification.close();
