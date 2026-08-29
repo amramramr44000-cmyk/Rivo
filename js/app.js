@@ -129,11 +129,15 @@
         if (window.innerWidth <= 760) {
           const r = button.getBoundingClientRect();
           pop.style.position = "fixed";
-          pop.style.top = `${Math.min(window.innerHeight - 80, r.bottom + 8)}px`;
-          pop.style.right = "8px";
-          pop.style.left = "8px";
+          const top = Math.max(
+            56 + (window.safeAreaInsets?.top || 0),
+            Math.min(r.bottom + 8, window.innerHeight - 360)
+          );
+          pop.style.top = `${top}px`;
+          pop.style.right = "10px";
+          pop.style.left = "10px";
           pop.style.width = "auto";
-          pop.style.maxHeight = "calc(100vh - 90px)";
+          pop.style.maxHeight = "min(68vh, 520px)";
           pop.style.zIndex = "2147483000";
         }
 
@@ -520,6 +524,7 @@
     const notifyCall = (m, t = "") => window.PFUI?.notify?.(m, t);
 
     const timer = () => {
+      if (callStartedAt) return;
       callStartedAt = Date.now();
       if (callTimer) clearInterval(callTimer);
       const tick = () => {
@@ -686,6 +691,26 @@
       e.route.classList.add("active");
     }
 
+    const attachLocalVideo = (track) => {
+      if (!track) return;
+      const e = E();
+      const current = e.stage.querySelector(".call-local-video.live");
+      if (current && current.dataset.rivoTrackAttached === "1") return;
+      try {
+        const media = track.attach();
+        media.className = "call-local-video live";
+        media.autoplay = true;
+        media.muted = true;
+        media.playsInline = true;
+        media.setAttribute("playsinline", "");
+        media.dataset.rivoTrackAttached = "1";
+        if (current) current.replaceWith(media);
+        else e.stage.appendChild(media);
+        e.local = media;
+        media.play?.().catch(() => {});
+      } catch {}
+    };
+
     async function connectMedia() {
       if (!LK) throw new Error("LiveKit client failed to load.");
       if (!active?.roomName) throw new Error("Call room is missing.");
@@ -715,6 +740,16 @@
           videoSimulcastLayers: []
         }
       });
+
+      if (LK.RoomEvent.LocalTrackPublished) {
+        room.on(LK.RoomEvent.LocalTrackPublished, publication => {
+          try {
+            if (publication?.source === LK.Track.Source.Camera && publication.track) {
+              attachLocalVideo(publication.track);
+            }
+          } catch {}
+        });
+      }
 
       room.on(LK.RoomEvent.TrackSubscribed, async (track) => {
         if (track.kind === LK.Track.Kind.Video) {
@@ -808,21 +843,18 @@
       await room.localParticipant.setMicrophoneEnabled(true);
 
       if (active.isVideo) {
-        await room.localParticipant.setCameraEnabled(true);
+        try {
+          await room.localParticipant.setCameraEnabled(true);
+        } catch (cameraError) {
+          console.warn("Camera enable failed:", cameraError);
+          notifyCall("Camera permission or device access is unavailable.", "error");
+        }
+
         const pub = room.localParticipant.getTrackPublication(
           LK.Track.Source.Camera
         );
 
-        if (pub?.track) {
-          const v = pub.track.attach();
-          v.className = "call-local-video live";
-          v.autoplay = true;
-          v.muted = true;
-          v.playsInline = true;
-          e.local.replaceWith(v);
-          e.local = v;
-          try { await v.play(); } catch {}
-        }
+        if (pub?.track) attachLocalVideo(pub.track);
       }
 
       active.connected = true;
@@ -1057,7 +1089,17 @@
       const e = E();
       const on = active.room.localParticipant.isCameraEnabled;
 
-      await active.room.localParticipant.setCameraEnabled(!on);
+      try {
+        await active.room.localParticipant.setCameraEnabled(!on);
+      } catch (err) {
+        notifyCall(err?.message || "Unable to change camera state.", "error");
+        return;
+      }
+
+      if (!on) {
+        const pub = active.room.localParticipant.getTrackPublication(LK.Track.Source.Camera);
+        if (pub?.track) attachLocalVideo(pub.track);
+      }
 
       e.camera.classList.toggle("is-off", on);
       e.camera.setAttribute("aria-label", on ? "Turn camera on" : "Turn camera off");
