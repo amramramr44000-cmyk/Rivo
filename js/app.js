@@ -1960,10 +1960,48 @@
         reactionBar.className = "message-reactions";
         reactionBar.innerHTML = (Array.isArray(m.reactions) ? m.reactions : []).map(r => `<button type="button" class="reaction-chip ${r.me ? "mine" : ""}" data-reaction-message="${esc(m.id)}" data-reaction-value="${esc(r.reaction)}"><span>${esc(r.reaction)}</span><b>${esc(r.count)}</b></button>`).join("");
         if (reactionBar.childElementCount) bubble.appendChild(reactionBar);
-        const reactionToggle = document.createElement("button");
-        reactionToggle.type = "button"; reactionToggle.className = "reaction-add"; reactionToggle.textContent = "＋"; reactionToggle.setAttribute("aria-label","Add reaction");
-        reactionToggle.onclick = ev => { ev.stopPropagation(); openReactionMenu(reactionToggle, m.id); };
-        bubble.appendChild(reactionToggle);
+
+        // Reactions on desktop/touch: existing reaction chips are clickable,
+        // while a press-and-hold on the message bubble opens the quick menu.
+        // There is intentionally no visible "+" button, keeping the bubble
+        // clean on small screens.
+        reactionBar.querySelectorAll("[data-reaction-message]").forEach(btn => {
+          btn.addEventListener("click", async ev => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            try {
+              await PF.toggleMessageReaction(btn.dataset.reactionMessage, btn.dataset.reactionValue);
+              await refreshOpenThread();
+            } catch (err) {
+              notify(err?.message || "Could not update reaction", "error");
+            }
+          });
+        });
+
+        let holdTimer = null;
+        let holdTriggered = false;
+        const clearHold = () => {
+          if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+        };
+        bubble.addEventListener("pointerdown", ev => {
+          if (ev.target.closest("button,a,input,textarea,select")) return;
+          holdTriggered = false;
+          clearHold();
+          holdTimer = setTimeout(() => {
+            holdTriggered = true;
+            openReactionMenu(bubble, m.id, ev.clientX, ev.clientY);
+          }, 520);
+        }, { passive: true });
+        bubble.addEventListener("pointerup", clearHold, { passive: true });
+        bubble.addEventListener("pointercancel", clearHold, { passive: true });
+        bubble.addEventListener("pointerleave", clearHold, { passive: true });
+        bubble.addEventListener("click", ev => {
+          if (holdTriggered) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            holdTriggered = false;
+          }
+        });
       }
       row.appendChild(bubble);
       const placeholder = thread.querySelector(".message-empty");
@@ -1972,15 +2010,17 @@
       if (keepBottom) scrollThread();
     };
 
-    function openReactionMenu(anchorEl, messageId) {
+    function openReactionMenu(anchorEl, messageId, clientX = null, clientY = null) {
       document.querySelectorAll(".reaction-popover").forEach(x => x.remove());
       const pop = document.createElement("div");
       pop.className = "reaction-popover glass";
       pop.innerHTML = PF.REACTION_SET.map(r => `<button type="button" data-quick-reaction="${esc(r)}">${esc(r)}</button>`).join("");
       document.body.appendChild(pop);
       const rect = anchorEl.getBoundingClientRect();
-      pop.style.left = `${Math.max(8, Math.min(window.innerWidth-210, rect.left))}px`;
-      pop.style.top = `${Math.max(8, rect.top - 54)}px`;
+      const x = Number.isFinite(clientX) ? clientX : rect.left + rect.width / 2;
+      const y = Number.isFinite(clientY) ? clientY : rect.top;
+      pop.style.left = `${Math.max(8, Math.min(window.innerWidth - 220, x - 90))}px`;
+      pop.style.top = `${Math.max(8, y - 58)}px`;
       $$('[data-quick-reaction]', pop).forEach(btn => btn.onclick = async () => {
         try { await PF.toggleMessageReaction(messageId, btn.dataset.quickReaction); await refreshOpenThread(); } catch (e) { notify(e.message, "error"); } finally { pop.remove(); }
       });
