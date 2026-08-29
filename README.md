@@ -168,3 +168,7 @@ The LiveKit client SDK is loaded from jsDelivr in the HTML pages. For production
 
 ## v14 data/access repair
 Run `supabase_v14_access_repair.sql` once in the Supabase SQL Editor. It only restores required RPC grants and the public media read policy; it does not delete or rewrite existing user data.
+
+
+## v16 social reliability
+Run `supabase_v16_social_resilience.sql` once in Supabase SQL Editor. It hardens likes and friend actions with retries, deterministic row locking, idempotent transitions, and current-user realtime refresh.
