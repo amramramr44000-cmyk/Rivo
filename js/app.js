@@ -46,6 +46,29 @@
     const logged = !!PF.currentUsername();
     $$(".auth-required").forEach(el => el.classList.toggle("hidden", !logged));
     $$(".guest-only").forEach(el => el.classList.toggle("hidden", logged));
+    const menuPanel = $("[data-menu-panel]");
+    if (menuPanel) {
+      let signout = menuPanel.querySelector("[data-menu-logout]");
+      if (logged) {
+        if (!signout) {
+          signout = document.createElement("button");
+          signout.type = "button";
+          signout.className = "menu-auth-logout";
+          signout.setAttribute("data-menu-logout", "true");
+          signout.textContent = "Sign out";
+          menuPanel.appendChild(signout);
+          signout.addEventListener("click", async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            try { await PF.clearSession(); location.href = menuPanel.closest("body")?.querySelector(".brand")?.getAttribute("href") || "../index.html"; }
+            catch (err) { notify(err?.message || "Could not sign out.", "error"); }
+          });
+        }
+        signout.classList.remove("hidden");
+      } else if (signout) {
+        signout.classList.add("hidden");
+      }
+    }
     // Prevent an already-authenticated session from using any Create Account link.
     $$('a[href$="signup.html"]:not(.guest-only)').forEach(el => {
       if (!logged) return;
@@ -302,7 +325,6 @@
     let qualityTimer = null;
     let callStartedAt = 0;
     let inboxClose = null;
-    let ringTimer = null;
 
     const ensureUI = () => {
       let h = $("#rivoCallUI");
@@ -425,10 +447,8 @@
       e.local.srcObject = null;
       if (callTimer) clearInterval(callTimer);
       if (qualityTimer) clearInterval(qualityTimer);
-      if (ringTimer) clearTimeout(ringTimer);
       callTimer = null;
       qualityTimer = null;
-      ringTimer = null;
       callStartedAt = 0;
       e.timer?.classList.add("hidden");
       if (e.timer) e.timer.textContent = "00:00";
@@ -688,22 +708,18 @@
         if (!playing) notifyCall("Tap Audio to start call sound.", "error");
       });
 
-      room.on(LK.RoomEvent.Disconnected, async reason => {
+      room.on(LK.RoomEvent.Disconnected, reason => {
         if (active) {
           notifyCall(
             reason ? `Call ended: ${reason}` : "Call connection ended.",
             "error"
           );
-          try { await PF.updateCallSession(active.callId, "ended"); } catch {}
           endCall(false);
         }
       });
 
-      room.on(LK.RoomEvent.ParticipantDisconnected, async () => {
-        if (active?.connected) {
-          try { await PF.updateCallSession(active.callId, "ended"); } catch {}
-          endCall(false);
-        }
+      room.on(LK.RoomEvent.ParticipantDisconnected, () => {
+        if (active?.connected) endCall(false);
       });
 
       room.on(LK.RoomEvent.MediaDevicesError, err => {
@@ -780,6 +796,16 @@
       const callId = crypto.randomUUID();
       const roomName = `rivo-${callId}`;
 
+      const e = E();
+      person(peer);
+      e.title.textContent = isVideo ? "Starting video call" : "Starting voice call";
+      e.sub.textContent = isVideo
+        ? "Video · waiting for answer"
+        : "Voice · waiting for answer";
+      state("Ringing…");
+      e.incoming.classList.add("hidden");
+      show();
+
       active = {
         role: "caller",
         meId: me.id,
@@ -789,53 +815,39 @@
         isVideo,
         roomName,
         connected: false,
+        inbox: null,
         channel: null,
         room: null,
         audioEls: []
       };
 
-      const e = E();
-      person(peer);
-      e.title.textContent = isVideo ? "Starting video call" : "Starting voice call";
-      e.sub.textContent = isVideo ? "Video · waiting for answer" : "Voice · waiting for answer";
-      state("Ringing…");
-      e.incoming.classList.add("hidden");
-      show();
-
       try {
-        // Persist the ring first. This removes the race where a broadcast is sent
-        // before the recipient's inbox is ready or while the device is reconnecting.
-        await PF.createCallSession(peer.username, roomName, callId, isVideo ? "video" : "audio");
+        active.channel = await PF.openCallChannel(
+          `rivo-call-${callId}`,
+          handleSignal
+        );
 
-        active.channel = await PF.openCallChannel(`rivo-call-${callId}`, handleSignal);
+        active.inbox = await PF.openCallChannel(
+          `rivo-call-inbox-${peer.userId}`,
+          handleSignal
+        );
 
-        // Broadcast is a fast path only. The DB session is the source of truth.
-        try {
-          await active.channel.send({
-            callId,
-            from: me.id,
-            to: peer.userId,
-            type: "offer",
-            payload: {
-              isVideo,
-              roomName,
-              displayName: me.displayName || me.username,
-              avatar: me.avatar || "",
-              username: me.username
-            }
-          });
-        } catch {}
-
-        // Ring timeout is kept client-side for UX, while DB expiry is server-side.
-        ringTimer = setTimeout(async () => {
-          if (!active || active.callId !== callId || active.connected) return;
-          try { await PF.updateCallSession(callId, "expired"); } catch {}
-          notifyCall("No answer.");
-          await endCall(false);
-        }, 45000);
+        await active.inbox.send({
+          callId,
+          from: me.id,
+          to: peer.userId,
+          type: "offer",
+          payload: {
+            isVideo,
+            roomName,
+            displayName: me.displayName || me.username,
+            avatar: me.avatar || "",
+            username: me.username
+          }
+        });
       } catch (err) {
-        notifyCall(err?.message || "Could not start the call", "error");
-        await endCall(false);
+        notifyCall(err.message || "Could not start the call", "error");
+        endCall(false);
       }
     }
 
@@ -843,7 +855,6 @@
       if (!active || msg.callId !== active.callId) return;
 
       if (msg.type === "accept" && active.role === "caller") {
-        if (ringTimer) { clearTimeout(ringTimer); ringTimer = null; }
         try {
           state("Connecting…");
           await connectMedia();
@@ -861,15 +872,6 @@
     }
 
     async function showIncoming(msg) {
-      if (active) {
-        if (active.callId === msg.callId) return;
-        try {
-          const busy = await PF.openCallChannel(`rivo-call-${msg.callId}`, null);
-          await busy.send({ callId: msg.callId, from: active.meId, to: msg.from, type: "busy" });
-          await busy.close();
-        } catch {}
-        return;
-      }
       const me = await PF.currentProfile();
       const u = msg.payload?.username || "";
 
@@ -921,8 +923,6 @@
       e.incoming.classList.add("hidden");
 
       try {
-        await PF.acceptCallSession(active.callId);
-
         active.channel = await PF.openCallChannel(
           `rivo-call-${active.callId}`,
           handleSignal
@@ -945,32 +945,27 @@
     async function declineIncoming() {
       if (!active) return;
 
-      try { await PF.updateCallSession(active.callId, "declined"); } catch {}
       try {
-        const box = await PF.openCallChannel(`rivo-call-${active.callId}`);
+        const box = await PF.openCallChannel(
+          `rivo-call-inbox-${active.peerId}`
+        );
+
         await box.send({
           callId: active.callId,
           from: active.meId,
           to: active.peerId,
           type: "decline"
         });
+
         await box.close();
       } catch {}
 
-      await endCall(false);
+      endCall(false);
     }
 
     async function endCall(send = true) {
       const old = active;
       active = null;
-
-      try {
-        if (old?.callId && send) {
-          await PF.updateCallSession(old.callId, "ended");
-        } else if (old?.callId && old.role === "callee" && old.connected) {
-          await PF.updateCallSession(old.callId, "ended");
-        }
-      } catch {}
 
       try {
         if (send && old?.channel) {
@@ -1780,6 +1775,11 @@
     let typingTimer = null;
     let typingStopTimer = null;
     const renderedMessageIds = new Set();
+    let mediaRecorder = null;
+    let recordingStream = null;
+    let recordingStartedAt = 0;
+    let recordingTimer = null;
+    let voiceDraft = null;
 
     const scrollThread = () => { thread.scrollTop = thread.scrollHeight; };
     const avatarMini = p => p?.avatar
@@ -1830,10 +1830,39 @@
       bubble.className = "message-bubble";
       bubble.dir = "auto";
       bubble.setAttribute("data-message-id", String(m.id));
-      const content = document.createElement("span");
-      content.className = PF.isEmojiOnly(m.content) ? "message-content emoji-only" : "message-content";
-      content.textContent = PF.normalizeMessageText(m.content);
-      bubble.appendChild(content);
+      if (m.message_type === "voice" && m.voice_path) {
+        const voiceWrap = document.createElement("div");
+        voiceWrap.className = "voice-message-bubble";
+        const play = document.createElement("button");
+        play.type = "button";
+        play.className = "voice-play-btn";
+        play.textContent = "▶";
+        play.setAttribute("aria-label", "Play voice message");
+        const audio = document.createElement("audio");
+        audio.preload = "metadata";
+        audio.controls = true;
+        audio.className = "voice-audio";
+        const dur = document.createElement("span");
+        dur.className = "voice-duration";
+        dur.textContent = "0:00";
+        voiceWrap.append(play, audio, dur);
+        bubble.appendChild(voiceWrap);
+        play.onclick = async () => {
+          try {
+            if (!audio.src) audio.src = await PF.getVoiceUrl(m.voice_path);
+            if (audio.paused) { await audio.play(); play.textContent = "Ⅱ"; } else { audio.pause(); play.textContent = "▶"; }
+          } catch (err) { notify(err.message || "Could not play voice message", "error"); }
+        };
+        audio.onplay = () => { play.textContent = "Ⅱ"; };
+        audio.onpause = () => { play.textContent = "▶"; };
+        audio.ontimeupdate = () => { const sec = Number(m.voice_duration || audio.currentTime || 0) / (m.voice_duration ? 1000 : 1); dur.textContent = `${Math.floor(sec/60)}:${String(Math.floor(sec%60)).padStart(2,"0")}`; };
+        audio.onloadedmetadata = () => { if (!m.voice_duration && Number.isFinite(audio.duration)) dur.textContent = `${Math.floor(audio.duration/60)}:${String(Math.floor(audio.duration%60)).padStart(2,"0")}`; };
+      } else {
+        const content = document.createElement("span");
+        content.className = PF.isEmojiOnly(m.content) ? "message-content emoji-only" : "message-content";
+        content.textContent = PF.normalizeMessageText(m.content);
+        bubble.appendChild(content);
+      }
       const time = document.createElement("time");
       time.textContent = new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       bubble.appendChild(time);
@@ -2056,6 +2085,52 @@
       if (sendBtn) sendBtn.disabled = true;
     });
 
+const voiceBar = $("#voiceMessageBar");
+const voiceRecordBtn = $("#voiceRecordBtn");
+const voiceMessageState = $("#voiceMessageState");
+const voiceMessageTime = $("#voiceMessageTime");
+const voiceMessageCancel = $("#voiceMessageCancel");
+const voiceMessageSend = $("#voiceMessageSend");
+const formatVoiceTime = ms => { const sec=Math.floor(Math.max(0, Number(ms)||0)/1000); return `${Math.floor(sec/60)}:${String(sec%60).padStart(2,"0")}`; };
+const stopVoiceStream = () => { try { recordingStream?.getTracks?.().forEach(t => t.stop()); } catch {} recordingStream=null; };
+const clearVoiceDraft = () => { voiceDraft=null; if(voiceMessageSend) voiceMessageSend.disabled=true; if(voiceBar) voiceBar.classList.add("hidden"); if(voiceMessageState) voiceMessageState.textContent="Ready"; if(voiceMessageTime) voiceMessageTime.textContent="0:00"; };
+const finishVoiceRecording = () => {
+  if (!mediaRecorder) return;
+  try { if (mediaRecorder.state !== "inactive") mediaRecorder.stop(); } catch {}
+  stopVoiceStream();
+  clearInterval(recordingTimer); recordingTimer=null; mediaRecorder=null;
+};
+voiceRecordBtn?.addEventListener("click", async () => {
+  if (!activeUser) { notify("Choose a conversation first.", "error"); return; }
+  if (mediaRecorder && mediaRecorder.state === "recording") { finishVoiceRecording(); return; }
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { notify("Voice recording is not supported in this browser.", "error"); return; }
+  try {
+    recordingStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+    const preferred=["audio/webm;codecs=opus","audio/ogg;codecs=opus","audio/webm","audio/mp4"].find(t=>MediaRecorder.isTypeSupported(t));
+    mediaRecorder = new MediaRecorder(recordingStream, preferred ? {mimeType:preferred, audioBitsPerSecond:64000} : undefined);
+    const chunks=[]; recordingStartedAt=Date.now(); voiceDraft=null;
+    mediaRecorder.ondataavailable = e => { if(e.data?.size) chunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      const duration=Math.min(Date.now()-recordingStartedAt, 5*60*1000);
+      const blob=new Blob(chunks,{type:mediaRecorder?.mimeType || "audio/webm"});
+      if(blob.size){ voiceDraft={blob,duration}; if(voiceBar) voiceBar.classList.remove("hidden"); if(voiceMessageState) voiceMessageState.textContent="Voice ready"; if(voiceMessageSend) voiceMessageSend.disabled=false; if(voiceRecordBtn) voiceRecordBtn.classList.remove("recording"); }
+    };
+    mediaRecorder.start(250);
+    voiceBar?.classList.remove("hidden");
+    if(voiceMessageState) voiceMessageState.textContent="Recording…";
+    if(voiceMessageTime) voiceMessageTime.textContent="0:00";
+    voiceRecordBtn?.classList.add("recording");
+    recordingTimer=setInterval(()=>{ const ms=Math.min(Date.now()-recordingStartedAt,5*60*1000); if(voiceMessageTime) voiceMessageTime.textContent=formatVoiceTime(ms); if(ms>=5*60*1000) finishVoiceRecording(); },250);
+  } catch(err){ stopVoiceStream(); notify("Microphone permission is required to record a voice message.","error"); }
+});
+voiceMessageCancel?.addEventListener("click",()=>{ finishVoiceRecording(); clearVoiceDraft(); if(voiceRecordBtn) voiceRecordBtn.classList.remove("recording"); });
+voiceMessageSend?.addEventListener("click",async()=>{
+  if(!voiceDraft || !activeUser) return;
+  const draft=voiceDraft; voiceMessageSend.disabled=true; if(voiceMessageState) voiceMessageState.textContent="Sending…";
+  try { await PF.sendVoiceMessage(activeUser,draft.blob,draft.duration); clearVoiceDraft(); await loadConversations(); await refreshOpenThread(); }
+  catch(err){ if(voiceMessageState) voiceMessageState.textContent="Failed — press Send voice to retry"; voiceMessageSend.disabled=false; notify(err.message||"Could not send voice message","error"); }
+});
+
     let resyncing = false;
     const resyncThread = async () => {
       // Fallback catch-up: re-pulls the open thread + conversation list from
@@ -2083,7 +2158,10 @@
       const isOwnEcho = msg.sender_id === me.id;
 
       if (isActiveConversation) {
-        appendMessage({
+        // Text rows arrive with their content directly; voice rows carry metadata
+        // in the companion table, so refresh the open thread to hydrate the audio.
+        if (msg.content === "[voice]") await refreshOpenThread();
+        else appendMessage({
           id: msg.id,
           sender_username: isOwnEcho ? me.username : activeUser,
           receiver_username: isOwnEcho ? activeUser : me.username,
@@ -2161,7 +2239,8 @@
         const d = await PF.adminGetUserDetails(username);
         if (!d) { detail.innerHTML = `<div class="empty-state"><h2>User not found</h2></div>`; return; }
         const visitorRows = (d.visitors || []).length ? d.visitors.map(v => `<div class="visitor-row"><span>${esc(v.display_name || v.username)}</span><span>@${esc(v.username)} · ${esc(new Date(v.last_seen).toLocaleDateString())}</span></div>`).join("") : `<div class="empty-state"><p>No identified visitors yet.</p></div>`;
-        detail.innerHTML = `<div class="admin-detail"><div class="admin-detail-head"><div><span class="eyebrow">ACCOUNT</span><h2 style="margin:5px 0 0">${esc(d.displayName || d.username)}</h2><div class="admin-detail-meta">@${esc(d.username)} · joined ${esc(new Date(d.created_at).toLocaleDateString())}</div></div><span class="admin-badge ${d.is_banned?'banned':''}">${d.is_banned?'Banned':'Active'}</span></div><div class="admin-stats"><div class="admin-stat"><span>Profile views</span><b>${esc(d.views)}</b></div><div class="admin-stat"><span>Profile likes</span><b>${esc(d.likes)}</b></div><div class="admin-stat"><span>Friends</span><b>${esc(d.friends)}</b></div></div><div class="field"><span>Adjust public counters</span><div class="form-grid"><input id="adminViews" class="field-input" type="number" min="0" value="${esc(d.views)}" placeholder="Views"><input id="adminLikes" class="field-input" type="number" min="0" value="${esc(d.likes)}" placeholder="Likes"></div></div><div class="admin-actions"><button class="btn btn-primary" id="adminSaveStats">Save counters</button><button class="btn" id="adminToggleBan">${d.is_banned?'Unban account':'Block account'}</button><a class="btn" href="profile.html?u=${encodeURIComponent(d.username)}" target="_blank" rel="noreferrer">Open profile</a></div><section><div class="section-head"><div><div class="section-kicker">VISITORS</div><h3>Recent profile visitors</h3></div></div><div class="visitor-list">${visitorRows}</div></section><section class="admin-card danger-zone"><div class="section-kicker">DANGER ZONE</div><h3>Delete account permanently</h3><p class="muted">Removes the auth account and cascading profile data. This cannot be undone.</p><button class="btn btn-danger" id="adminDeleteUser">Delete ${esc(d.username)}</button></section></div>`;
+        detail.innerHTML = `<div class="admin-detail"><div class="admin-detail-head"><div><span class="eyebrow">ACCOUNT</span><h2 style="margin:5px 0 0">${esc(d.displayName || d.username)}</h2><div class="admin-detail-meta">@${esc(d.username)} · joined ${esc(new Date(d.created_at).toLocaleDateString())}</div></div><span class="admin-badge ${d.is_banned?'banned':''}">${d.is_banned?'Banned':'Active'}</span></div><div class="admin-stats"><div class="admin-stat"><span>Profile views</span><b>${esc(d.views)}</b></div><div class="admin-stat"><span>Profile likes</span><b>${esc(d.likes)}</b></div><div class="admin-stat"><span>Friends</span><b>${esc(d.friends)}</b></div></div><section class="admin-edit-section"><div class="section-kicker">ACCOUNT EDIT</div><div class="form-grid"><label class="field"><span>Username</span><input id="adminUsername" class="field-input" value="${esc(d.username)}" maxlength="26"></label><label class="field"><span>Display name</span><input id="adminDisplayName" class="field-input" value="${esc(d.displayName || d.username)}" maxlength="80"></label></div><label class="field"><span>New password (leave blank to keep current password)</span><input id="adminPassword" class="field-input" type="password" minlength="8" maxlength="128" placeholder="Set a new password"></label><button class="btn btn-primary" id="adminSaveAccount">Save account</button><small class="muted">For security, the existing password is never displayed or retrievable; admins can only set a new password.</small></section><div class="field"><span>Adjust public counters</span><div class="form-grid"><input id="adminViews" class="field-input" type="number" min="0" value="${esc(d.views)}" placeholder="Views"><input id="adminLikes" class="field-input" type="number" min="0" value="${esc(d.likes)}" placeholder="Likes"></div></div><div class="admin-actions"><button class="btn btn-primary" id="adminSaveStats">Save counters</button><button class="btn" id="adminToggleBan">${d.is_banned?'Unban account':'Block account'}</button><a class="btn" href="profile.html?u=${encodeURIComponent(d.username)}" target="_blank" rel="noreferrer">Open profile</a></div><section><div class="section-head"><div><div class="section-kicker">VISITORS</div><h3>Recent profile visitors</h3></div></div><div class="visitor-list">${visitorRows}</div></section><section class="admin-card danger-zone"><div class="section-kicker">DANGER ZONE</div><h3>Delete account permanently</h3><p class="muted">Removes the auth account and cascading profile data. This cannot be undone.</p><button class="btn btn-danger" id="adminDeleteUser">Delete ${esc(d.username)}</button></section></div>`;
+        $("#adminSaveAccount").onclick = async () => { try { const result = await PF.adminUpdateUser(d.username, $("#adminUsername").value, $("#adminDisplayName").value, $("#adminPassword").value); notify(result?.passwordChanged ? "Account and password updated" : "Account updated", "success"); selected = result?.username || $("#adminUsername").value.trim().toLowerCase(); await loadUsers(""); await selectUser(selected); } catch(e) { notify(e.message || "Could not update account", "error"); } };
         $("#adminSaveStats").onclick = async () => { try { await PF.adminSetStats(d.username, $("#adminViews").value, $("#adminLikes").value); notify("Counters updated", "success"); await selectUser(d.username); } catch(e) { notify(e.message,"error"); } };
         $("#adminToggleBan").onclick = async () => { try { await PF.adminSetBanned(d.username, !d.is_banned); notify(d.is_banned?"Account unblocked":"Account blocked", "success"); await selectUser(d.username); } catch(e) { notify(e.message,"error"); } };
         $("#adminDeleteUser").onclick = async () => { if (!confirm(`Delete @${d.username} permanently?`)) return; try { await PF.adminDeleteUser(d.username); notify("Account deleted", "success"); selected=""; users = users.filter(u=>u.username!==d.username); drawUsers(); detail.innerHTML = `<div class="empty-state"><h2>Account deleted</h2></div>`; } catch(e) { notify(e.message,"error"); } };
@@ -2269,7 +2348,8 @@
     const reactButtons=POST_REACTIONS.map(r=>`<button type="button" class="reaction-chip ${myReaction===r?'active':''}" data-post-react="${esc(r)}">${r}<span>${Number((post.reactions||{})[r]||0)}</span></button>`).join('');
     const isOwner = !!author?.username && PF.normalizeUsername(author.username) === PF.normalizeUsername(PF.currentUsername() || "");
     const ownerActions = isOwner ? `<button type="button" class="post-action post-delete-action" data-post-delete>🗑 Delete</button>` : "";
-    return `<article class="post-card glass" data-post-id="${esc(post.id)}"><div class="post-main"><div class="post-author">${identityLink(author, profileMini(author), "post-author-avatar-link")}<div class="post-author-copy">${identityLink(author, `<span><b>${esc(author.displayName||author.username||"User")}</b><small>@${esc(author.username||"")}</small></span>`)}</div><span class="post-author-meta">${formatSocialTime(post.created_at)}</span>${ownerActions}</div>${note}<div class="post-content">${esc(post.content||"")}</div>${mediaHtml}<div class="post-reaction-row">${reactButtons}</div><div class="post-actions"><button class="post-action" data-post-comments>💬 ${Number(post.comments_count||0)} Comment</button><button class="post-action ${reposted?'active':''}" data-post-repost>↻ ${Number(post.reposts_count||0)} Repost</button><span class="post-action" aria-hidden="true">${reposted?'✓ Reposted':''}</span></div></div><div class="post-comments hidden"></div></article>`;
+    const reportAction = !isOwner ? `<button type="button" class="post-action post-report-action" data-post-report aria-label="Report post">⚑ Report</button>` : "";
+    return `<article class="post-card glass" data-post-id="${esc(post.id)}"><div class="post-main"><div class="post-author">${identityLink(author, profileMini(author), "post-author-avatar-link")}<div class="post-author-copy">${identityLink(author, `<span><b>${esc(author.displayName||author.username||"User")}</b><small>@${esc(author.username||"")}</small></span>`)}</div><span class="post-author-meta">${formatSocialTime(post.created_at)}</span>${ownerActions}</div>${note}<div class="post-content">${esc(post.content||"")}</div>${mediaHtml}<div class="post-reaction-row">${reactButtons}</div><div class="post-actions"><button class="post-action" data-post-comments>💬 ${Number(post.comments_count||0)} Comment</button><button class="post-action ${reposted?'active':''}" data-post-repost>↻ ${Number(post.reposts_count||0)} Repost</button>${reportAction}<span class="post-action" aria-hidden="true">${reposted?'✓ Reposted':''}</span></div></div><div class="post-comments hidden"></div></article>`;
   }
 
   async function renderPostComments(card, postId){
@@ -2283,6 +2363,12 @@
     card.querySelectorAll('[data-post-react]').forEach(btn=>btn.addEventListener('click',async()=>{if(!PF.currentUsername()){location.href='login.html';return}try{await PF.reactPost(post.id,btn.dataset.postReact);await refreshPostCard(post.id)}catch(e){notify(e.message,'error')}}));
     card.querySelector('[data-post-comments]')?.addEventListener('click',async()=>{await renderPostComments(card,post.id)});
     card.querySelector('[data-post-repost]')?.addEventListener('click',async()=>{if(!PF.currentUsername()){location.href='login.html';return}try{await PF.repostPost(post.id);await refreshPostCard(post.id)}catch(e){notify(e.message,'error')}});
+    card.querySelector('[data-post-report]')?.addEventListener('click',async()=>{
+      if(!PF.currentUsername()){location.href='login.html';return}
+      if(!window.confirm('Report this post?')) return;
+      try { const result = await PF.reportPost(post.id); notify(result?.deleted ? 'Post removed after reaching the report limit.' : 'Report submitted.', 'success'); if(result?.deleted) card.remove(); }
+      catch(e){ notify(e.message||'Could not report post','error'); }
+    });
     card.querySelector('[data-post-delete]')?.addEventListener('click',async()=>{
       if(!PF.currentUsername()) return;
       if(!window.confirm('Delete this post? This cannot be undone.')) return;
