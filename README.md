@@ -179,3 +179,9 @@ The LiveKit client SDK is loaded from jsDelivr in the HTML pages. For production
 - Call timer starts on successful initial LiveKit connection and stops on teardown.
 - Mobile notifications portal the existing popover to document.body while open to avoid sticky-header/overflow stacking issues.
 - Post images are clickable and open in a lightweight viewer with close/Escape support.
+
+
+## v24 targeted fixes
+- Post images remain frameless inside cards and open in a lightweight viewer.
+- Camera attachment is refreshed when LiveKit publishes the local camera track and when camera is enabled.
+- Mobile notification popover is fixed to the viewport above the mobile navigation area.
