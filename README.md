@@ -165,11 +165,11 @@ The LiveKit client SDK is loaded from jsDelivr in the HTML pages. For production
 - Removed the in-call audio-output selector UI so the browser/device keeps its normal audio output behavior.
 - No call signaling, LiveKit connection, token flow, media quality, or database logic was intentionally changed in this pass.
 
-## Phase 2 — Call Ring reliability
 
-This release keeps the existing LiveKit media path unchanged and adds a persistent, server-authoritative call-session layer for ringing.
-
-Run once in Supabase SQL Editor:
-- `supabase_phase2_call_ring.sql`
-
-It creates `public.rivo_call_sessions` plus secure RPCs and enables Realtime for that table. The browser uses the existing `rivo-livekit-token` Edge Function for LiveKit media tokens; no API secrets are added to the frontend.
+## Targeted Phase 2 additions (v21)
+- Three-line mobile menu now shows **Sign out** for authenticated users; guests see **Sign in**.
+- Added compact WhatsApp-style voice-message recording/sending to Messages. Voice files use the private `rivo-voice` Storage bucket.
+- Added a small **Report** action on posts; each account can report a post once, and a post is removed automatically when it reaches 10 unique reports.
+- Added an admin account editor for username/display name and **password reset**. Existing passwords are never readable/retrievable; the admin UI only lets an admin set a new password.
+- New SQL migration: `supabase_phase3_voice_reports_admin.sql`. Run it once in Supabase SQL Editor.
+- New Edge Function: `supabase/functions/rivo-admin-update-user/index.ts`. Deploy it as `rivo-admin-update-user` and keep the Supabase service-role key server-side.
