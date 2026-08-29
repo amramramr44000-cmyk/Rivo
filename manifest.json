@@ -1,0 +1,12 @@
+{
+  "background_color": "#140303",
+  "dir": "ltr",
+  "display": "standalone",
+  "name": "Rivo hub",
+  "orientation": "any",
+  "scope": "/",
+  "short_name": "Rivo",
+  "start_url": "/",
+  "theme_color": "#ffffff",
+  "description": "rivo"
+}
