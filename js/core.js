@@ -145,153 +145,6 @@
     return p;
   }
 
-  // ---------------------------------------------------------------------
-  // Session-authoritative operation guard.
-  //
-  // Every operation below identifies "who is doing this" strictly from
-  // Supabase Auth (auth.getSession() on the client / auth.uid() on the
-  // server) — never from the cached username in localStorage. That cache
-  // exists only for instant, non-authoritative UI decisions (e.g. showing
-  // a "sign in" link), and is refreshed from the real session on every
-  // auth state change, login and logout so it cannot leak between accounts.
-  //
-  // Root cause this section fixes: a desktop tab left open in the
-  // background for a long stretch gets its JS timers throttled by the
-  // browser, so supabase-js's built-in autoRefreshToken can miss its
-  // window and the access token silently goes stale. The next click
-  // (Like, friend request, opening a profile, ...) then goes out with a
-  // dead token, Postgres/PostgREST reject it, and the UI either showed a
-  // generic "Access denied" or quietly reverted. Phones rarely hit this
-  // because backgrounding a mobile browser tab usually reloads the page on
-  // return, re-authenticating from scratch. Desktop tabs do not.
-  //
-  // The fix: before every authenticated call we make sure the session is
-  // live, and if the call still fails with an auth-shaped error we force
-  // exactly ONE token refresh and retry the SAME call ONE time — never
-  // more, so a genuinely dead session fails fast with a clear message
-  // instead of looping.
-  // ---------------------------------------------------------------------
-  function isAuthError(error) {
-    if (!error) return false;
-    const code = String(error.code || "").toLowerCase();
-    const status = Number(error.status || 0);
-    const msg = String(error.message || "").toLowerCase();
-    return status === 401 || status === 403 ||
-      code === "pgrst301" || code === "42501" ||
-      msg.includes("jwt") || msg.includes("token") || msg.includes("expired") ||
-      msg.includes("not signed in") || msg.includes("invalid refresh token") ||
-      msg.includes("row-level security") || msg.includes("row level security") ||
-      msg.includes("permission denied");
-  }
-
-  async function getLiveSession() {
-    try {
-      const { data, error } = await sb.auth.getSession();
-      if (error) return null;
-      return data?.session || null;
-    } catch { return null; }
-  }
-
-  let refreshInFlight = null;
-  async function forceRefreshSession() {
-    // Coalesce concurrent refresh attempts (e.g. several buttons clicked at
-    // once right as the token expires) into a single network round-trip.
-    if (refreshInFlight) return refreshInFlight;
-    refreshInFlight = (async () => {
-      try {
-        const { data, error } = await sb.auth.refreshSession();
-        if (error) return null;
-        return data?.session || null;
-      } catch { return null; }
-    })();
-    try { return await refreshInFlight; } finally { refreshInFlight = null; }
-  }
-
-  function opError(opName, message, meta) {
-    const e = new Error(message);
-    e.op = opName;
-    if (meta) Object.assign(e, meta);
-    return e;
-  }
-
-  // Runs fn(session) against a guaranteed-live session. On any failure it
-  // logs full diagnostics (operation name, auth.uid(), the target of the
-  // operation, and the real Supabase error code/message) instead of
-  // swallowing them into a generic message. If the failure looks
-  // auth-shaped, it forces one token refresh and retries fn() exactly once.
-  async function withAuthedOp(opName, target, fn) {
-    requireClient();
-    let session = await getLiveSession();
-    if (!session?.user?.id) session = await forceRefreshSession();
-    if (!session?.user?.id) {
-      console.error("[Rivo]", opName, { auth_uid: null, target, error: "no active session" });
-      throw opError(opName, "Your session expired. Please sign in again.", { code: "NO_SESSION" });
-    }
-    await syncRealtimeAuth(session);
-    try {
-      return await fn(session);
-    } catch (error) {
-      if (!isAuthError(error)) {
-        console.error("[Rivo]", opName, { auth_uid: session.user.id, target, code: error?.code, message: error?.message });
-        throw opError(opName, error?.message || "Something went wrong.", { code: error?.code });
-      }
-      console.warn("[Rivo]", opName, "auth-shaped failure — refreshing session and retrying once", { auth_uid: session.user.id, target, code: error?.code, message: error?.message });
-      const refreshed = await forceRefreshSession();
-      if (!refreshed?.user?.id) {
-        console.error("[Rivo]", opName, { auth_uid: session.user.id, target, code: error?.code, message: error?.message, retried: false });
-        throw opError(opName, "Your session expired. Please sign in again.", { code: "SESSION_EXPIRED" });
-      }
-      await syncRealtimeAuth(refreshed);
-      try {
-        return await fn(refreshed);
-      } catch (error2) {
-        console.error("[Rivo]", opName, { auth_uid: refreshed.user.id, target, code: error2?.code, message: error2?.message, retried: true });
-        throw opError(opName, error2?.message || "Something went wrong.", { code: error2?.code });
-      }
-    }
-  }
-
-  // Same retry-on-auth-error diagnostics as withAuthedOp, but for reads
-  // that are also allowed for signed-out guests (e.g. viewing a public
-  // profile) — so, unlike withAuthedOp, it must NOT treat "no session" as
-  // a failure by itself.
-  async function withRetryOnAuthError(opName, target, fn) {
-    requireClient();
-    try {
-      return await fn();
-    } catch (error) {
-      if (!isAuthError(error)) {
-        console.error("[Rivo]", opName, { target, code: error?.code, message: error?.message });
-        throw opError(opName, error?.message || "Something went wrong.", { code: error?.code });
-      }
-      const session = await getLiveSession();
-      console.warn("[Rivo]", opName, "auth-shaped failure — refreshing session and retrying once", { auth_uid: session?.user?.id || null, target, code: error?.code, message: error?.message });
-      const refreshed = await forceRefreshSession();
-      if (refreshed?.user?.id) await syncRealtimeAuth(refreshed);
-      try {
-        return await fn();
-      } catch (error2) {
-        console.error("[Rivo]", opName, { auth_uid: refreshed?.user?.id || null, target, code: error2?.code, message: error2?.message, retried: true });
-        throw opError(opName, error2?.message || "Something went wrong.", { code: error2?.code });
-      }
-    }
-  }
-
-  // Prevents a rapid double-click (Like spammed, Add Friend mashed, Accept
-  // pressed twice) from firing the same mutation twice before the first
-  // response lands. Keyed per operation+target so unrelated actions never
-  // block each other, and never blocks a *second, different* operation.
-  const inFlightOps = new Map();
-  function withInFlightGuard(key, fn) {
-    if (inFlightOps.has(key)) return inFlightOps.get(key);
-    const p = (async () => {
-      try { return await fn(); }
-      finally { inFlightOps.delete(key); }
-    })();
-    inFlightOps.set(key, p);
-    return p;
-  }
-
   async function currentProfile(options = {}) {
     requireClient();
     const force = !!options.force;
@@ -299,25 +152,28 @@
       const cached = cacheRead(CURRENT_PROFILE_CACHE_KEY, CURRENT_PROFILE_CACHE_TTL);
       if (cached?.id) return cached;
     }
-    return withAuthedOp("PROFILE_READ", "self", async (session) => {
-      for (let attempt = 0; attempt < 4; attempt++) {
-        const { data, error } = await sb.from("profiles")
-          .select("id,username,public_data,private_data,created_at,updated_at")
-          .eq("id", session.user.id).maybeSingle();
-        if (error) throw error;
-        if (data) {
-          cacheUsername(data.username);
-          const merged = mergeProfile(data, true);
-          merged.id = data.id;
-          cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
-          return merged;
-        }
-        // Row not visible yet right after signup — not an auth failure,
-        // just replication lag. Keep waiting instead of bailing out.
-        if (attempt < 3) await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+    let session = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { data: sessionData, error: sessionError } = await sb.auth.getSession();
+      if (!sessionError && sessionData?.session?.user) { session = sessionData.session; break; }
+      if (attempt < 2) await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
+    }
+    if (!session?.user) return null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const { data, error } = await sb.from("profiles")
+        .select("id,username,public_data,private_data,created_at,updated_at")
+        .eq("id", session.user.id).maybeSingle();
+      if (error) throw error;
+      if (data) {
+        cacheUsername(data.username);
+        const merged = mergeProfile(data, true);
+        merged.id = data.id;
+        cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
+        return merged;
       }
-      return null;
-    });
+      if (attempt < 3) await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+    }
+    return null;
   }
 
   async function getProfile(username, options = {}) {
@@ -328,11 +184,8 @@
       const cached = cacheRead(PROFILE_CACHE_PREFIX + u, PROFILE_CACHE_TTL);
       if (cached) return cached;
     }
-    const data = await withRetryOnAuthError("PROFILE_READ", u, async () => {
-      const { data, error } = await sb.rpc("rivo_get_public_profile", { p_username: u });
-      if (error) throw error;
-      return data;
-    });
+    const { data, error } = await sb.rpc("rivo_get_public_profile", { p_username: u });
+    if (error) throw error;
     if (!data) return null;
     cacheWrite(PROFILE_CACHE_PREFIX + u, data);
     return data;
@@ -349,11 +202,8 @@
       if (cached) ready.push(cached); else missing.push(u);
     }
     if (missing.length) {
-      const data = await withRetryOnAuthError("PROFILE_READ", missing, async () => {
-        const { data, error } = await sb.rpc("rivo_get_public_profiles", { p_usernames: missing });
-        if (error) throw error;
-        return data;
-      });
+      const { data, error } = await sb.rpc("rivo_get_public_profiles", { p_usernames: missing });
+      if (error) throw error;
       for (const p of (Array.isArray(data) ? data : [])) { cacheWrite(PROFILE_CACHE_PREFIX + p.username, p); ready.push(p); }
     }
     const byName = new Map(ready.map(p => [p.username, p]));
@@ -365,11 +215,8 @@
     const key = "rivo_profiles_list_v2";
     const cached = cacheRead(key, 30 * 1000);
     if (cached) return cached;
-    const data = await withRetryOnAuthError("PROFILE_LIST", null, async () => {
-      const { data, error } = await sb.rpc("rivo_list_public_profiles", { p_limit: 24 });
-      if (error) throw error;
-      return data;
-    });
+    const { data, error } = await sb.rpc("rivo_list_public_profiles", { p_limit: 24 });
+    if (error) throw error;
     const list = Array.isArray(data) ? data : [];
     list.forEach(p => cacheWrite(PROFILE_CACHE_PREFIX + p.username, p));
     cacheWrite(key, list);
@@ -380,11 +227,8 @@
     requireClient();
     const q = String(query || "").trim().toLowerCase().replace(/^@/, "");
     if (!q) return [];
-    const data = await withRetryOnAuthError("PROFILE_SEARCH", q, async () => {
-      const { data, error } = await sb.rpc("rivo_search_profiles", { p_query: q, p_limit: 24 });
-      if (error) throw error;
-      return data;
-    });
+    const { data, error } = await sb.rpc("rivo_search_profiles", { p_query: q, p_limit: 24 });
+    if (error) throw error;
     return Array.isArray(data) ? data : [];
   }
 
@@ -450,19 +294,19 @@
       public_data: publicData(row),
       updated_at: new Date().toISOString()
     };
-    return withAuthedOp("PROFILE_UPDATE", row.username, async (session) => {
-      const { data, error } = await sb.from("profiles")
-        .update(payload).eq("id", session.user.id)
-        .select("username,public_data,private_data,created_at,updated_at").single();
-      if (error) throw error;
-      cacheUsername(data.username);
-      invalidateProfileCache(data.username);
-      const merged = mergeProfile(data, true);
-      merged.id = data.id;
-      cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
-      cacheWrite(PROFILE_CACHE_PREFIX + data.username, merged);
-      return merged;
-    });
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session?.user?.id) throw new Error("Your session expired. Please sign in again.");
+    const { data, error } = await sb.from("profiles")
+      .update(payload).eq("id", session.user.id)
+      .select("username,public_data,private_data,created_at,updated_at").single();
+    if (error) throw error;
+    cacheUsername(data.username);
+    invalidateProfileCache(data.username);
+    const merged = mergeProfile(data, true);
+    merged.id = data.id;
+    cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
+    cacheWrite(PROFILE_CACHE_PREFIX + data.username, merged);
+    return merged;
   }
 
   async function updateProfile(patch) {
@@ -555,56 +399,42 @@
     return false;
   }
 
-  async function callRpc(name, args, opName) {
-    return withAuthedOp(opName || name, args, async () => {
-      const { data, error } = await sb.rpc(name, args || {});
-      if (error) throw error;
-      return data;
-    });
+  async function callRpc(name, args) {
+    requireClient();
+    const { data, error } = await sb.rpc(name, args || {});
+    if (error) throw error;
+    return data;
   }
 
   async function sendFriendRequest(targetUsername) {
     const u = normalizeUsername(targetUsername);
-    return withInFlightGuard(`FRIEND_REQUEST_INSERT:${u}`, async () => {
-      const result = await callRpc("rivo_send_friend_request", { p_target_username: u }, "FRIEND_REQUEST_INSERT");
-      invalidateProfileCache(u);
-      return result;
-    });
+    const result = await callRpc("rivo_send_friend_request", { p_target_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   async function acceptFriendRequest(fromUsername) {
     const u = normalizeUsername(fromUsername);
-    return withInFlightGuard(`FRIEND_REQUEST_ACCEPT:${u}`, async () => {
-      // Accepting is what actually creates the friendship server-side
-      // (FRIENDSHIP_CREATE), so a failure here is tagged with both codes
-      // in the console diagnostics.
-      const result = await callRpc("rivo_accept_friend_request", { p_from_username: u }, "FRIEND_REQUEST_ACCEPT/FRIENDSHIP_CREATE");
-      invalidateProfileCache(u);
-      return result;
-    });
+    const result = await callRpc("rivo_accept_friend_request", { p_from_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   async function rejectFriendRequest(fromUsername) {
     const u = normalizeUsername(fromUsername);
-    return withInFlightGuard(`FRIEND_REQUEST_REJECT:${u}`, async () => {
-      const result = await callRpc("rivo_reject_friend_request", { p_from_username: u }, "FRIEND_REQUEST_REJECT");
-      invalidateProfileCache(u);
-      return result;
-    });
+    const result = await callRpc("rivo_reject_friend_request", { p_from_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   async function removeFriend(username) {
     const u = normalizeUsername(username);
-    return withInFlightGuard(`FRIENDSHIP_REMOVE:${u}`, async () => {
-      const result = await callRpc("rivo_remove_friend", { p_username: u }, "FRIENDSHIP_REMOVE");
-      invalidateProfileCache(u);
-      return result;
-    });
+    const result = await callRpc("rivo_remove_friend", { p_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   async function toggleLike(username) {
     const u = normalizeUsername(username);
-    return withInFlightGuard(`LIKE_TOGGLE:${u}`, async () => {
-      const result = await callRpc("rivo_toggle_like", { p_username: u }, "LIKE_TOGGLE");
-      invalidateProfileCache(u);
-      return result;
-    });
+    const result = await callRpc("rivo_toggle_like", { p_username: u });
+    invalidateProfileCache(u);
+    return result;
   }
   function friendshipState(profile, targetUsername) {
     const u = normalizeUsername(targetUsername);
@@ -615,7 +445,7 @@
     return "none";
   }
   async function addView(username) {
-    return callRpc("rivo_add_view", { p_username: normalizeUsername(username) }, "PROFILE_VIEW_ADD");
+    return callRpc("rivo_add_view", { p_username: normalizeUsername(username) });
   }
 
   function normalizeWhoCanMessage(value) {
@@ -1000,37 +830,6 @@
           .then(({data: row}) => { if (row?.username) cacheUsername(row.username); });
       }
     });
-
-    // Proactively keep the session alive on desktop.
-    //
-    // Backgrounding a mobile browser tab usually reloads the page when the
-    // user comes back to it, which re-authenticates for free. A desktop
-    // tab left open (or just unfocused) for a long stretch does not reload
-    // — its timers just get throttled, so the built-in autoRefreshToken can
-    // miss its window and the access token quietly goes stale. If we wait
-    // for the user's next click to discover that, it looks like a random
-    // "Access denied". Instead, every time the tab becomes visible/focused
-    // again, comes back online, or every few minutes while visible, we
-    // check the token's remaining lifetime and refresh it ahead of time.
-    let lastResumeSync = 0;
-    async function resyncSessionOnResume() {
-      const now = Date.now();
-      if (now - lastResumeSync < 5000) return; // debounce bursts of focus/visibility/online firing together
-      lastResumeSync = now;
-      const session = await getLiveSession();
-      if (!session) return;
-      const msRemaining = session.expires_at ? (session.expires_at * 1000 - now) : Infinity;
-      if (msRemaining < 90 * 1000) {
-        const refreshed = await forceRefreshSession();
-        await syncRealtimeAuth(refreshed);
-      } else {
-        await syncRealtimeAuth(session);
-      }
-    }
-    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") resyncSessionOnResume(); });
-    window.addEventListener("focus", resyncSessionOnResume);
-    window.addEventListener("online", resyncSessionOnResume);
-    setInterval(() => { if (document.visibilityState === "visible") resyncSessionOnResume(); }, 4 * 60 * 1000);
   }
 
 
@@ -1217,13 +1016,9 @@
   async function getPost(id) { return callRpc("rivo_get_post", { p_post_id: Number(id) }); }
   async function createPost(content, media=[]) { return callRpc("rivo_create_post", { p_content: String(content||""), p_media: media.slice(0,5) }); }
   async function deletePost(id) { return callRpc("rivo_delete_post", { p_post_id:Number(id) }); }
-  async function reactPost(id, reaction) {
-    return withInFlightGuard(`POST_REACTION_TOGGLE:${id}`, () => callRpc("rivo_toggle_post_reaction", { p_post_id:Number(id), p_reaction:reaction }, "POST_REACTION_TOGGLE"));
-  }
-  async function commentPost(id, content) { return callRpc("rivo_add_post_comment", { p_post_id:Number(id), p_content:String(content||"") }, "POST_COMMENT_ADD"); }
-  async function repostPost(id) {
-    return withInFlightGuard(`POST_REPOST_TOGGLE:${id}`, () => callRpc("rivo_toggle_post_repost", { p_post_id:Number(id) }, "POST_REPOST_TOGGLE"));
-  }
+  async function reactPost(id, reaction) { return callRpc("rivo_toggle_post_reaction", { p_post_id:Number(id), p_reaction:reaction }); }
+  async function commentPost(id, content) { return callRpc("rivo_add_post_comment", { p_post_id:Number(id), p_content:String(content||"") }); }
+  async function repostPost(id) { return callRpc("rivo_toggle_post_repost", { p_post_id:Number(id) }); }
   async function uploadCommunityImage(file) {
     requireClient();
     const me=await currentProfile();
