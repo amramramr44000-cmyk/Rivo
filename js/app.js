@@ -46,6 +46,14 @@
     const logged = !!PF.currentUsername();
     $$(".auth-required").forEach(el => el.classList.toggle("hidden", !logged));
     $$(".guest-only").forEach(el => el.classList.toggle("hidden", logged));
+    // Prevent an already-authenticated session from using any Create Account link.
+    $$('a[href$="signup.html"]:not(.guest-only)').forEach(el => {
+      if (!logged) return;
+      el.setAttribute("aria-disabled", "true");
+      el.setAttribute("tabindex", "-1");
+      el.classList.add("disabled-link");
+      el.addEventListener("click", e => e.preventDefault(), { once: true });
+    });
     if (logged) initNotificationCenter();
   }
 
@@ -294,6 +302,7 @@
     let qualityTimer = null;
     let callStartedAt = 0;
     let inboxClose = null;
+    let ringTimer = null;
 
     const ensureUI = () => {
       let h = $("#rivoCallUI");
@@ -308,7 +317,7 @@
               <div class="call-person-head">
                 <span class="eyebrow">RIVO CALL</span>
                 <h2 data-call-title>Ready to call</h2>
-                <small data-call-subtitle>Private voice & video</small>
+                <div class="call-time-wrap"><small data-call-subtitle>Private voice & video</small><span class="call-timer hidden" data-call-timer>00:00</span></div>
               </div>
               <div class="call-head-actions">
                 <span class="call-quality" data-call-quality title="Connection quality">
@@ -386,6 +395,7 @@
         panel: $(".call-panel", h),
         title: $("[data-call-title]", h),
         sub: $("[data-call-subtitle]", h),
+        timer: $("[data-call-timer]", h),
         name: $("[data-call-name]", h),
         av: $("[data-call-avatar]", h),
         state: $("[data-call-state]", h),
@@ -415,9 +425,13 @@
       e.local.srcObject = null;
       if (callTimer) clearInterval(callTimer);
       if (qualityTimer) clearInterval(qualityTimer);
+      if (ringTimer) clearTimeout(ringTimer);
       callTimer = null;
       qualityTimer = null;
+      ringTimer = null;
       callStartedAt = 0;
+      e.timer?.classList.add("hidden");
+      if (e.timer) e.timer.textContent = "00:00";
       e.qualityText.textContent = "—";
       e.quality.className = "call-quality";
     };
@@ -443,13 +457,18 @@
     const timer = () => {
       callStartedAt = Date.now();
       if (callTimer) clearInterval(callTimer);
-      callTimer = setInterval(() => {
-        const s = Math.floor((Date.now() - callStartedAt) / 1000);
+      const tick = () => {
+        if (!active || !callStartedAt) return;
+        const s = Math.max(0, Math.floor((Date.now() - callStartedAt) / 1000));
         const mm = String(Math.floor(s / 60)).padStart(2, "0");
         const ss = String(s % 60).padStart(2, "0");
         const e = E();
-        e.sub.textContent = `Connected · ${mm}:${ss}`;
-      }, 1000);
+        e.sub.textContent = "Connected";
+        e.timer?.classList.remove("hidden");
+        if (e.timer) e.timer.textContent = `${mm}:${ss}`;
+      };
+      tick();
+      callTimer = setInterval(tick, 1000);
     };
 
     const qualityLabel = q => {
@@ -669,18 +688,22 @@
         if (!playing) notifyCall("Tap Audio to start call sound.", "error");
       });
 
-      room.on(LK.RoomEvent.Disconnected, reason => {
+      room.on(LK.RoomEvent.Disconnected, async reason => {
         if (active) {
           notifyCall(
             reason ? `Call ended: ${reason}` : "Call connection ended.",
             "error"
           );
+          try { await PF.updateCallSession(active.callId, "ended"); } catch {}
           endCall(false);
         }
       });
 
-      room.on(LK.RoomEvent.ParticipantDisconnected, () => {
-        if (active?.connected) endCall(false);
+      room.on(LK.RoomEvent.ParticipantDisconnected, async () => {
+        if (active?.connected) {
+          try { await PF.updateCallSession(active.callId, "ended"); } catch {}
+          endCall(false);
+        }
       });
 
       room.on(LK.RoomEvent.MediaDevicesError, err => {
@@ -757,16 +780,6 @@
       const callId = crypto.randomUUID();
       const roomName = `rivo-${callId}`;
 
-      const e = E();
-      person(peer);
-      e.title.textContent = isVideo ? "Starting video call" : "Starting voice call";
-      e.sub.textContent = isVideo
-        ? "Video · waiting for answer"
-        : "Voice · waiting for answer";
-      state("Ringing…");
-      e.incoming.classList.add("hidden");
-      show();
-
       active = {
         role: "caller",
         meId: me.id,
@@ -776,39 +789,53 @@
         isVideo,
         roomName,
         connected: false,
-        inbox: null,
         channel: null,
         room: null,
         audioEls: []
       };
 
+      const e = E();
+      person(peer);
+      e.title.textContent = isVideo ? "Starting video call" : "Starting voice call";
+      e.sub.textContent = isVideo ? "Video · waiting for answer" : "Voice · waiting for answer";
+      state("Ringing…");
+      e.incoming.classList.add("hidden");
+      show();
+
       try {
-        active.channel = await PF.openCallChannel(
-          `rivo-call-${callId}`,
-          handleSignal
-        );
+        // Persist the ring first. This removes the race where a broadcast is sent
+        // before the recipient's inbox is ready or while the device is reconnecting.
+        await PF.createCallSession(peer.username, roomName, callId, isVideo ? "video" : "audio");
 
-        active.inbox = await PF.openCallChannel(
-          `rivo-call-inbox-${peer.userId}`,
-          handleSignal
-        );
+        active.channel = await PF.openCallChannel(`rivo-call-${callId}`, handleSignal);
 
-        await active.inbox.send({
-          callId,
-          from: me.id,
-          to: peer.userId,
-          type: "offer",
-          payload: {
-            isVideo,
-            roomName,
-            displayName: me.displayName || me.username,
-            avatar: me.avatar || "",
-            username: me.username
-          }
-        });
+        // Broadcast is a fast path only. The DB session is the source of truth.
+        try {
+          await active.channel.send({
+            callId,
+            from: me.id,
+            to: peer.userId,
+            type: "offer",
+            payload: {
+              isVideo,
+              roomName,
+              displayName: me.displayName || me.username,
+              avatar: me.avatar || "",
+              username: me.username
+            }
+          });
+        } catch {}
+
+        // Ring timeout is kept client-side for UX, while DB expiry is server-side.
+        ringTimer = setTimeout(async () => {
+          if (!active || active.callId !== callId || active.connected) return;
+          try { await PF.updateCallSession(callId, "expired"); } catch {}
+          notifyCall("No answer.");
+          await endCall(false);
+        }, 45000);
       } catch (err) {
-        notifyCall(err.message || "Could not start the call", "error");
-        endCall(false);
+        notifyCall(err?.message || "Could not start the call", "error");
+        await endCall(false);
       }
     }
 
@@ -816,6 +843,7 @@
       if (!active || msg.callId !== active.callId) return;
 
       if (msg.type === "accept" && active.role === "caller") {
+        if (ringTimer) { clearTimeout(ringTimer); ringTimer = null; }
         try {
           state("Connecting…");
           await connectMedia();
@@ -833,6 +861,15 @@
     }
 
     async function showIncoming(msg) {
+      if (active) {
+        if (active.callId === msg.callId) return;
+        try {
+          const busy = await PF.openCallChannel(`rivo-call-${msg.callId}`, null);
+          await busy.send({ callId: msg.callId, from: active.meId, to: msg.from, type: "busy" });
+          await busy.close();
+        } catch {}
+        return;
+      }
       const me = await PF.currentProfile();
       const u = msg.payload?.username || "";
 
@@ -884,6 +921,8 @@
       e.incoming.classList.add("hidden");
 
       try {
+        await PF.acceptCallSession(active.callId);
+
         active.channel = await PF.openCallChannel(
           `rivo-call-${active.callId}`,
           handleSignal
@@ -906,27 +945,32 @@
     async function declineIncoming() {
       if (!active) return;
 
+      try { await PF.updateCallSession(active.callId, "declined"); } catch {}
       try {
-        const box = await PF.openCallChannel(
-          `rivo-call-inbox-${active.peerId}`
-        );
-
+        const box = await PF.openCallChannel(`rivo-call-${active.callId}`);
         await box.send({
           callId: active.callId,
           from: active.meId,
           to: active.peerId,
           type: "decline"
         });
-
         await box.close();
       } catch {}
 
-      endCall(false);
+      await endCall(false);
     }
 
     async function endCall(send = true) {
       const old = active;
       active = null;
+
+      try {
+        if (old?.callId && send) {
+          await PF.updateCallSession(old.callId, "ended");
+        } else if (old?.callId && old.role === "callee" && old.connected) {
+          await PF.updateCallSession(old.callId, "ended");
+        }
+      } catch {}
 
       try {
         if (send && old?.channel) {
@@ -1197,13 +1241,28 @@
 
   async function initSignup() {
     const form = $("#signupForm"); if (!form) return;
+    const existingSession = (await window.__rivoSupabase?.auth.getSession())?.data?.session || null;
+    const submitButton = form.querySelector("button[type=submit]");
+    const existingNotice = document.createElement("div");
+    existingNotice.className = "auth-session-lock";
+    if (existingSession?.user) {
+      if (submitButton) submitButton.disabled = true;
+      existingNotice.innerHTML = `You are already signed in. <a href="settings.html">Open Settings</a> to sign out before creating another account.`;
+      form.prepend(existingNotice);
+    }
     const human = setupHumanCheck(form, "signupHumanCheck", "signupCaptchaMsg");
+    if (existingSession?.user && submitButton) submitButton.disabled = true;
     $("#signupUsername")?.addEventListener("input", () => {
       const v = PF.normalizeUsername($("#signupUsername").value);
       $("#usernameHint") && ($("#usernameHint").textContent = PF.validUsername(v) ? "Username format is valid." : "3–26 chars: letters, numbers, . _ -");
     });
     form.addEventListener("submit", async e => {
       e.preventDefault();
+      const liveSession = (await window.__rivoSupabase?.auth.getSession())?.data?.session || null;
+      if (liveSession?.user) {
+        $("#signupMsg") && ($("#signupMsg").textContent = "You are already signed in. Sign out before creating another account.");
+        return;
+      }
       const btn = form.querySelector("button[type=submit]");
       $("#signupMsg") && ($("#signupMsg").textContent = "");
       if (human?.isVerified && !human.isVerified()) {
@@ -1241,7 +1300,9 @@
     "aurora-glass": { accent: "#67e8f9", card: "aurora" },
     "obsidian-court": { accent: "#f0b65b", card: "frame" },
     "pixel-arcade": { accent: "#7dff8d", card: "terminal" },
-    "botanical-night": { accent: "#79d79a", card: "frosted" }
+    "botanical-night": { accent: "#79d79a", card: "frosted" },
+    "white-atelier": { accent: "#172033", card: "paper" },
+    "white-signal": { accent: "#3157ff", card: "split" }
   };
 
   const templateNames = {
@@ -1259,7 +1320,9 @@
     "aurora-glass": "Aurora Glass",
     "obsidian-court": "Obsidian Court",
     "pixel-arcade": "Pixel Arcade",
-    "botanical-night": "Botanical Night"
+    "botanical-night": "Botanical Night",
+    "white-atelier": "White Atelier",
+    "white-signal": "White Signal"
   };
 
   function applyVisual(state, target = document.documentElement) {
@@ -1447,8 +1510,14 @@
     return list.map(b => `<span class="badge-pill" title="${esc(b.name)}"><span>${esc(b.icon)}</span>${esc(b.name)}</span>`).join("");
   }
 
+  function identityLink(p, inner, extraClass = "") {
+    const u = PF.normalizeUsername(p?.username || "");
+    if (!u) return inner;
+    return `<a class="rivo-identity-link ${extraClass}" href="profile.html?u=${encodeURIComponent(u)}" data-user-profile="${esc(u)}" aria-label="Open @${esc(u)} profile">${inner}</a>`;
+  }
+
   function friendPreviewRows(friendProfiles, max = 5) {
-    return friendProfiles.slice(0, max).map(p => `<a class="friend-mini" href="profile.html?u=${encodeURIComponent(p.username)}">${avatarMarkup(p, "avatar-xs")}<span><b>${esc(p.displayName)}</b><small>@${esc(p.username)}</small></span></a>`).join("");
+    return friendProfiles.slice(0, max).map(p => identityLink(p, `<span class="friend-mini">${avatarMarkup(p, "avatar-xs")}<span><b>${esc(p.displayName)}</b><small>@${esc(p.username)}</small></span></span>`)).join("");
   }
 
   function renderMusic(p) {
@@ -1698,7 +1767,9 @@
     const form = $("#messageForm");
     const input = $("#messageInput");
     const status = $("#messageStatus");
-    if (!list || !thread || !title || !form || !input || !status) return;
+    const messagesLayout = document.querySelector(".messages-layout");
+    const mobileBack = $("#messageMobileBack");
+    if (!list || !thread || !title || !form || !input || !status || !messagesLayout) return;
 
     let activeUser = "";
     let activeUserId = "";
@@ -1740,9 +1811,14 @@
       const q = String(search.value || "").trim().toLowerCase().replace(/^@/, "");
       const filtered = conversations.filter(c => !q || c.username.includes(q) || String(c.displayName || "").toLowerCase().includes(q));
       list.innerHTML = filtered.length
-        ? filtered.map(c => `<button type="button" class="conversation-item ${activeUser === c.username ? "active" : ""}" data-conversation="${esc(c.username)}"><span class="conversation-avatar">${avatarMini(c)}</span><span class="conversation-copy"><b>${esc(c.displayName)}</b><small>@${esc(c.username)}</small><em>${esc(c.lastMessage || "No messages yet")}</em></span><time>${esc(c.updatedLabel || "")}</time></button>`).join("")
+        ? filtered.map(c => `<button type="button" class="conversation-item ${activeUser === c.username ? "active" : ""}" data-conversation="${esc(c.username)}"><span class="conversation-avatar" data-profile-open="${esc(c.username)}" role="link" tabindex="0" aria-label="Open @${esc(c.username)} profile">${avatarMini(c)}</span><span class="conversation-copy"><span data-profile-open="${esc(c.username)}" class="conversation-person" role="link" tabindex="0"><b>${esc(c.displayName)}</b><small>@${esc(c.username)}</small></span><em>${esc(c.lastMessage || "No messages yet")}</em></span><time>${esc(c.updatedLabel || "")}</time></button>`).join("")
         : `<div class="message-list-empty">${q ? "No matching conversations." : "No conversations yet."}</div>`;
       $$('[data-conversation]').forEach(btn => btn.onclick = () => openConversation(btn.dataset.conversation));
+      list.querySelectorAll('[data-profile-open]').forEach(el => {
+        const open = ev => { ev.preventDefault(); ev.stopPropagation(); location.href = `profile.html?u=${encodeURIComponent(PF.normalizeUsername(el.dataset.profileOpen || ""))}`; };
+        el.addEventListener('click', open);
+        el.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') open(ev); });
+      });
     };
 
     const appendMessage = (m, keepBottom = true) => {
@@ -1850,6 +1926,7 @@
     }
 
     async function openConversation(username) {
+      messagesLayout.classList.add("conversation-open");
       window.__rivoActiveMessageUser = PF.normalizeUsername(username);
       activeUser = PF.normalizeUsername(username);
       const c = conversations.find(x => x.username === activeUser);
@@ -1882,7 +1959,7 @@
       }
 
       title.innerHTML = conversation
-        ? `<span class="thread-user-avatar">${avatarMini(conversation)}</span><span><b>${esc(conversation.displayName)}</b><small>@${esc(conversation.username)}</small></span>`
+        ? `<span class="thread-user-avatar">${identityLink(conversation, avatarMini(conversation), "thread-avatar-link")}</span><span>${identityLink(conversation, `<span><b>${esc(conversation.displayName)}</b><small>@${esc(conversation.username)}</small></span>`)}</span>`
         : `<span><b>@${esc(activeUser)}</b></span>`;
       renderConversations();
       try {
@@ -1966,6 +2043,18 @@
       }
     });
     search.addEventListener("input", renderConversations);
+    mobileBack?.addEventListener("click", () => {
+      messagesLayout.classList.remove("conversation-open");
+      activeUser = "";
+      activeUserId = "";
+      window.__rivoActiveMessageUser = "";
+      title.innerHTML = `<span class="thread-placeholder">Choose a conversation</span>`;
+      renderThread([]);
+      input.value = "";
+      input.disabled = true;
+      const sendBtn = form.querySelector('button[type="submit"]');
+      if (sendBtn) sendBtn.disabled = true;
+    });
 
     let resyncing = false;
     const resyncThread = async () => {
@@ -2180,14 +2269,14 @@
     const reactButtons=POST_REACTIONS.map(r=>`<button type="button" class="reaction-chip ${myReaction===r?'active':''}" data-post-react="${esc(r)}">${r}<span>${Number((post.reactions||{})[r]||0)}</span></button>`).join('');
     const isOwner = !!author?.username && PF.normalizeUsername(author.username) === PF.normalizeUsername(PF.currentUsername() || "");
     const ownerActions = isOwner ? `<button type="button" class="post-action post-delete-action" data-post-delete>🗑 Delete</button>` : "";
-    return `<article class="post-card glass" data-post-id="${esc(post.id)}"><div class="post-main"><div class="post-author">${profileMini(author)}<div class="post-author-copy"><b>${esc(author.displayName||author.username||"User")}</b><a href="profile.html?u=${encodeURIComponent(author.username||"")}">@${esc(author.username||"")}</a></div><span class="post-author-meta">${formatSocialTime(post.created_at)}</span>${ownerActions}</div>${note}<div class="post-content">${esc(post.content||"")}</div>${mediaHtml}<div class="post-reaction-row">${reactButtons}</div><div class="post-actions"><button class="post-action" data-post-comments>💬 ${Number(post.comments_count||0)} Comment</button><button class="post-action ${reposted?'active':''}" data-post-repost>↻ ${Number(post.reposts_count||0)} Repost</button><span class="post-action" aria-hidden="true">${reposted?'✓ Reposted':''}</span></div></div><div class="post-comments hidden"></div></article>`;
+    return `<article class="post-card glass" data-post-id="${esc(post.id)}"><div class="post-main"><div class="post-author">${identityLink(author, profileMini(author), "post-author-avatar-link")}<div class="post-author-copy">${identityLink(author, `<span><b>${esc(author.displayName||author.username||"User")}</b><small>@${esc(author.username||"")}</small></span>`)}</div><span class="post-author-meta">${formatSocialTime(post.created_at)}</span>${ownerActions}</div>${note}<div class="post-content">${esc(post.content||"")}</div>${mediaHtml}<div class="post-reaction-row">${reactButtons}</div><div class="post-actions"><button class="post-action" data-post-comments>💬 ${Number(post.comments_count||0)} Comment</button><button class="post-action ${reposted?'active':''}" data-post-repost>↻ ${Number(post.reposts_count||0)} Repost</button><span class="post-action" aria-hidden="true">${reposted?'✓ Reposted':''}</span></div></div><div class="post-comments hidden"></div></article>`;
   }
 
   async function renderPostComments(card, postId){
     const box=card.querySelector('.post-comments'); if(!box) return;
     box.classList.remove('hidden'); box.innerHTML=`<div class="empty-state"><p>Loading comments…</p></div>`;
     const post=await PF.getPost(postId); const comments=Array.isArray(post?.comments)?post.comments:[];
-    box.innerHTML=`<div class="comment-list">${comments.length?comments.map(c=>`<div class="comment">${profileMini(c.author)}<div class="comment-bubble"><b>${esc(c.author?.displayName||c.author?.username||"User")}</b><p>${esc(c.content)}</p></div></div>`).join(""): `<div class="message-list-empty">No comments yet. Start the conversation.</div>`}</div><form class="comment-form"><input class="field-input" maxlength="2000" placeholder="Write a comment…" required><button class="btn btn-sm btn-primary">Send</button></form>`;
+    box.innerHTML=`<div class="comment-list">${comments.length?comments.map(c=>`<div class="comment">${identityLink(c.author, profileMini(c.author), "comment-avatar-link")}<div class="comment-bubble">${identityLink(c.author, `<b>${esc(c.author?.displayName||c.author?.username||"User")}</b>`)}<p>${esc(c.content)}</p></div></div>`).join(""): `<div class="message-list-empty">No comments yet. Start the conversation.</div>`}</div><form class="comment-form"><input class="field-input" maxlength="2000" placeholder="Write a comment…" required><button class="btn btn-sm btn-primary">Send</button></form>`;
     box.querySelector('form')?.addEventListener('submit',async e=>{e.preventDefault();const input=e.currentTarget.querySelector('input');try{await PF.commentPost(postId,input.value);input.value='';await renderPostComments(card,postId);}catch(err){notify(err.message,'error')}});
   }
   function bindPostCard(card, post){
@@ -2262,14 +2351,14 @@
     document.body.classList.add('community-chat-open');
     const draw=async()=>{
       const msgs=await PF.getCommunityMessages(id);
-      $('#roomMessages').innerHTML=msgs.map(m=>`<div class="room-message ${m.author?.username===me?'mine':''}">${m.author?.username!==me?profileMini(m.author):''}<div class="room-bubble"><b>${esc(m.author?.displayName||m.author?.username||'User')}</b><p>${esc(m.content)}</p></div></div>`).join('')||`<div class="message-list-empty">No messages yet.</div>`;
+      $('#roomMessages').innerHTML=msgs.map(m=>`<div class="room-message ${m.author?.username===me?'mine':''}">${m.author?.username!==me?identityLink(m.author, profileMini(m.author), "room-avatar-link"):''}<div class="room-bubble">${identityLink(m.author, `<b>${esc(m.author?.displayName||m.author?.username||'User')}</b>`)}<p>${esc(m.content)}</p></div></div>`).join('')||`<div class="message-list-empty">No messages yet.</div>`;
       const box=$('#roomMessages'); if(box) box.scrollTop=box.scrollHeight;
     };
     await draw();
     stopCommunityRealtime=await PF.subscribeCommunityMessages(id,async()=>{try{await draw()}catch{}});
     $('#roomCompose').addEventListener('submit',async e=>{e.preventDefault();const input=$('#roomInput');if(!input.value.trim())return;try{await PF.sendCommunityMessage(id,input.value);input.value='';await draw()}catch(err){notify(err.message,'error')}});
     const members=await PF.listCommunityMembers(id);
-    $('#memberList').innerHTML=members.map(m=>`<div class="member-row">${profileMini(m)}<div class="member-copy"><b>${esc(m.displayName||m.username)}</b><span>${m.role==='owner'?'Owner':'Member'}</span></div>${owner&&m.role!=='owner'?`<button class="btn btn-sm member-kick" data-kick-member="${esc(m.username)}">Remove</button>`:''}</div>`).join('');
+    $('#memberList').innerHTML=members.map(m=>`<div class="member-row">${identityLink(m, profileMini(m), "member-avatar-link")}<div class="member-copy">${identityLink(m, `<b>${esc(m.displayName||m.username)}</b>`)}<span>${m.role==='owner'?'Owner':'Member'}</span></div>${owner&&m.role!=='owner'?`<button class="btn btn-sm member-kick" data-kick-member="${esc(m.username)}">Remove</button>`:''}</div>`).join('');
     $('#memberList').querySelectorAll('[data-kick-member]').forEach(b=>b.onclick=async()=>{try{await PF.kickCommunityMember(id,b.dataset.kickMember);await openCommunityRoom(id);notify('Member removed','success')}catch(e){notify(e.message,'error')}});
     if(owner){
       const req=await PF.listCommunityRequests(id);

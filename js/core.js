@@ -94,7 +94,9 @@
     ["aurora-glass","Aurora Glass","Aurora gradients through crystalline glass layers"],
     ["obsidian-court","Obsidian Court","Luxury court-inspired layout with rich framing"],
     ["pixel-arcade","Pixel Arcade","Retro pixel-inspired HUD with game-status details"],
-    ["botanical-night","Botanical Night","Organic night-garden identity with elegant leaf motifs"]
+    ["botanical-night","Botanical Night","Organic night-garden identity with elegant leaf motifs"],
+    ["white-atelier","White Atelier","Editorial white canvas with gallery-grade spacing"],
+    ["white-signal","White Signal","Crisp white tech card with precise signal geometry"]
   ];
 
   function requireClient() {
@@ -751,8 +753,7 @@
   }
 
   // -----------------------------
-  // Lightweight WebRTC call signaling
-  // -----------------------------
+  // Phase 2 call signaling: persistent DB-backed call sessions + Realtime.
   async function getCallUser(username) {
     const p = await getProfile(username, { force: false });
     if (!p?.userId || !p?.username) throw new Error("User is unavailable for calling.");
@@ -760,8 +761,29 @@
     if (!allowed) throw new Error("This user is not accepting calls from you.");
     return p;
   }
+
   async function canReceiveCallFrom(username) {
     return !!(await callRpc("rivo_can_receive_call", { p_caller_username: normalizeUsername(username) }));
+  }
+
+  async function createCallSession(targetUsername, roomName, callId, callType = "audio") {
+    return callRpc("rivo_create_call_session", {
+      p_call_id: String(callId),
+      p_target_username: normalizeUsername(targetUsername),
+      p_room_name: String(roomName),
+      p_call_type: callType === "video" ? "video" : "audio"
+    }, "CALL_SESSION_CREATE");
+  }
+
+  async function acceptCallSession(callId) {
+    return callRpc("rivo_accept_call_session", { p_call_id: String(callId) }, "CALL_SESSION_ACCEPT");
+  }
+
+  async function updateCallSession(callId, status = "ended") {
+    return callRpc("rivo_update_call_session", {
+      p_call_id: String(callId),
+      p_status: ["declined", "expired", "ended"].includes(status) ? status : "ended"
+    }, "CALL_SESSION_UPDATE");
   }
 
   async function openCallChannel(channelName, onSignal) {
@@ -783,10 +805,106 @@
   }
 
   async function subscribeCallInbox(userId, onSignal) {
+    requireClient();
     const id = String(userId || "").trim();
     if (!id) return async () => {};
-    const box = await openCallChannel(`rivo-call-inbox-${id}`, onSignal);
-    return box.close;
+
+    const session = (await sb.auth.getSession()).data?.session;
+    if (!session?.user?.id || session.user.id !== id) return async () => {};
+    await syncRealtimeAuth(session);
+
+    let stopped = false;
+    const seen = new Set();
+
+    const emit = msg => {
+      if (stopped || !msg?.callId) return;
+      const key = `${msg.callId}:${msg.type}:${msg.status || ""}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (seen.size > 300) seen.delete(seen.values().next().value);
+      try { onSignal?.(msg); } catch {}
+    };
+
+    const fromRow = async row => {
+      if (!row?.id) return;
+      const base = {
+        callId: row.id,
+        from: row.caller_id,
+        to: row.callee_id,
+        status: row.status,
+        roomName: row.room_name,
+        callType: row.call_type
+      };
+
+      if (row.status === "ringing" && row.callee_id === id) {
+        const { data: p } = await sb.rpc("rivo_social_profile", { p_user_id: row.caller_id });
+        emit({
+          ...base,
+          type: "offer",
+          payload: {
+            isVideo: row.call_type === "video",
+            roomName: row.room_name,
+            username: p?.username || "",
+            displayName: p?.displayName || p?.username || "Contact",
+            avatar: p?.avatar || ""
+          }
+        });
+        return;
+      }
+
+      if (row.caller_id === id && row.status === "accepted") {
+        emit({ ...base, type: "accept", payload: { roomName: row.room_name } });
+        return;
+      }
+
+      if (row.status === "declined" && (row.caller_id === id || row.callee_id === id)) {
+        emit({ ...base, type: "decline" });
+        return;
+      }
+
+      if (row.status === "ended" && (row.caller_id === id || row.callee_id === id)) {
+        emit({ ...base, type: "hangup" });
+        return;
+      }
+
+      if (row.status === "expired" && (row.caller_id === id || row.callee_id === id)) {
+        emit({ ...base, type: "decline" });
+      }
+    };
+
+    const channel = sb.channel(`rivo-call-sessions-${id}-${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", {
+        event: "INSERT", schema: "public", table: "rivo_call_sessions",
+        filter: `callee_id=eq.${id}`
+      }, payload => { void fromRow(payload?.new); })
+      .on("postgres_changes", {
+        event: "UPDATE", schema: "public", table: "rivo_call_sessions",
+        filter: `caller_id=eq.${id}`
+      }, payload => { void fromRow(payload?.new); })
+      .on("postgres_changes", {
+        event: "UPDATE", schema: "public", table: "rivo_call_sessions",
+        filter: `callee_id=eq.${id}`
+      }, payload => { void fromRow(payload?.new); })
+      .subscribe();
+
+    let broadcastBox = null;
+    try {
+      broadcastBox = await openCallChannel(`rivo-call-inbox-${id}`, onSignal);
+    } catch {}
+
+    // Catch rings that happened while the browser was asleep/offline.
+    try {
+      const { data, error } = await sb.rpc("rivo_list_incoming_call_sessions");
+      if (!error) {
+        for (const row of data || []) emit(row);
+      }
+    } catch {}
+
+    return async () => {
+      stopped = true;
+      try { await sb.removeChannel(channel); } catch {}
+      try { await broadcastBox?.close?.(); } catch {}
+    };
   }
 
   async function subscribePresence(username, onChange) {
@@ -1273,6 +1391,6 @@
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, createCallSession, acceptCallSession, updateCallSession, openCallChannel, subscribeCallInbox
   };
 })();
