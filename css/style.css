@@ -2369,3 +2369,20 @@ body,main,.container,.messages-shell,.messages-layout{max-width:100%;overflow-x:
 .post-report-action{opacity:.72}
 .admin-edit-section{margin:18px 0;padding:14px;border:1px solid var(--border);border-radius:16px;background:color-mix(in srgb,var(--card-bg) 88%,transparent)}
 @media(max-width:760px){.voice-message-bar{flex-wrap:wrap}.voice-audio{width:120px}.voice-message-bubble{min-width:0}.admin-grid{grid-template-columns:1fr}.admin-edit-section .form-grid{grid-template-columns:1fr}}
+
+/* v22 surface fixes: notification layering, message-call action, hold-to-record affordance */
+.rivo-notification-wrap{z-index:1200}
+.notification-btn{position:relative;z-index:1201}
+.voice-record-btn{touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.voice-record-btn.recording{background:color-mix(in srgb,var(--danger) 10%,transparent);border-color:color-mix(in srgb,var(--danger) 38%,transparent);}
+.voice-record-btn.recording svg{transform:scale(1.06)}
+.voice-message-bubble .voice-audio{display:none}
+.voice-message-bubble{min-width:205px;padding:7px 8px;border:1px solid var(--border);border-radius:14px;background:rgba(255,255,255,.025)}
+.voice-message-bubble .voice-play-btn{width:36px;height:36px}
+@media(max-width:760px){
+  .rivo-notification-wrap{position:relative;z-index:1300}
+  .notification-popover{position:fixed;top:68px;right:8px;left:8px;width:auto;max-height:calc(100vh - 90px);z-index:1301}
+  .notification-list{max-height:calc(100vh - 170px)}
+  .thread-call-actions .call-action{width:36px;height:36px;flex:0 0 36px}
+  .voice-message-bubble{min-width:0;width:min(235px,78vw)}
+}
