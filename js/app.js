@@ -113,9 +113,54 @@
       });
     };
     const load = async () => { try { notifications = await PF.listNotifications(50); render(); } catch { count.textContent = "Unavailable"; } };
-    button.onclick = async e => { e.stopPropagation(); const open = !pop.classList.contains("open"); pop.classList.toggle("open", open); if (open) await load(); if (open && "Notification" in window && Notification.permission === "default") await PF.requestBrowserNotifications(); };
-    $("[data-notification-readall]", wrap).onclick = async () => { try { await PF.markAllNotificationsRead(); notifications = notifications.map(n => ({...n,read_at:new Date().toISOString()})); render(); } catch {} };
-    document.addEventListener("click", e => { if (!wrap.contains(e.target)) pop.classList.remove("open"); });
+    button.onclick = async e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const open = !pop.classList.contains("open");
+
+      if (open) {
+        // Mobile browsers can trap absolute popovers inside sticky/transformed headers.
+        // Portal the existing popover to body only while it is open, without changing
+        // its data bindings or notification logic.
+        if (window.innerWidth <= 760 && pop.parentElement !== document.body) {
+          document.body.appendChild(pop);
+        }
+
+        if (window.innerWidth <= 760) {
+          const r = button.getBoundingClientRect();
+          pop.style.position = "fixed";
+          pop.style.top = `${Math.min(window.innerHeight - 80, r.bottom + 8)}px`;
+          pop.style.right = "8px";
+          pop.style.left = "8px";
+          pop.style.width = "auto";
+          pop.style.maxHeight = "calc(100vh - 90px)";
+          pop.style.zIndex = "2147483000";
+        }
+
+        pop.classList.add("open");
+        await load();
+
+        if ("Notification" in window && Notification.permission === "default") {
+          await PF.requestBrowserNotifications();
+        }
+      } else {
+        pop.classList.remove("open");
+      }
+    };
+
+    $("[data-notification-readall]", wrap).onclick = async () => {
+      try {
+        await PF.markAllNotificationsRead();
+        notifications = notifications.map(n => ({...n,read_at:new Date().toISOString()}));
+        render();
+      } catch {}
+    };
+
+    document.addEventListener("click", e => {
+      if (!wrap.contains(e.target) && !pop.contains(e.target)) {
+        pop.classList.remove("open");
+      }
+    });
     try {
       const unsubscribe = await PF.subscribeNotifications(async n => {
         if (!n) return;
@@ -782,6 +827,7 @@
 
       active.connected = true;
       state("Connected", true);
+      if (!callStartedAt) timer();
       updateQuality(room.localParticipant.connectionQuality);
       startQualityMonitor(room);
     }
@@ -2409,11 +2455,33 @@ voiceMessageSend?.addEventListener("click",async()=>{
     const r=post.reactions||{};
     return POST_REACTIONS.map(x=>({x,n:Number(r[x]||0)})).filter(x=>x.n>0).map(x=>`<span class="reaction-chip">${x.x} ${x.n}</span>`).join("");
   }
+  function ensurePostImageViewer(){
+    let box=document.querySelector("[data-post-image-viewer]");
+    if(box) return box;
+    box=document.createElement("div");
+    box.className="post-image-viewer";
+    box.setAttribute("data-post-image-viewer","");
+    box.innerHTML=`<button type="button" class="post-image-viewer-close" data-post-image-close aria-label="Close image">×</button><div class="post-image-viewer-backdrop" data-post-image-close></div><img class="post-image-viewer-image" data-post-image-viewer-img alt="Post image">`;
+    document.body.appendChild(box);
+    const close=()=>{box.classList.remove("open");const img=box.querySelector("[data-post-image-viewer-img]");if(img)img.removeAttribute("src");};
+    box.querySelectorAll("[data-post-image-close]").forEach(b=>b.addEventListener("click",close));
+    document.addEventListener("keydown",e=>{if(e.key==="Escape" && box.classList.contains("open"))close();});
+    return box;
+  }
+
+  function openPostImageViewer(url){
+    if(!url) return;
+    const box=ensurePostImageViewer();
+    const img=box.querySelector("[data-post-image-viewer-img]");
+    img.src=url;
+    box.classList.add("open");
+  }
+
   function renderPostCard(post){
     const author=post.author||{}; const medias=Array.isArray(post.media)?post.media:[];
     const myReaction=post.my_reaction||null; const reposted=!!post.reposted_by_me;
     const repNames=Array.isArray(post.reposter_names)?post.reposter_names:[];
-    const mediaHtml=medias.length?`<div class="post-media count-${Math.min(5,medias.length)}">${medias.slice(0,5).map(m=>`<img src="${esc(m.url)}" alt="" loading="lazy">`).join("")}</div>`:"";
+    const mediaHtml=medias.length?`<div class="post-media count-${Math.min(5,medias.length)}">${medias.slice(0,5).map((m,i)=>`<button type="button" class="post-media-thumb" data-post-image="${esc(m.url)}" aria-label="Open image ${i+1}"><img src="${esc(m.url)}" alt="" loading="lazy"></button>`).join("")}</div>`:"";
     const note=post.profile_reposted?`<div class="repost-note">↻ Reposted to this profile</div>`:repNames.length?`<div class="repost-note">↻ Reposted by <b>${esc(repNames[0].displayName||repNames[0].username)}</b>${repNames.length>1?` and ${repNames.length-1} more`:""}</div>`:"";
     const reactButtons=POST_REACTIONS.map(r=>`<button type="button" class="reaction-chip ${myReaction===r?'active':''}" data-post-react="${esc(r)}">${r}<span>${Number((post.reactions||{})[r]||0)}</span></button>`).join('');
     const isOwner = !!author?.username && PF.normalizeUsername(author.username) === PF.normalizeUsername(PF.currentUsername() || "");
@@ -2430,6 +2498,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
     box.querySelector('form')?.addEventListener('submit',async e=>{e.preventDefault();const input=e.currentTarget.querySelector('input');try{await PF.commentPost(postId,input.value);input.value='';await renderPostComments(card,postId);}catch(err){notify(err.message,'error')}});
   }
   function bindPostCard(card, post){
+    card.querySelectorAll('[data-post-image]').forEach(btn=>btn.addEventListener('click',e=>{e.preventDefault();openPostImageViewer(btn.dataset.postImage||"");}));
     card.querySelectorAll('[data-post-react]').forEach(btn=>btn.addEventListener('click',async()=>{if(!PF.currentUsername()){location.href='login.html';return}try{await PF.reactPost(post.id,btn.dataset.postReact);await refreshPostCard(post.id)}catch(e){notify(e.message,'error')}}));
     card.querySelector('[data-post-comments]')?.addEventListener('click',async()=>{await renderPostComments(card,post.id)});
     card.querySelector('[data-post-repost]')?.addEventListener('click',async()=>{if(!PF.currentUsername()){location.href='login.html';return}try{await PF.repostPost(post.id);await refreshPostCard(post.id)}catch(e){notify(e.message,'error')}});
