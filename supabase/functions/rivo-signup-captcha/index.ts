@@ -20,7 +20,7 @@ function randomInt(max: number) {
 }
 
 function makeCode() {
-  const length = 4 + randomInt(3); // 4–6 chars
+  const length = 5 + randomInt(2); // 5–6 chars
   let out = "";
   for (let i = 0; i < length; i++) out += alphabet[randomInt(alphabet.length)];
   return out;
@@ -47,11 +47,19 @@ function captchaSvg(code: string) {
     const opacity = (0.12 + randomInt(22) / 100).toFixed(2);
     parts.push(`<circle cx="${x}" cy="${y}" r="${r}" fill="#ffffff" opacity="${opacity}"/>`);
   }
-  for (let i = 0; i < 7; i++) {
-    const y = 7 + randomInt(h - 14);
-    const y2 = 7 + randomInt(h - 14);
-    parts.push(`<path d="M${randomInt(8)},${y} Q${40+randomInt(100)},${randomInt(h)} ${w-randomInt(8)},${y2}" stroke="#7e8aa8" stroke-opacity=".${1+randomInt(4)}" stroke-width="${1+randomInt(2)}" fill="none"/>`);
+  for (let i = 0; i < 12; i++) {
+    const y = 5 + randomInt(h - 10);
+    const y2 = 5 + randomInt(h - 10);
+    const cx = 28 + randomInt(124);
+    const opacity = (0.16 + randomInt(24) / 100).toFixed(2);
+    parts.push(`<path d="M${randomInt(4)},${y} Q${cx},${randomInt(h)} ${w-randomInt(4)},${y2}" stroke="#8995b3" stroke-opacity="${opacity}" stroke-width="${1+randomInt(2)}" fill="none"/>`);
   }
+  for (let i = 0; i < 5; i++) {
+    const x1 = randomInt(w - 20), x2 = 20 + randomInt(w - 20);
+    const y1 = randomInt(h), y2 = randomInt(h);
+    parts.push(`<path d="M${x1},${y1} L${x2},${y2}" stroke="#d6ddf2" stroke-opacity=".${2+randomInt(3)}" stroke-width="1"/>`);
+  }
+  parts.push(`<rect x="3" y="3" width="174" height="62" rx="10" fill="none" stroke="#ffffff" stroke-opacity=".05" stroke-width="3"/>`);
   const gap = 27;
   const start = (w - ((code.length - 1) * gap + 25)) / 2;
   [...code].forEach((ch, i) => {
@@ -104,6 +112,14 @@ Deno.serve(async (req: Request) => {
       if (cap.used_at || new Date(cap.expires_at).getTime() < Date.now()) return json({ error: "Verification expired. Request a new code." }, 400);
       if (cap.verified_at && cap.verification_token_hash) return json({ error: "This verification was already completed. Request a new code." }, 400);
       if (Number(cap.attempts || 0) >= 5) return json({ error: "Too many attempts. Request a new code." }, 429);
+      const { count: signupCount, error: signupCountError } = await admin
+        .from("rivo_captcha_challenges")
+        .select("id", { count: "exact", head: true })
+        .eq("ip_hash", ipHash)
+        .not("used_at", "is", null)
+        .gte("used_at", new Date(Date.now() - 30 * 60 * 1000).toISOString());
+      if (signupCountError) return json({ error: "Security service is unavailable" }, 503);
+      if ((signupCount || 0) >= 3) return json({ error: "Too many accounts from this device. Please try again later." }, 429);
       const expected = await sha256(`rivo-captcha:${challengeId}:${captchaCode}`);
       if (expected !== cap.code_hash) {
         await admin.from("rivo_captcha_challenges").update({ attempts: Number(cap.attempts || 0) + 1 }).eq("id", challengeId).is("used_at", null);
@@ -118,6 +134,37 @@ Deno.serve(async (req: Request) => {
         .select("id").maybeSingle();
       if (updateError || !updated) return json({ error: "Verification is no longer valid. Request a new code." }, 400);
       return json({ ok: true, challengeId, verificationToken });
+    }
+
+    if (action === "consume_signup") {
+      const challengeId = String(body.challengeId || "").trim();
+      const verificationToken = String(body.verificationToken || "");
+      if (!challengeId || !verificationToken || !/^[0-9a-f-]{36}$/i.test(challengeId)) {
+        return json({ error: "Verification is required." }, 400);
+      }
+      const tokenHash = await sha256(`rivo-captcha-token:${challengeId}:${verificationToken}`);
+      const { data: cap, error: capError } = await admin
+        .from("rivo_captcha_challenges")
+        .select("id,ip_hash,expires_at,used_at,verified_at,verification_token_hash")
+        .eq("id", challengeId).maybeSingle();
+      if (capError || !cap) return json({ error: "Verification expired. Please verify again." }, 400);
+      if (cap.ip_hash !== ipHash || cap.used_at || !cap.verified_at || cap.verification_token_hash !== tokenHash || new Date(cap.expires_at).getTime() < Date.now()) {
+        return json({ error: "Verification is no longer valid. Please verify again." }, 400);
+      }
+      const { count: usedCount, error: usedCountError } = await admin
+        .from("rivo_captcha_challenges")
+        .select("id", { count: "exact", head: true })
+        .eq("ip_hash", ipHash)
+        .not("used_at", "is", null)
+        .gte("used_at", new Date(Date.now() - 30 * 60 * 1000).toISOString());
+      if (usedCountError) return json({ error: "Security service is unavailable" }, 503);
+      if ((usedCount || 0) >= 3) return json({ error: "Too many accounts from this device. Please try again later." }, 429);
+      const { data: consumed, error: consumeError } = await admin
+        .from("rivo_captcha_challenges")
+        .update({ used_at: new Date().toISOString() })
+        .eq("id", challengeId).is("used_at", null).select("id").maybeSingle();
+      if (consumeError || !consumed) return json({ error: "Verification is no longer valid. Please verify again." }, 400);
+      return json({ ok: true });
     }
 
     const code = makeCode();
