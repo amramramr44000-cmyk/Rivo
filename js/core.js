@@ -521,8 +521,16 @@
       private_data: { birthDate: birthDateValue, friendRequests: { incoming: [], outgoing: [] } }
     });
     if (error) {
-      await sb.auth.signOut();
-      if (String(error.message || "").includes("duplicate")) throw new Error("That username is already taken.");
+      const msg = String(error.message || "");
+      // The profile row is created immediately after Auth. If it fails, remove
+      // the just-created Auth user as well, so signup never leaves an orphan
+      // auth.users record that blocks the same username/email on retry.
+      try { await sb.rpc("rivo_delete_current_auth_user"); } catch {}
+      try { await sb.auth.signOut(); } catch {}
+      if (msg.includes("duplicate")) throw new Error("That username is already taken.");
+      if (msg.includes("profiles_username_check") || msg.includes("violates check constraint")) {
+        throw new Error("That username is not accepted by the database. Please use 3–26 lowercase letters, numbers, . _ - and no symbol at the beginning or end.");
+      }
       throw error;
     }
     cacheUsername(u);
