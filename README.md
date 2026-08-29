@@ -160,8 +160,7 @@ The LiveKit client SDK is loaded from jsDelivr in the HTML pages. For production
 - Reconnection policy and initial connection retry settings were strengthened.
 
 
-## Rivo v12 final touches
-
-- Call UI has no minimize button.
-- Call audio uses the browser/device default output at full media volume; no in-app earpiece selector is forced. Bluetooth/wired audio remains controlled by the device when available.
-- Added `supabase_friend_request_v12_fix.sql` to repair/replace the friend-request acceptance RPC safely. Run this migration once in Supabase SQL Editor if accepting requests is still failing in the deployed database.
+## Final cosmetic cleanup
+- Removed the in-call minimize button and its mini-call behavior from the UI.
+- Removed the in-call audio-output selector UI so the browser/device keeps its normal audio output behavior.
+- No call signaling, LiveKit connection, token flow, media quality, or database logic was intentionally changed in this pass.
