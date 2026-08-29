@@ -1045,9 +1045,6 @@
   }
 
   document.addEventListener("DOMContentLoaded", async () => {
-    // Hydrate the in-memory identity from Supabase Auth before any UI logic
-    // asks who the current user is. No browser storage is trusted for identity.
-    try { await PF.currentProfile(); } catch {}
     nav(); initMenu(); initStorySystem(); initCallSystem();
     $$('[data-profile-link]').forEach(a => { const me = PF.currentUsername(); if (me) a.href = `profile.html?u=${encodeURIComponent(me)}`; });
     $("[data-logout]")?.addEventListener("click", e => { e.preventDefault(); PF.clearSession(); location.href = "../index.html"; });
@@ -1564,8 +1561,7 @@
     const root = $("#profileRoot");
     if (!root) return;
     if (!username) {
-      const meProfile = await PF.currentProfile().catch(() => null);
-      const me = meProfile?.username || "";
+      const me = PF.currentUsername();
       if (me) { location.replace(`profile.html?u=${encodeURIComponent(me)}`); return; }
       root.innerHTML = `<div class="empty-state glass"><h2>Profile not found</h2><p>Choose a profile from Explore or sign in.</p><a class="btn btn-sm" href="../index.html">Back home</a></div>`;
       return;
@@ -1577,11 +1573,8 @@
       catch (e) { lastError = e; }
       if (!p && attempt < 2) await new Promise(r => setTimeout(r, 350 * (attempt + 1)));
     }
-    if (!p) {
-      try {
-        const meProfile = await PF.currentProfile({ force: true });
-        if (meProfile?.username === username) p = meProfile;
-      } catch (e) { lastError = lastError || e; }
+    if (!p && username === PF.currentUsername()) {
+      try { p = await PF.currentProfile({ force: true }); } catch (e) { lastError = lastError || e; }
     }
     if (!p) {
       root.innerHTML = `<div class="empty-state glass"><h2>${lastError ? "Could not load profile" : "Profile not found"}</h2><p>${lastError ? "Please try again in a moment." : "This username does not exist."}</p><a class="btn btn-sm" href="../index.html">Back home</a></div>`; return;
@@ -1589,10 +1582,9 @@
     try { p.story = (await PF.getStory(username, { countView:false })) || p.story || null; } catch {}
     if (!templates[p.template]) p = {...p, template:"discord-noir"};
     p.sections = (p.sections || []).filter(s => !["skills", "projects"].includes(s.type));
-    const meProfile = await PF.currentProfile().catch(() => null);
-    const me = meProfile?.username || "";
-    const isMe = !!me && me === p.username;
-    const viewer = !isMe ? meProfile : p;
+    const me = PF.currentUsername();
+    const isMe = me === p.username;
+    const viewer = !isMe ? await PF.currentProfile() : p;
     const relationship = isMe ? "self" : PF.friendshipState(viewer, p.username);
     const friends = (p.friends || []);
     const friendProfiles = await PF.getProfiles(friends);
@@ -1605,39 +1597,29 @@
     root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship }) + `<section class="profile-posts-wrap"><div class="section-head"><div><div class="section-kicker">POSTS</div><h2>${isMe ? "Your posts" : "Posts"}</h2></div>${isMe ? `<a class="btn btn-sm" href="posts.html">+ New post</a>` : ""}</div><div id="profilePostFeed" class="post-feed"><div class="empty-state glass"><h2>Loading posts…</h2></div></div></section>`;
     bindPlayer(root);
     await renderPostFeed($("#profilePostFeed"), p.username, { allowCompose:false });
-    $(`[data-add-friend]`)?.addEventListener("click", async e => {
-      const button = e.currentTarget;
-      if (button.disabled) return;
-      button.disabled = true;
+    $(`[data-add-friend]`)?.addEventListener("click", async () => {
       try {
         await PF.sendFriendRequest(p.username);
         notify("Friend request sent", "success");
-        const updated = await PF.getProfile(p.username, { force: true });
-        const selfFresh = await PF.currentProfile({ force: true });
+        const updated = await PF.getProfile(p.username);
+        const selfFresh = await PF.currentProfile();
         const rel = PF.friendshipState(selfFresh, p.username);
         root.innerHTML = renderProfileCard(updated, { isMe:false, friendProfiles, relationship:rel }) + `<section class="profile-posts-wrap"><div class="section-head"><div><div class="section-kicker">POSTS</div><h2>Posts</h2></div></div><div id="profilePostFeed" class="post-feed"></div></section>`;
         bindPlayer(root);
         await renderPostFeed($("#profilePostFeed"), updated.username, { allowCompose:false });
         bindProfileActions(updated);
       } catch (err) { notify(err.message, "error"); }
-      finally {
-        const freshButton = $(`[data-add-friend]`);
-        if (freshButton) freshButton.disabled = false;
-      }
     });
     bindProfileActions(p);
     $(`[data-friends-open]`)?.addEventListener("click", () => openFriendsModal(friendProfiles));
   }
 
   async function bindProfileActions(profile) {
-    $("[data-like-profile]")?.addEventListener("click", async e => {
-      const button = e.currentTarget;
-      if (button.disabled) return;
-      button.disabled = true;
+    $("[data-like-profile]")?.addEventListener("click", async () => {
       try {
         const result = await PF.toggleLike(profile.username);
-        const fresh = await PF.getProfile(profile.username, { force: true });
-        const viewer = await PF.currentProfile({ force: true });
+        const fresh = await PF.getProfile(profile.username);
+        const viewer = await PF.currentProfile();
         const rel = PF.friendshipState(viewer, profile.username);
         const friends = (fresh?.friends || []);
         const friendProfiles = await PF.getProfiles(friends);
@@ -1650,10 +1632,6 @@
         }
         notify(result.liked ? "Profile liked" : "Like removed", "success");
       } catch (err) { notify(err.message, "error"); }
-      finally {
-        const freshButton = $(`[data-like-profile]`);
-        if (freshButton) freshButton.disabled = false;
-      }
     });
   }
 
@@ -1703,9 +1681,9 @@
       if (q) profiles = profiles.filter(p => p.username.includes(q) || (p.displayName || "").toLowerCase().includes(q));
       requestBox.innerHTML = requests.length ? requests.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><div class="hero-actions"><button class="btn btn-sm btn-primary" data-accept="${esc(p.username)}">Accept</button><button class="btn btn-sm btn-danger" data-reject="${esc(p.username)}">Decline</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No pending requests.</div>`;
       friendBox.innerHTML = profiles.length ? profiles.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><p>${esc(p.bio || "")}</p><div class="hero-actions"><a class="btn btn-sm btn-primary" href="profile.html?u=${encodeURIComponent(p.username)}">View</a><button class="btn btn-sm btn-danger" data-remove="${esc(p.username)}">Remove</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No friends found.</div>`;
-      $$('[data-accept]').forEach(b => b.onclick = async () => { if (b.disabled) return; b.disabled=true; try { await PF.acceptFriendRequest(b.dataset.accept); notify("Friend added", "success"); await render(search?.value); } catch(e) { notify(e.message,"error"); } finally { b.disabled=false; } });
-      $$('[data-reject]').forEach(b => b.onclick = async () => { if (b.disabled) return; b.disabled=true; try { await PF.rejectFriendRequest(b.dataset.reject); notify("Request declined", "success"); await render(search?.value); } catch(e) { notify(e.message,"error"); } finally { b.disabled=false; } });
-      $$('[data-remove]').forEach(b => b.onclick = async () => { if (b.disabled) return; b.disabled=true; try { await PF.removeFriend(b.dataset.remove); notify("Friend removed", "success"); await render(search?.value); } catch(e) { notify(e.message,"error"); } finally { b.disabled=false; } });
+      $$('[data-accept]').forEach(b => b.onclick = async () => { try { await PF.acceptFriendRequest(b.dataset.accept); notify("Friend added", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
+      $$('[data-reject]').forEach(b => b.onclick = async () => { try { await PF.rejectFriendRequest(b.dataset.reject); notify("Request declined", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
+      $$('[data-remove]').forEach(b => b.onclick = async () => { try { await PF.removeFriend(b.dataset.remove); notify("Friend removed", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
     };
     search?.addEventListener("input", () => render(search.value)); await render("");
   }
