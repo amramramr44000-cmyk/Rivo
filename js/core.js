@@ -21,7 +21,9 @@
   }) : null;
   window.__rivoSupabase = sb;
 
-  const CACHE_KEY = "rivo_username";
+  const CACHE_KEY = "rivo_username"; // legacy key; never trusted for identity
+  const CURRENT_PROFILE_CACHE_PREFIX = "rivo_current_profile_v3:";
+  let authIdentity = { id: null, username: "" };
   const MEDIA_BUCKET = "rivo-media";
   const PROFILE_CACHE_PREFIX = "rivo_profile_v2:";
   // Shortened from the previous 45s/20s: long TTLs made message-privacy
@@ -30,7 +32,7 @@
   // invalidateProfileCache() calls after every write keep things both
   // fast (still cached for rapid repeat reads) and accurate.
   const PROFILE_CACHE_TTL = 20 * 1000;
-  const CURRENT_PROFILE_CACHE_KEY = "rivo_current_profile_v2";
+  const CURRENT_PROFILE_CACHE_KEY = "rivo_current_profile_v2"; // legacy key; deleted on bootstrap
   const CURRENT_PROFILE_CACHE_TTL = 8 * 1000;
 
   function cacheRead(key, ttl) {
@@ -46,9 +48,14 @@
     try { sessionStorage.setItem(key, JSON.stringify({ t: Date.now(), v: value })); } catch {}
   }
   function cacheDelete(key) { try { sessionStorage.removeItem(key); } catch {} }
-  function invalidateProfileCache(username = "") {
+  function currentProfileCacheKey(uid) { return uid ? CURRENT_PROFILE_CACHE_PREFIX + String(uid) : ""; }
+  function invalidateProfileCache(username = "", uid = authIdentity.id) {
     if (username) cacheDelete(PROFILE_CACHE_PREFIX + normalizeUsername(username));
+    if (uid) cacheDelete(currentProfileCacheKey(uid));
     cacheDelete(CURRENT_PROFILE_CACHE_KEY);
+  }
+  function setAuthIdentity(user, username = "") {
+    authIdentity = user?.id ? { id: user.id, username: normalizeUsername(username) } : { id: null, username: "" };
   }
 
   const defaults = {
@@ -108,18 +115,25 @@
     return /^(?=.{3,26}$)[a-z0-9](?:[a-z0-9._-]*[a-z0-9])$/.test(u) &&
       !["admin","administrator","support","help","rivo","root","system","api","null","undefined"].includes(u);
   }
-  function currentUsername() { return localStorage.getItem(CACHE_KEY) || ""; }
-  function cacheUsername(username) {
+  // Compatibility API: this is now an in-memory mirror of Supabase Auth only.
+  // localStorage/sessionStorage can never define the current account.
+  function currentUsername() { return authIdentity.username || ""; }
+  function cacheUsername(username, uid = authIdentity.id) {
     const u = normalizeUsername(username);
-    if (u) localStorage.setItem(CACHE_KEY, u); else localStorage.removeItem(CACHE_KEY);
+    if (!uid || uid !== authIdentity.id) return;
+    authIdentity.username = u;
   }
   function setSession(username) { cacheUsername(username); }
   async function clearSession() {
-    // Clear browser-side identity data BEFORE navigation so a later login
-    // can never hydrate a stale account from the previous session.
-    cacheUsername("");
+    authIdentity = { id: null, username: "" };
     cacheDelete(CURRENT_PROFILE_CACHE_KEY);
-    try { sessionStorage.removeItem("rivo_profiles_list_v2"); } catch {}
+    try {
+      sessionStorage.removeItem("rivo_profiles_list_v2");
+      for (const k of Object.keys(sessionStorage)) {
+        if (k.startsWith(PROFILE_CACHE_PREFIX) || k.startsWith(CURRENT_PROFILE_CACHE_PREFIX)) sessionStorage.removeItem(k);
+      }
+      localStorage.removeItem(CACHE_KEY); // remove legacy identity residue
+    } catch {}
     if (sb) {
       const { error } = await sb.auth.signOut();
       if (error) throw error;
@@ -148,27 +162,30 @@
   async function currentProfile(options = {}) {
     requireClient();
     const force = !!options.force;
-    if (!force) {
-      const cached = cacheRead(CURRENT_PROFILE_CACHE_KEY, CURRENT_PROFILE_CACHE_TTL);
-      if (cached?.id) return cached;
-    }
     let session = null;
     for (let attempt = 0; attempt < 3; attempt++) {
       const { data: sessionData, error: sessionError } = await sb.auth.getSession();
       if (!sessionError && sessionData?.session?.user) { session = sessionData.session; break; }
       if (attempt < 2) await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
     }
-    if (!session?.user) return null;
+    if (!session?.user?.id) { setAuthIdentity(null); return null; }
+    const uid = session.user.id;
+    const cacheKey = currentProfileCacheKey(uid);
+    if (!force) {
+      const cached = cacheRead(cacheKey, CURRENT_PROFILE_CACHE_TTL);
+      if (cached?.id === uid) { setAuthIdentity(session.user, cached.username); return cached; }
+    }
     for (let attempt = 0; attempt < 4; attempt++) {
       const { data, error } = await sb.from("profiles")
         .select("id,username,public_data,private_data,created_at,updated_at")
-        .eq("id", session.user.id).maybeSingle();
+        .eq("id", uid).maybeSingle();
       if (error) throw error;
       if (data) {
-        cacheUsername(data.username);
+        if (data.id !== uid) throw new Error("Authenticated profile identity mismatch.");
+        setAuthIdentity(session.user, data.username);
         const merged = mergeProfile(data, true);
         merged.id = data.id;
-        cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
+        cacheWrite(cacheKey, merged);
         return merged;
       }
       if (attempt < 3) await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
@@ -300,11 +317,11 @@
       .update(payload).eq("id", session.user.id)
       .select("username,public_data,private_data,created_at,updated_at").single();
     if (error) throw error;
-    cacheUsername(data.username);
-    invalidateProfileCache(data.username);
+    setAuthIdentity({ id: data.id }, data.username);
+    invalidateProfileCache(data.username, data.id);
     const merged = mergeProfile(data, true);
     merged.id = data.id;
-    cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
+    cacheWrite(currentProfileCacheKey(data.id), merged);
     cacheWrite(PROFILE_CACHE_PREFIX + data.username, merged);
     return merged;
   }
@@ -360,7 +377,8 @@
       if (String(error.message || "").includes("duplicate")) throw new Error("That username is already taken.");
       throw error;
     }
-    cacheUsername(u);
+    setAuthIdentity(auth.user, u);
+    cacheDelete(CURRENT_PROFILE_CACHE_KEY);
     return base;
   }
 
@@ -376,19 +394,23 @@
     // guests, which was the cause of the post-logout "correct password" bug.
     const syntheticEmail = `${u}@users.rivo.app`;
     const signInOptions = {};
+    authIdentity = { id: null, username: "" };
     cacheDelete(CURRENT_PROFILE_CACHE_KEY);
-    cacheUsername("");
+    try { localStorage.removeItem(CACHE_KEY); } catch {}
+    // Ensure a clean local Auth context when switching accounts on the same device.
+    try { await sb.auth.signOut({ scope: "local" }); } catch {}
     const { data, error } = await sb.auth.signInWithPassword({
       email: syntheticEmail,
       password: passwordValue,
       options: signInOptions
     });
     if (error || !data.user) throw new Error("Incorrect username or password.");
-    cacheUsername(u);
+    setAuthIdentity(data.user, "");
     const profile = await currentProfile({ force: true });
     if (!profile) {
       await sb.auth.signOut();
-      cacheUsername("");
+      setAuthIdentity(null);
+      try { localStorage.removeItem(CACHE_KEY); } catch {}
       throw new Error("Your account was authenticated, but the profile data is still syncing. Please try again.");
     }
     return profile;
@@ -399,50 +421,124 @@
     return false;
   }
 
-  async function callRpc(name, args) {
-    requireClient();
-    const { data, error } = await sb.rpc(name, args || {});
-    if (error) throw error;
-    return data;
+  function rpcOperationLabel(name) {
+    const map = {
+      rivo_send_friend_request: "FRIEND_REQUEST_INSERT",
+      rivo_accept_friend_request: "FRIEND_REQUEST_ACCEPT",
+      rivo_reject_friend_request: "FRIEND_REQUEST_REJECT",
+      rivo_remove_friend: "FRIENDSHIP_REMOVE",
+      rivo_set_profile_like: "LIKE_PROFILE",
+      rivo_toggle_like: "LIKE_TOGGLE",
+      rivo_toggle_post_reaction: "POST_REACTION"
+    };
+    return map[name] || name.toUpperCase();
   }
-
+  function isAuthFailure(error) {
+    const code = String(error?.code || error?.status || "");
+    const msg = String(error?.message || error || "").toLowerCase();
+    return ["401", "403", "pgrst301", "jwt", "token", "not signed in", "invalid jwt", "jwt expired"].some(x => code.toLowerCase() === x || msg.includes(x));
+  }
+  async function ensureAuthenticated() {
+    requireClient();
+    const { data, error } = await sb.auth.getUser();
+    if (error || !data?.user?.id) {
+      setAuthIdentity(null);
+      const e = error || new Error("Session expired. Please sign in again.");
+      console.error("[Rivo][AUTH_SESSION]", { operation: "AUTH_CHECK", errorCode: e.code || e.status || "", errorMessage: e.message || String(e) });
+      throw e;
+    }
+    if (authIdentity.id !== data.user.id) {
+      setAuthIdentity(data.user, "");
+      await currentProfile({ force: true });
+    }
+    return data.user;
+  }
+  async function refreshAuthOnce() {
+    const { data, error } = await sb.auth.refreshSession();
+    if (error || !data?.session?.user) throw (error || new Error("Session expired. Please sign in again."));
+    await syncRealtimeAuth(data.session);
+    setAuthIdentity(data.session.user, authIdentity.id === data.session.user.id ? authIdentity.username : "");
+    return data.session;
+  }
+  async function callRpc(name, args, operation = rpcOperationLabel(name), diagnostics = {}) {
+    requireClient();
+    let user = await ensureAuthenticated();
+    let retried = false;
+    while (true) {
+      try {
+        const { data, error } = await sb.rpc(name, args || {});
+        if (error) throw error;
+        console.debug("[Rivo][DB_OK]", { operation, authUid: user.id });
+        return data;
+      } catch (error) {
+        console.error("[Rivo][DB_ERROR]", {
+          operation, authUid: user.id, targetUserId: diagnostics.targetUserId || null,
+          targetUsername: diagnostics.targetUsername || args?.p_target_username || args?.p_username || args?.p_from_username || null,
+          errorCode: error?.code || error?.status || "", errorMessage: error?.message || String(error)
+        });
+        if (!retried && isAuthFailure(error)) {
+          retried = true;
+          try {
+            await refreshAuthOnce();
+            user = await ensureAuthenticated();
+            continue;
+          } catch (refreshError) {
+            console.error("[Rivo][AUTH_REFRESH_ERROR]", { operation, authUid: user.id, errorCode: refreshError?.code || refreshError?.status || "", errorMessage: refreshError?.message || String(refreshError) });
+          }
+        }
+        throw error;
+      }
+    }
+  }
+  async function socialTarget(username) {
+    const target = await getProfile(username, { force: true });
+    if (!target?.userId) throw new Error("User not found");
+    const me = await ensureAuthenticated();
+    if (target.userId === me.id) throw new Error("You cannot perform this action on your own profile");
+    return target;
+  }
   async function sendFriendRequest(targetUsername) {
-    const u = normalizeUsername(targetUsername);
-    const result = await callRpc("rivo_send_friend_request", { p_target_username: u });
-    invalidateProfileCache(u);
-    return result;
+    const target = await socialTarget(targetUsername);
+    const result = await callRpc("rivo_send_friend_request", { p_target_username: target.username }, "FRIEND_REQUEST_INSERT", { targetUserId: target.userId, targetUsername: target.username });
+    invalidateProfileCache(target.username, target.userId);
+    const me = await currentProfile({ force: true });
+    const freshTarget = await getProfile(target.username, { force: true });
+    return { ok: true, result, operation: "FRIEND_REQUEST_INSERT", me, target: freshTarget };
   }
   async function acceptFriendRequest(fromUsername) {
-    const u = normalizeUsername(fromUsername);
-    const result = await callRpc("rivo_accept_friend_request", { p_from_username: u });
-    invalidateProfileCache(u);
-    return result;
+    const target = await socialTarget(fromUsername);
+    const result = await callRpc("rivo_accept_friend_request", { p_from_username: target.username }, "FRIEND_REQUEST_ACCEPT", { targetUserId: target.userId, targetUsername: target.username });
+    invalidateProfileCache(target.username, target.userId);
+    const me = await currentProfile({ force: true });
+    const freshTarget = await getProfile(target.username, { force: true });
+    return { ok: true, result, operation: "FRIEND_REQUEST_ACCEPT", me, target: freshTarget };
   }
   async function rejectFriendRequest(fromUsername) {
-    const u = normalizeUsername(fromUsername);
-    const result = await callRpc("rivo_reject_friend_request", { p_from_username: u });
-    invalidateProfileCache(u);
-    return result;
+    const target = await socialTarget(fromUsername);
+    const result = await callRpc("rivo_reject_friend_request", { p_from_username: target.username }, "FRIEND_REQUEST_REJECT", { targetUserId: target.userId, targetUsername: target.username });
+    invalidateProfileCache(target.username, target.userId);
+    const me = await currentProfile({ force: true });
+    const freshTarget = await getProfile(target.username, { force: true });
+    return { ok: true, result, operation: "FRIEND_REQUEST_REJECT", me, target: freshTarget };
   }
   async function removeFriend(username) {
-    const u = normalizeUsername(username);
-    const result = await callRpc("rivo_remove_friend", { p_username: u });
-    invalidateProfileCache(u);
-    return result;
+    const target = await socialTarget(username);
+    const result = await callRpc("rivo_remove_friend", { p_username: target.username }, "FRIENDSHIP_REMOVE", { targetUserId: target.userId, targetUsername: target.username });
+    invalidateProfileCache(target.username, target.userId);
+    const me = await currentProfile({ force: true });
+    const freshTarget = await getProfile(target.username, { force: true });
+    return { ok: true, result, operation: "FRIENDSHIP_REMOVE", me, target: freshTarget };
   }
   async function toggleLike(username) {
-    const u = normalizeUsername(username);
-    const result = await callRpc("rivo_toggle_like", { p_username: u });
-    invalidateProfileCache(u);
-    return result;
-  }
-  function friendshipState(profile, targetUsername) {
-    const u = normalizeUsername(targetUsername);
-    if (!profile || !u) return "none";
-    if ((profile.friends || []).includes(u)) return "friends";
-    if ((profile.friendRequests?.outgoing || []).includes(u)) return "outgoing";
-    if ((profile.friendRequests?.incoming || []).includes(u)) return "incoming";
-    return "none";
+    const target = await socialTarget(username);
+    const me = await currentProfile({ force: true });
+    const users = Array.isArray(target.likes?.users) ? target.likes.users : [];
+    const alreadyLiked = Boolean(me?.username && users.includes(me.username));
+    const desired = !alreadyLiked;
+    const result = await callRpc("rivo_set_profile_like", { p_username: target.username, p_liked: desired }, desired ? "LIKE_INSERT" : "LIKE_DELETE", { targetUserId: target.userId, targetUsername: target.username });
+    invalidateProfileCache(target.username, target.userId);
+    const fresh = await getProfile(target.username, { force: true });
+    return { ...(result || {}), liked: desired, operation: desired ? "LIKE_INSERT" : "LIKE_DELETE", profile: fresh, me };
   }
   async function addView(username) {
     return callRpc("rivo_add_view", { p_username: normalizeUsername(username) });
@@ -814,22 +910,57 @@
   }
 
   if (sb) {
+    try { localStorage.removeItem(CACHE_KEY); } catch {}
     sb.auth.onAuthStateChange((_event, session) => {
-      syncRealtimeAuth(session);
-      if (session?.user) {
-        sb.from("profiles").select("username").eq("id", session.user.id).maybeSingle()
-          .then(({data}) => { if (data?.username) cacheUsername(data.username); });
-      } else {
-        cacheUsername("");
+      // Supabase warns against awaiting network calls inside onAuthStateChange.
+      // Schedule hydration after the Auth callback returns to avoid lock contention.
+      setAuthIdentity(session?.user || null, "");
+      setTimeout(() => {
+        syncRealtimeAuth(session).catch(() => {});
+        syncOwnProfileRealtime(session).catch(() => {});
+        if (session?.user?.id) {
+          sb.from("profiles").select("username").eq("id", session.user.id).maybeSingle()
+            .then(({ data, error }) => { if (!error && data?.username) setAuthIdentity(session.user, data.username); })
+            .catch(() => {});
+        }
+      }, 0);
+    });
+    sb.auth.getSession().then(async ({ data }) => {
+      await syncRealtimeAuth(data?.session || null);
+      await syncOwnProfileRealtime(data?.session || null);
+      if (data?.session?.user?.id) {
+        setAuthIdentity(data.session.user, "");
+        try {
+          const { data: row, error } = await sb.from("profiles").select("username").eq("id", data.session.user.id).maybeSingle();
+          if (!error && row?.username) setAuthIdentity(data.session.user, row.username);
+        } catch {}
       }
     });
-    sb.auth.getSession().then(({ data }) => {
-      syncRealtimeAuth(data?.session || null);
-      if (data?.session?.user) {
-        sb.from("profiles").select("username").eq("id", data.session.user.id).maybeSingle()
-          .then(({data: row}) => { if (row?.username) cacheUsername(row.username); });
-      }
-    });
+  }
+
+
+  let ownProfileChannel = null;
+  async function syncOwnProfileRealtime(session) {
+    if (ownProfileChannel) { try { await sb.removeChannel(ownProfileChannel); } catch {} ownProfileChannel = null; }
+    if (!sb || !session?.user?.id) return;
+    await syncRealtimeAuth(session);
+    const uid = session.user.id;
+    ownProfileChannel = sb.channel(`rivo-profile-${uid}-${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "profiles", filter: `id=eq.${uid}` }, payload => {
+        const row = payload?.new;
+        if (!row?.id || row.id !== authIdentity.id) return;
+        try {
+          const merged = mergeProfile(row, true);
+          merged.id = row.id;
+          setAuthIdentity(session.user, row.username);
+          cacheWrite(currentProfileCacheKey(row.id), merged);
+          cacheDelete(CURRENT_PROFILE_CACHE_KEY);
+          console.debug("[Rivo][REALTIME_PROFILE_SYNC]", { authUid: row.id });
+        } catch (error) {
+          console.warn("[Rivo][REALTIME_PROFILE_SYNC_ERROR]", error);
+        }
+      })
+      .subscribe();
   }
 
 
@@ -1063,6 +1194,7 @@
   window.PF = {
     defaults, badgeCatalog, templates, getProfile, listProfiles, putProfile: saveProfile, deleteProfile,
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
+    ensureAuthenticated,
     updateProfile, saveProfile, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
     removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
