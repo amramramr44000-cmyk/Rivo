@@ -1,4 +1,4 @@
-const CACHE = "rivo-shell-v12";
+const CACHE = "rivo-shell-v11";
 const ASSETS = [
   "./", "./index.html", "./css/style.css", "./js/core.js", "./js/app.js", "./js/supabase-config.js",
   "./pages/login.html", "./pages/signup.html", "./pages/profile.html", "./pages/explore.html", "./pages/friends.html", "./pages/messages.html", "./pages/posts.html", "./pages/communities.html", "./pages/editor.html", "./pages/settings.html", "./pages/admin.html",
