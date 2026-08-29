@@ -1848,8 +1848,8 @@
           mark.setAttribute("aria-hidden", "true");
           document.body.appendChild(mark);
         }
-      }, 460);
-    }, 1500);
+      }, 980);
+    }, 2400);
   }
 
 async function initProfile() {
