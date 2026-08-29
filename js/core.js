@@ -210,10 +210,11 @@
     return names.map(u => byName.get(u)).filter(Boolean);
   }
 
-  async function listProfiles() {
+  async function listProfiles(options = {}) {
     requireClient();
+    const force = !!options.force;
     const key = "rivo_profiles_list_v2";
-    const cached = cacheRead(key, 30 * 1000);
+    const cached = force ? null : cacheRead(key, 30 * 1000);
     if (cached) return cached;
     const { data, error } = await sb.rpc("rivo_list_public_profiles", { p_limit: 24 });
     if (error) throw error;
@@ -313,6 +314,77 @@
     const current = await currentProfile();
     if (!current) throw new Error("No signed-in profile.");
     return saveProfile({ ...current, ...patch });
+  }
+
+  // Full client refresh: re-read the authoritative Supabase data and clear
+  // browser caches first. This is intentionally read-only: it never deletes,
+  // overwrites, or repairs database rows by guessing. That makes it safe to
+  // use after friend-request actions, profile edits, uploads, etc.
+  async function refreshRivoData(options = {}) {
+    requireClient();
+    const includeMessages = options.includeMessages !== false;
+    const messageLimit = Math.max(1, Math.min(Number(options.messageLimit) || 80, 200));
+
+    const me = await currentProfile({ force: true });
+    if (!me?.id) throw new Error("No signed-in profile.");
+
+    // Remove all cached profile/list data so the next reads come from DB.
+    try {
+      const keys = [];
+      for (let i = 0; i < sessionStorage.length; i++) keys.push(sessionStorage.key(i));
+      for (const key of keys) {
+        if (key && (key.startsWith(PROFILE_CACHE_PREFIX) || key === CURRENT_PROFILE_CACHE_KEY || key === "rivo_profiles_list_v2")) {
+          sessionStorage.removeItem(key);
+        }
+      }
+    } catch {}
+
+    const refreshedMe = await currentProfile({ force: true });
+    const usernames = [
+      ...(refreshedMe.friends || []),
+      ...(refreshedMe.friendRequests?.incoming || []),
+      ...(refreshedMe.friendRequests?.outgoing || [])
+    ];
+
+    const [profiles, posts, communities] = await Promise.all([
+      listProfiles({ force: true }),
+      listPosts(null, 80, 0),
+      listCommunities()
+    ]);
+
+    const friendProfiles = await getProfiles(usernames);
+
+    let messages = [];
+    if (includeMessages) {
+      const friends = Array.isArray(refreshedMe.friends) ? refreshedMe.friends : [];
+      const chunks = await Promise.all(
+        friends.slice(0, 40).map(async username => {
+          try {
+            return await getMessages(username, messageLimit);
+          } catch (error) {
+            console.warn("Could not refresh messages for", username, error);
+            return [];
+          }
+        })
+      );
+      messages = chunks.flat();
+    }
+
+    const result = {
+      user: refreshedMe,
+      profile: refreshedMe,
+      friendRequests: refreshedMe.friendRequests || { incoming: [], outgoing: [] },
+      friends: (refreshedMe.friends || []).slice(),
+      friendProfiles,
+      profiles: Array.isArray(profiles) ? profiles : [],
+      posts: Array.isArray(posts) ? posts : [],
+      communities: Array.isArray(communities) ? communities : [],
+      messages
+    };
+
+    // Keep a fresh authoritative current-profile cache for normal navigation.
+    cacheWrite(CURRENT_PROFILE_CACHE_KEY, refreshedMe);
+    return result;
   }
 
   async function createAccount({ username, displayName, password }) {
@@ -1060,10 +1132,13 @@
     return async()=>{try{await sb.removeChannel(channel)}catch{}};
   }
 
+  // Also expose a direct helper for pages/tools that want a one-line refresh.
+  window.refreshRivoData = refreshRivoData;
+
   window.PF = {
     defaults, badgeCatalog, templates, getProfile, listProfiles, putProfile: saveProfile, deleteProfile,
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
-    updateProfile, saveProfile, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
+    updateProfile, saveProfile, refreshRivoData, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
     removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
