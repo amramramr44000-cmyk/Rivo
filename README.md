@@ -173,3 +173,9 @@ The LiveKit client SDK is loaded from jsDelivr in the HTML pages. For production
 - Added an admin account editor for username/display name and **password reset**. Existing passwords are never readable/retrievable; the admin UI only lets an admin set a new password.
 - New SQL migration: `supabase_phase3_voice_reports_admin.sql`. Run it once in Supabase SQL Editor.
 - New Edge Function: `supabase/functions/rivo-admin-update-user/index.ts`. Deploy it as `rivo-admin-update-user` and keep the Supabase service-role key server-side.
+
+
+## v23 surface fixes
+- Call timer starts on successful initial LiveKit connection and stops on teardown.
+- Mobile notifications portal the existing popover to document.body while open to avoid sticky-header/overflow stacking issues.
+- Post images are clickable and open in a lightweight viewer with close/Escape support.
