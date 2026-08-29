@@ -1829,6 +1829,8 @@
     if (!enabled || !root) return;
     const old = root.querySelector(".rivo-owner-intro");
     if (old) old.remove();
+    const oldMark = document.body.querySelector(".rivo-admin-faint-mark");
+    if (oldMark) oldMark.remove();
     const overlay = document.createElement("div");
     overlay.className = "rivo-owner-intro";
     overlay.setAttribute("aria-label", "Owner Rivo");
@@ -1837,8 +1839,17 @@
     requestAnimationFrame(() => overlay.classList.add("is-visible"));
     window.setTimeout(() => {
       overlay.classList.add("is-leaving");
-      window.setTimeout(() => overlay.remove(), 700);
-    }, 2600);
+      window.setTimeout(() => {
+        overlay.remove();
+        if (!document.body.querySelector(".rivo-admin-faint-mark")) {
+          const mark = document.createElement("div");
+          mark.className = "rivo-admin-faint-mark";
+          mark.textContent = "ADMIN";
+          mark.setAttribute("aria-hidden", "true");
+          document.body.appendChild(mark);
+        }
+      }, 460);
+    }, 1500);
   }
 
 async function initProfile() {
