@@ -1,0 +1,7 @@
+# Rivo functions used by the public signup flow intentionally accept anonymous requests.
+# They perform their own validation and use server-side secrets only.
+[functions.rivo-signup-captcha]
+verify_jwt = false
+
+[functions.rivo-signup]
+verify_jwt = false
