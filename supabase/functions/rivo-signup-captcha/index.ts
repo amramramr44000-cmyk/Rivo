@@ -72,7 +72,7 @@ Deno.serve(async (req: Request) => {
 
   try {
     const url = Deno.env.get("SUPABASE_URL");
-    const service = Deno.env.get("SERVICE_ROLE_KEY");
+    const service = Deno.env.get("SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     if (!url || !service) return json({ error: "Server configuration is missing" }, 500);
     const admin = createClient(url, service);
     const ip = (req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown").split(",")[0].trim().slice(0, 120);
