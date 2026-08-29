@@ -1295,7 +1295,7 @@
     async function verifyCaptcha() {
       if (loading) return;
       const code = String(input?.value || "").trim();
-      if (!/^[A-Za-z0-9]{4,6}$/.test(code)) { if (errorBox) errorBox.textContent = "Enter the 4–6 character code."; return; }
+      if (!/^[A-Za-z0-9]{4,6}$/.test(code)) { if (errorBox) errorBox.textContent = "Enter the 5–6 character code."; return; }
       if (!challengeId) { await loadChallenge(); return; }
       try {
         if (verify) verify.disabled = true;

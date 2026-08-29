@@ -496,6 +496,20 @@
     if (existing) throw new Error("That username is already taken.");
 
     const syntheticEmail = `${u}@users.rivo.app`;
+    const captcha = window.__rivoSignupCaptcha || null;
+    if (!captcha?.challengeId || !captcha?.verificationToken) {
+      throw new Error("Complete the security verification first.");
+    }
+    const captchaEndpoint = String(window.RIVO_SECURITY?.signupCaptchaEndpoint || "").trim();
+    if (!captchaEndpoint) throw new Error("Security check is not configured.");
+    const captchaReserve = await fetch(captchaEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "apikey": window.RIVO_SUPABASE?.anonKey || "" },
+      body: JSON.stringify({ action: "consume_signup", challengeId: String(captcha.challengeId), verificationToken: String(captcha.verificationToken) })
+    });
+    const captchaPayload = await captchaReserve.json().catch(() => ({}));
+    if (!captchaReserve.ok) throw new Error(String(captchaPayload?.error || "Security verification failed. Please verify again."));
+
     const signUpOptions = {};
     const { data: auth, error: authError } = await sb.auth.signUp({
       email: syntheticEmail,
