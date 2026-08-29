@@ -164,3 +164,12 @@ The LiveKit client SDK is loaded from jsDelivr in the HTML pages. For production
 - Removed the in-call minimize button and its mini-call behavior from the UI.
 - Removed the in-call audio-output selector UI so the browser/device keeps its normal audio output behavior.
 - No call signaling, LiveKit connection, token flow, media quality, or database logic was intentionally changed in this pass.
+
+## Phase 2 — Call Ring reliability
+
+This release keeps the existing LiveKit media path unchanged and adds a persistent, server-authoritative call-session layer for ringing.
+
+Run once in Supabase SQL Editor:
+- `supabase_phase2_call_ring.sql`
+
+It creates `public.rivo_call_sessions` plus secure RPCs and enables Realtime for that table. The browser uses the existing `rivo-livekit-token` Edge Function for LiveKit media tokens; no API secrets are added to the frontend.
