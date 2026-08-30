@@ -2618,3 +2618,309 @@ body,main,.container,.messages-shell,.messages-layout{max-width:100%;overflow-x:
 .rivo-captcha-card .date-picker-actions{margin-top:10px}
 .human-check-box.verified .human-check-square::after{content:"✓";display:block;line-height:1}
 @media (max-width:520px){.rivo-captcha-card{padding:16px}.rivo-captcha-image{width:165px;height:64px}.rivo-captcha-refresh{right:calc(50% - 119px)}}
+
+/* ============================================================
+   Rivo mobile app shell — unified bottom navigation
+   Desktop is intentionally untouched. This layer only applies
+   below 760px so phone navigation behaves like a native social app.
+   ============================================================ */
+.rivo-mobile-bottom-nav,
+.rivo-mobile-generated-menu{display:none}
+@media(max-width:760px){
+  body{padding-bottom:calc(72px + env(safe-area-inset-bottom))!important}
+  .mobile-quick-nav{display:none!important}
+  .topbar .menu-button{display:none!important}
+  .topbar{position:sticky!important;top:6px!important;z-index:900!important;min-height:54px!important;height:54px!important;border-radius:16px!important}
+  .topbar .brand{display:flex!important;font-size:15px!important}
+  .topbar-right{margin-inline-start:auto!important}
+  .editor-actions{margin-inline-start:auto}
+
+  .rivo-mobile-bottom-nav{
+    position:fixed;
+    z-index:10050;
+    left:8px;
+    right:8px;
+    bottom:8px;
+    height:58px;
+    padding:4px 5px;
+    display:grid;
+    grid-template-columns:repeat(5,minmax(0,1fr));
+    gap:2px;
+    align-items:stretch;
+    border:1px solid rgba(255,255,255,.09);
+    border-radius:18px;
+    background:rgba(9,12,18,.94);
+    box-shadow:0 14px 36px rgba(0,0,0,.34),0 0 0 1px rgba(255,255,255,.018) inset;
+    backdrop-filter:blur(20px) saturate(150%);
+    -webkit-backdrop-filter:blur(20px) saturate(150%);
+    padding-bottom:calc(4px + env(safe-area-inset-bottom));
+    height:calc(58px + env(safe-area-inset-bottom));
+  }
+  .rivo-mobile-nav-item{
+    min-width:0;
+    height:50px;
+    border:0;
+    border-radius:13px;
+    background:transparent;
+    color:#7f8999;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    flex-direction:column;
+    gap:2px;
+    font-size:9px;
+    font-weight:700;
+    line-height:1;
+    text-decoration:none;
+    -webkit-tap-highlight-color:transparent;
+    transition:background .16s ease,color .16s ease,transform .16s ease;
+  }
+  .rivo-mobile-nav-item:active{transform:scale(.94)}
+  .rivo-mobile-nav-item.is-active{color:#f3f5f8;background:rgba(255,255,255,.065)}
+  .rivo-mobile-nav-icon{width:21px;height:21px;display:grid;place-items:center}
+  .rivo-mobile-nav-icon svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .rivo-mobile-nav-item.is-active .rivo-mobile-nav-icon svg{stroke-width:2.15}
+
+  /* The guest mobile menu intentionally contains only Sign in for auth entry.
+     Account creation stays on the main landing CTA, avoiding duplicate actions. */
+  .menu-panel .guest-only[href$="signup.html"]{display:none!important}
+
+  .rivo-mobile-generated-menu{
+    position:fixed;
+    left:12px;
+    right:12px;
+    bottom:calc(74px + env(safe-area-inset-bottom));
+    z-index:10060;
+    padding:8px;
+    display:none;
+    grid-template-columns:1fr 1fr;
+    gap:5px;
+    max-height:calc(100svh - 98px);
+    overflow:auto;
+    border:1px solid var(--border);
+    border-radius:18px;
+    background:rgba(10,13,19,.98);
+    box-shadow:0 18px 60px rgba(0,0,0,.48);
+    backdrop-filter:blur(20px);
+    -webkit-backdrop-filter:blur(20px);
+  }
+  .rivo-mobile-generated-menu.open{display:grid}
+  .rivo-mobile-generated-menu a{min-height:46px;display:flex;align-items:center;padding:0 13px;border-radius:12px;font-size:12px;color:#c7ced9;background:rgba(255,255,255,.02)}
+  .rivo-mobile-generated-menu a:hover{background:rgba(255,255,255,.055)}
+}
+
+
+/* ============================================================
+   Rivo mobile navigation refinement — v8
+   Phone only: edge-to-edge native app feel, left menu, scroll hide/show,
+   and notifications accessed from the menu instead of the top bar.
+   ============================================================ */
+@media(max-width:760px){
+  body{
+    padding-bottom:calc(66px + env(safe-area-inset-bottom))!important;
+    overflow-x:hidden;
+  }
+
+  /* Native-app phone shell: remove the desktop/header strip completely. */
+  .topbar{display:none!important;}
+  .mobile-quick-nav{display:none!important;}
+
+  .rivo-mobile-bottom-nav{
+    position:fixed!important;
+    left:0!important;
+    right:0!important;
+    bottom:0!important;
+    width:100%!important;
+    height:calc(62px + env(safe-area-inset-bottom))!important;
+    padding:4px 7px env(safe-area-inset-bottom)!important;
+    border-left:0!important;
+    border-right:0!important;
+    border-bottom:0!important;
+    border-radius:18px 18px 0 0!important;
+    grid-template-columns:repeat(5,minmax(0,1fr))!important;
+    gap:2px!important;
+    background:rgba(9,12,18,.97)!important;
+    box-shadow:0 -10px 30px rgba(0,0,0,.24),0 -1px 0 rgba(255,255,255,.06) inset!important;
+    transform:translateY(0);
+    transition:transform .24s cubic-bezier(.2,.7,.2,1),opacity .18s ease;
+  }
+  .rivo-mobile-bottom-nav.is-hidden{
+    transform:translateY(calc(100% + 2px));
+    opacity:.98;
+  }
+  .rivo-mobile-nav-item{
+    height:50px!important;
+    border-radius:12px!important;
+    font-size:9px!important;
+  }
+
+  /* Menu is anchored from the left, matching the leftmost bottom-nav action. */
+  .rivo-mobile-menu-sheet{
+    position:fixed;
+    left:10px;
+    right:10px;
+    bottom:calc(70px + env(safe-area-inset-bottom));
+    z-index:2147483000;
+    display:none;
+    max-height:calc(100svh - 92px);
+    overflow:auto;
+    padding:9px;
+    border:1px solid rgba(255,255,255,.1);
+    border-radius:20px;
+    background:rgba(10,13,19,.985);
+    box-shadow:0 22px 70px rgba(0,0,0,.5);
+    backdrop-filter:blur(24px) saturate(145%);
+    -webkit-backdrop-filter:blur(24px) saturate(145%);
+    transform-origin:bottom left;
+    animation:rivoMobileMenuIn .18s ease-out;
+  }
+  .rivo-mobile-menu-sheet.open{display:block;}
+  .rivo-mobile-menu-head{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    padding:4px 4px 9px 8px;
+  }
+  .rivo-mobile-menu-head strong{display:block;font-size:15px;letter-spacing:-.02em}
+  .rivo-mobile-menu-links{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:6px;
+  }
+  .rivo-mobile-menu-links>a,
+  .rivo-mobile-menu-notifications,
+  .rivo-mobile-menu-signout{
+    min-height:45px;
+    width:100%;
+    display:flex;
+    align-items:center;
+    gap:9px;
+    padding:0 12px;
+    border:1px solid rgba(255,255,255,.055);
+    border-radius:13px;
+    background:rgba(255,255,255,.028);
+    color:#cbd2dd;
+    font:inherit;
+    font-size:12px;
+    text-decoration:none;
+    text-align:left;
+    box-sizing:border-box;
+  }
+  .rivo-mobile-menu-links>a:active,
+  .rivo-mobile-menu-notifications:active,
+  .rivo-mobile-menu-signout:active{transform:scale(.98)}
+  .rivo-mobile-menu-link-icon{width:20px;height:20px;display:grid;place-items:center;flex:0 0 20px}
+  .rivo-mobile-menu-link-icon svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .rivo-mobile-menu-notifications{position:relative;cursor:pointer}
+  .rivo-mobile-menu-notifications .notification-badge{
+    position:static;
+    margin-inline-start:auto;
+    border:0;
+  }
+  .rivo-mobile-menu-signout{cursor:pointer;color:#e7c0c0}
+  .rivo-mobile-menu-links .guest-only{grid-column:1/-1}
+  .rivo-mobile-menu-links .rivo-mobile-menu-signout{grid-column:1/-1}
+
+  /* The actual notification button stays functional but visually hidden on phones. */
+  .rivo-mobile-notification-source{
+    position:fixed!important;
+    left:0!important;
+    top:0!important;
+    width:1px!important;
+    height:1px!important;
+    overflow:visible!important;
+    z-index:-1!important;
+  }
+  .rivo-mobile-notification-source .notification-btn{
+    position:absolute!important;
+    width:1px!important;
+    height:1px!important;
+    opacity:0!important;
+    pointer-events:none!important;
+  }
+  .rivo-mobile-notification-source .notification-popover{
+    position:fixed!important;
+    top:10px!important;
+    left:10px!important;
+    right:10px!important;
+    width:auto!important;
+    max-height:calc(100svh - 90px)!important;
+    z-index:2147483001!important;
+  }
+  body.rivo-mobile-menu-open{overflow:hidden;}
+}
+@keyframes rivoMobileMenuIn{
+  from{opacity:0;transform:translateY(8px) scale(.985)}
+  to{opacity:1;transform:translateY(0) scale(1)}
+}
+
+/* ============================================================
+   Rivo mobile navigation refinement — profile visibility
+   Profile remains a stable fifth bottom-nav destination for guests too;
+   guests are routed to Sign in, authenticated users to their profile.
+   ============================================================ */
+@media(max-width:760px){
+  .rivo-mobile-bottom-nav [data-profile-link]{
+    display:flex!important;
+    visibility:visible!important;
+    opacity:1!important;
+  }
+}
+
+/* ============================================================
+   Rivo mobile navigation refinement — v9
+   Phone only: Profile replaces Home in bottom bar; Home moves to Menu;
+   menu contains no duplicate bottom-nav destinations and stays compact.
+   ============================================================ */
+@media(max-width:760px){
+  .rivo-mobile-bottom-nav{
+    grid-template-columns:repeat(5,minmax(0,1fr))!important;
+  }
+  .rivo-mobile-nav-item{
+    font-size:9px!important;
+  }
+  .rivo-mobile-nav-item.auth-required.hidden{
+    display:none!important;
+  }
+
+  .rivo-mobile-menu-sheet{
+    left:10px!important;
+    right:auto!important;
+    width:min(304px,calc(100vw - 20px))!important;
+    max-height:min(58svh,430px)!important;
+    bottom:calc(70px + env(safe-area-inset-bottom))!important;
+    padding:8px!important;
+    border-radius:17px!important;
+  }
+  .rivo-mobile-menu-head{
+    padding:3px 4px 7px 7px!important;
+  }
+  .rivo-mobile-menu-head strong{font-size:14px!important}
+  .rivo-mobile-menu-links{
+    grid-template-columns:1fr!important;
+    gap:4px!important;
+  }
+  .rivo-mobile-menu-links>a,
+  .rivo-mobile-menu-notifications,
+  .rivo-mobile-menu-signout{
+    min-height:40px!important;
+    padding:0 11px!important;
+    border-radius:11px!important;
+    gap:8px!important;
+    font-size:11px!important;
+  }
+  .rivo-mobile-menu-link-icon{
+    width:18px!important;
+    height:18px!important;
+    flex-basis:18px!important;
+  }
+  .rivo-mobile-menu-link-icon svg{
+    width:17px!important;
+    height:17px!important;
+  }
+  .rivo-mobile-menu-links>a.is-active{
+    background:rgba(255,255,255,.065)!important;
+    color:#f3f5f8!important;
+  }
+}
