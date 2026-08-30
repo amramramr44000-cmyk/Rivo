@@ -1832,13 +1832,14 @@ html[data-color-scheme="light"] .social-side-link.active{background:rgba(16,24,4
     min-width:190px;
     max-width:min(320px,calc(100vw - 24px));
   }
-  .menu-panel > a{
+  .menu-panel > a:not(.hidden){
     display:flex!important;
     align-items:center;
     min-height:44px;
     width:100%;
     box-sizing:border-box;
   }
+  .menu-panel > a.hidden{display:none!important;}
 }
 
 
