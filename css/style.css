@@ -2656,6 +2656,7 @@ body,main,.container,.messages-shell,.messages-layout{max-width:100%;overflow-x:
     touch-action:manipulation;
   }
   .rivo-mobile-bottom-nav.nav-hidden{transform:translateY(110%);opacity:.02;pointer-events:none}
+  body.rivo-overlay-open .rivo-mobile-bottom-nav{display:none!important}
   .rivo-mobile-nav-item{
     min-width:0;
     min-height:56px;
@@ -2726,5 +2727,29 @@ body,main,.container,.messages-shell,.messages-layout{max-width:100%;overflow-x:
 
   /* The old mobile quick controls belong to the hidden header only. */
   .mobile-quick-nav{display:none!important}
+
+  /* The topbar (and Save/Preview inside .editor-actions) is hidden on
+     mobile above in favor of the bottom nav. Give the editor page its
+     own always-visible action bar so Save is never lost. */
+  .editor-page{padding-bottom:calc(136px + env(safe-area-inset-bottom))!important}
+  .editor-page .editor-actions{
+    position:fixed!important;
+    visibility:visible!important;
+    pointer-events:auto!important;
+    left:0;right:0;
+    bottom:calc(64px + env(safe-area-inset-bottom));
+    z-index:2147483000;
+    display:flex!important;
+    justify-content:center;
+    gap:8px;
+    margin:0!important;
+    padding:9px 12px;
+    background:linear-gradient(180deg,rgba(10,13,19,.94),rgba(6,9,14,.99));
+    border-top:1px solid rgba(255,255,255,.085);
+    box-shadow:0 -6px 20px rgba(0,0,0,.22);
+    backdrop-filter:blur(18px) saturate(150%);
+    -webkit-backdrop-filter:blur(18px) saturate(150%);
+  }
+  .editor-page .editor-actions .btn{flex:1;max-width:220px;min-height:44px!important;height:44px!important;font-size:12px!important}
 }
 @media(min-width:761px){.rivo-mobile-bottom-nav{display:none!important}}
