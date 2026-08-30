@@ -28,6 +28,132 @@
 
   window.PFUI = { $, $$, notify };
 
+  function initMobileBottomNav() {
+    const path = location.pathname.split("/").pop() || "index.html";
+    if (["login.html", "signup.html"].includes(path)) return;
+    if (document.body.classList.contains("auth-page")) return;
+    if (document.querySelector("[data-rivo-mobile-bottom-nav]")) return;
+
+    const page = path === "index.html" ? "index.html" : path;
+    const href = (file) => {
+      if (path === "index.html") return file === "index.html" ? "index.html" : `pages/${file}`;
+      return file === "index.html" ? "../index.html" : file;
+    };
+    const active = (file) => file.split("?")[0] === page ? " is-active" : "";
+    const icon = (name) => ({
+      home:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.8 12 3l9 7.8v8.2a2 2 0 0 1-2 2h-4.5v-6h-5v6H5a2 2 0 0 1-2-2z"/></svg>',
+      profile:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+      explore:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7.2"/><path d="m20 20-3.8-3.8"/><circle cx="11" cy="11" r="2.2"/></svg>',
+      posts:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h14A1.5 1.5 0 0 1 20.5 6v12A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18V6A1.5 1.5 0 0 1 5 4.5Z"/><path d="M7.5 8.5h9M7.5 12h6M7.5 15.5h8"/></svg>',
+      messages:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11.2a7.7 7.7 0 0 1-3.7 6.6 8.2 8.2 0 0 1-8.4.1L3.5 20l1.1-3.8a7.7 7.7 0 0 1-1.1-4 7.8 7.8 0 0 1 8.2-7.7h.6a8 8 0 0 1 8.2 6.7Z"/><path d="M8.3 11.7h.1M12 11.7h.1M15.7 11.7h.1"/></svg>',
+      menu:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
+      notifications:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/><path d="M10 21h4"/></svg>'
+    }[name]);
+
+    const nav = document.createElement("nav");
+    nav.className = "rivo-mobile-bottom-nav";
+    nav.setAttribute("data-rivo-mobile-bottom-nav", "true");
+    nav.innerHTML = `
+      <button class="rivo-mobile-nav-item" type="button" data-rivo-mobile-menu aria-label="Open menu" aria-expanded="false">
+        <span class="rivo-mobile-nav-icon">${icon("menu")}</span><span>Menu</span>
+      </button>
+      <a href="${href("login.html")}" data-profile-link class="rivo-mobile-nav-item${active("profile.html")}" aria-label="Profile">
+        <span class="rivo-mobile-nav-icon">${icon("profile")}</span><span>Profile</span>
+      </a>
+      <a class="rivo-mobile-nav-item${active("explore.html")}" href="${href("explore.html")}" aria-label="Explore"><span class="rivo-mobile-nav-icon">${icon("explore")}</span><span>Explore</span></a>
+      <a class="rivo-mobile-nav-item${active("posts.html")}" href="${href("posts.html")}" aria-label="Posts"><span class="rivo-mobile-nav-icon">${icon("posts")}</span><span>Posts</span></a>
+      <a class="rivo-mobile-nav-item${active("messages.html")}" href="${href("messages.html")}" aria-label="Messages"><span class="rivo-mobile-nav-icon">${icon("messages")}</span><span>Messages</span></a>`;
+
+    const menu = document.createElement("div");
+    menu.className = "rivo-mobile-menu-sheet";
+    menu.setAttribute("data-rivo-mobile-menu-sheet", "true");
+    menu.innerHTML = `
+      <div class="rivo-mobile-menu-head"><div><span class="eyebrow">RIVO</span><strong>Menu</strong></div><button type="button" class="icon-btn" data-rivo-mobile-menu-close aria-label="Close menu">×</button></div>
+      <div class="rivo-mobile-menu-links">
+        <a href="${href("index.html")}"${active("index.html") ? ' class="is-active"' : ""}><span class="rivo-mobile-menu-link-icon">${icon("home")}</span><span>Home</span></a>
+        <a href="${href("communities.html")}">Communities</a>
+        <a href="${href("friends.html")}" class="auth-required hidden">Friends</a>
+        <a href="${href("editor.html")}" class="auth-required hidden">Editor</a>
+        <a href="${href("settings.html")}" class="auth-required hidden">Settings</a>
+        <button type="button" class="rivo-mobile-menu-notifications" data-rivo-mobile-notifications><span class="rivo-mobile-menu-link-icon">${icon("notifications")}</span><span>Notifications</span><i class="notification-badge hidden" data-rivo-mobile-notification-badge>0</i></button>
+        <a href="${href("login.html")}" class="guest-only">Sign in</a>
+        <button type="button" class="rivo-mobile-menu-signout auth-required hidden" data-rivo-mobile-signout>Sign out</button>
+      </div>`;
+    document.body.appendChild(menu);
+    document.body.appendChild(nav);
+
+    const toggle = nav.querySelector("[data-rivo-mobile-menu]");
+    const close = menu.querySelector("[data-rivo-mobile-menu-close]");
+    const setOpen = (open) => {
+      menu.classList.toggle("open", open);
+      toggle?.setAttribute("aria-expanded", String(open));
+      document.body.classList.toggle("rivo-mobile-menu-open", open);
+    };
+    toggle?.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); setOpen(!menu.classList.contains("open")); });
+    close?.addEventListener("click", () => setOpen(false));
+    menu.addEventListener("click", (e) => { if (e.target === menu || e.target.closest("a")) setOpen(false); });
+    document.addEventListener("click", (e) => { if (!menu.contains(e.target) && !nav.contains(e.target)) setOpen(false); });
+
+    menu.querySelector("[data-rivo-mobile-notifications]")?.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const button = document.querySelector("[data-rivo-notifications]");
+      if (button) button.click(); else notify("Notifications are not ready yet.", "info");
+      setOpen(false);
+    });
+    menu.querySelector("[data-rivo-mobile-signout]")?.addEventListener("click", async () => {
+      try { await PF.clearSession(); location.href = href("index.html"); }
+      catch (err) { notify(err?.message || "Could not sign out.", "error"); }
+    });
+
+    const syncAuth = () => {
+      const logged = !!PF.currentUsername();
+      nav.querySelectorAll(".auth-required").forEach(el => el.classList.toggle("hidden", !logged));
+      menu.querySelectorAll(".auth-required").forEach(el => el.classList.toggle("hidden", !logged));
+      menu.querySelectorAll(".guest-only").forEach(el => el.classList.toggle("hidden", logged));
+      const profile = nav.querySelector("[data-profile-link]");
+      if (profile) {
+        profile.href = logged
+          ? href(`profile.html?u=${encodeURIComponent(PF.currentUsername())}`)
+          : href("login.html");
+        profile.setAttribute("aria-label", logged ? "Profile" : "Profile — Sign in first");
+      }
+    };
+    syncAuth();
+    // The core auth listener caches the username asynchronously. Re-sync the
+    // mobile nav when Supabase restores or changes the session so Profile is
+    // never left hidden after a successful login.
+    try {
+      window.__rivoSupabase?.auth?.onAuthStateChange?.(() => {
+        setTimeout(syncAuth, 0);
+        setTimeout(syncAuth, 200);
+      });
+    } catch {}
+    [50, 250, 750, 1500].forEach(ms => setTimeout(syncAuth, ms));
+
+    const copyNotificationBadge = () => {
+      const source = document.querySelector("[data-notification-badge]");
+      const target = menu.querySelector("[data-rivo-mobile-notification-badge]");
+      if (source && target) { target.textContent = source.textContent || "0"; target.classList.toggle("hidden", source.classList.contains("hidden")); }
+    };
+    const observer = new MutationObserver(copyNotificationBadge);
+    observer.observe(document.body, { childList:true, subtree:true, attributes:true, attributeFilter:["class"] });
+    copyNotificationBadge();
+
+    let lastY = window.scrollY || 0, ticking = false;
+    const onScroll = () => {
+      const y = window.scrollY || 0, delta = y - lastY;
+      if (Math.abs(delta) > 4) {
+        nav.classList.toggle("is-hidden", delta > 0 && y > 40);
+        if (delta < 0 || y <= 40) nav.classList.remove("is-hidden");
+        if (menu.classList.contains("open") && delta > 0) setOpen(false);
+        lastY = y;
+      }
+      ticking = false;
+    };
+    window.addEventListener("scroll", () => { if (!ticking) { ticking = true; requestAnimationFrame(onScroll); } }, { passive:true });
+  }
+
+
   function initMenu() {
     const button = $("[data-menu-toggle]");
     const panel = $("[data-menu-panel]");
@@ -1173,7 +1299,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", async () => {
-    nav(); initMenu(); initStorySystem(); initCallSystem();
+    nav(); initMenu(); initMobileBottomNav(); initStorySystem(); initCallSystem();
     $$('[data-profile-link]').forEach(a => { const me = PF.currentUsername(); if (me) a.href = `profile.html?u=${encodeURIComponent(me)}`; });
     $("[data-logout]")?.addEventListener("click", e => { e.preventDefault(); PF.clearSession(); location.href = "../index.html"; });
     const path = location.pathname.split("/").pop();
