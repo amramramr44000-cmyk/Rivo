@@ -1284,8 +1284,18 @@
     })();
   }
 
+  function initOverlayNavVisibility() {
+    if (window.innerWidth > 760) return;
+    const OVERLAY_SELECTOR = ".story-viewer-backdrop.open, .call-backdrop.open, .modal-backdrop.open, .post-image-viewer.open, .messages-layout.conversation-open, .community-room:not(.hidden)";
+    const sync = () => {
+      document.body.classList.toggle("rivo-overlay-open", !!document.querySelector(OVERLAY_SELECTOR));
+    };
+    sync();
+    new MutationObserver(sync).observe(document.body, { attributes: true, subtree: true, attributeFilter: ["class"] });
+  }
+
   document.addEventListener("DOMContentLoaded", async () => {
-    nav(); initMenu(); initMobileBottomNav(); applyNavLanguage(); initStorySystem(); initCallSystem();
+    nav(); initMenu(); initMobileBottomNav(); applyNavLanguage(); initOverlayNavVisibility(); initStorySystem(); initCallSystem();
     $$('[data-profile-link]').forEach(a => { const me = PF.currentUsername(); if (me) a.href = `profile.html?u=${encodeURIComponent(me)}`; });
     setTimeout(() => {
       const me = PF.currentUsername();

@@ -1024,7 +1024,13 @@
   function applySavedLanguage() {
     const lang = currentLanguage();
     document.documentElement.dataset.language = lang;
-    document.documentElement.setAttribute("dir", lang === "ar" ? "rtl" : "ltr");
+    document.documentElement.lang = lang;
+    // Note: dir is intentionally left as the page's built-in "ltr". The
+    // layout (icon order, flex/grid direction, mixed Arabic/English lines)
+    // was built LTR-only; mirroring the whole document with dir="rtl"
+    // scrambled unrelated text and icon positions instead of just
+    // translating labels. Arabic text still renders correctly right-to-left
+    // on its own inside an LTR container.
     return lang;
   }
   applySavedLanguage();
