@@ -79,8 +79,8 @@
       settings:`<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 13a7.97 7.97 0 0 0 0-2l2-1.5-2-3.4-2.4 1a8 8 0 0 0-1.7-1L15 3h-4l-.3 2.1a8 8 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a8 8 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.7 1L11 21h4l.3-2.1a8 8 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5Z"></path></svg>`,
       messages:`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.8A3.8 3.8 0 0 1 7.8 3h8.4A3.8 3.8 0 0 1 20 6.8v5.4a3.8 3.8 0 0 1-3.8 3.8H11l-4.7 4v-4.5A3.8 3.8 0 0 1 4 12.2Z"></path><path d="M8 9h8M8 12h5"></path></svg>`
     };
-    const item = (key, label, href, extra="", iconKey=key) => `<a class="rivo-mobile-nav-item ${extra}" data-mobile-nav="${key}" href="${href}"><span class="rivo-mobile-nav-icon">${icon[iconKey]}</span><span>${label}</span></a>`;
-    bar.innerHTML = `${item("menu", "قائمة", "#", "rivo-mobile-menu-trigger")}${item("explore", "Search", `${pageBase}explore.html`)}${item("profile", "ملف", profileHref())}${item("messages", "رسائل", `${pageBase}messages.html`)}${item("posts", "تصفح", `${pageBase}posts.html`, "", "home")}`;
+    const item = (key, label, href, extra="", iconKey=key) => `<a class="rivo-mobile-nav-item ${extra}" data-mobile-nav="${key}" href="${href}"><span class="rivo-mobile-nav-icon">${icon[iconKey]}</span><span data-i18n-nav="${key}">${label}</span></a>`;
+    bar.innerHTML = `${item("menu", "Menu", "#", "rivo-mobile-menu-trigger")}${item("explore", "Search", `${pageBase}explore.html`)}${item("profile", "Profile", profileHref())}${item("messages", "Messages", `${pageBase}messages.html`)}${item("posts", "Home", `${pageBase}posts.html`, "", "home")}`;
     document.body.appendChild(bar);
     const current = location.pathname.split("/").pop() || "index.html";
     bar.querySelectorAll("[data-mobile-nav]").forEach(a => {
@@ -122,6 +122,31 @@
     window.addEventListener("resize", () => {
       if (window.innerWidth > 760) bar.remove();
     }, {passive:true});
+  }
+
+  function applyNavLanguage() {
+    const lang = PF.applySavedLanguage ? PF.applySavedLanguage() : "en";
+    const dict = (PF.NAV_I18N && PF.NAV_I18N[lang]) || {};
+    const hrefMap = [
+      ["posts.html", "posts"], ["communities.html", "communities"], ["explore.html", "explore"],
+      ["friends.html", "friends"], ["editor.html", "editor"], ["settings.html", "settings"],
+      ["messages.html", "messages"], ["login.html", "signin"], ["signup.html", "createprofile"],
+      ["profile.html", "profile"]
+    ];
+    $$(".desktop-nav a, .menu-panel a").forEach(a => {
+      const href = (a.getAttribute("href") || "").split("?")[0];
+      const hit = hrefMap.find(([suffix]) => href === suffix || href.endsWith("/" + suffix));
+      if (hit && dict[hit[1]]) a.textContent = dict[hit[1]];
+    });
+    const home = $("[data-menu-home]");
+    if (home && dict.home) home.textContent = dict.home;
+    const signout = $("[data-menu-logout]");
+    if (signout && dict.signout) signout.textContent = dict.signout;
+    $$("[data-i18n-nav]").forEach(span => {
+      const key = span.getAttribute("data-i18n-nav");
+      const navKey = key === "posts" ? "home" : key === "explore" ? "search" : key;
+      if (dict[navKey]) span.textContent = dict[navKey];
+    });
   }
 
   function nav() {
@@ -1260,7 +1285,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", async () => {
-    nav(); initMenu(); initMobileBottomNav(); initStorySystem(); initCallSystem();
+    nav(); initMenu(); initMobileBottomNav(); applyNavLanguage(); initStorySystem(); initCallSystem();
     $$('[data-profile-link]').forEach(a => { const me = PF.currentUsername(); if (me) a.href = `profile.html?u=${encodeURIComponent(me)}`; });
     setTimeout(() => {
       const me = PF.currentUsername();
@@ -2827,10 +2852,14 @@ voiceMessageSend?.addEventListener("click",async()=>{
     $("#themeDark") && ($("#themeDark").checked = mode === "dark");
     $("#themeLight") && ($("#themeLight").checked = mode === "light");
     $$('input[name="themeMode"]').forEach(r => r.addEventListener("change", () => { localStorage.setItem("rivo_color_scheme", r.value); document.documentElement.dataset.colorScheme = r.value; }));
-    const lang = localStorage.getItem("rivo_language") || "en";
+    const lang = PF.currentLanguage ? PF.currentLanguage() : (localStorage.getItem("rivo_language") || "en");
     $("#langAr") && ($("#langAr").checked = lang === "ar");
     $("#langEn") && ($("#langEn").checked = lang === "en");
-    $$('input[name="languageMode"]').forEach(r => r.addEventListener("change", () => { localStorage.setItem("rivo_language", r.value); document.documentElement.dataset.language = r.value; }));
+    $$('input[name="languageMode"]').forEach(r => r.addEventListener("change", () => {
+      localStorage.setItem("rivo_language", r.value);
+      applyNavLanguage();
+      notify(r.value === "ar" ? "تم حفظ اللغة" : "Language saved", "success");
+    }));
     const notifOn = $("#notifOn"), notifOff = $("#notifOff"), nsupport = $("#notificationSupport");
     if (notifOn && notifOff) {
       const supported = "Notification" in window;

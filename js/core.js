@@ -1006,6 +1006,29 @@
   }
   applySavedColorScheme();
 
+  // Rivo language layer. Full in-page translation of every string is a larger
+  // project (README already flags this), but navigation chrome — the parts a
+  // person sees on every single page — is fully wired here so the saved
+  // choice actually sticks instead of doing nothing after Settings.
+  const NAV_I18N = {
+    en: { menu: "Menu", search: "Search", profile: "Profile", messages: "Messages", home: "Home",
+      posts: "Posts", communities: "Communities", explore: "Explore", friends: "Friends",
+      editor: "Editor", settings: "Settings", signin: "Sign in", signout: "Sign out", createprofile: "Create profile" },
+    ar: { menu: "القائمة", search: "بحث", profile: "الملف الشخصي", messages: "الرسائل", home: "الرئيسية",
+      posts: "المنشورات", communities: "المجتمعات", explore: "استكشاف", friends: "الأصدقاء",
+      editor: "المحرر", settings: "الإعدادات", signin: "تسجيل الدخول", signout: "تسجيل الخروج", createprofile: "إنشاء حساب" }
+  };
+  function currentLanguage() {
+    return localStorage.getItem("rivo_language") === "ar" ? "ar" : "en";
+  }
+  function applySavedLanguage() {
+    const lang = currentLanguage();
+    document.documentElement.dataset.language = lang;
+    document.documentElement.setAttribute("dir", lang === "ar" ? "rtl" : "ltr");
+    return lang;
+  }
+  applySavedLanguage();
+
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
       const onPages = /\/pages\//.test(location.pathname);
@@ -1381,6 +1404,7 @@ async function getVoiceUrl(path) {
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, reportPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, reportPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
+    NAV_I18N, currentLanguage, applySavedLanguage
   };
 })();
