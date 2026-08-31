@@ -185,3 +185,7 @@ The LiveKit client SDK is loaded from jsDelivr in the HTML pages. For production
 - Post images remain frameless inside cards and open in a lightweight viewer.
 - Camera attachment is refreshed when LiveKit publishes the local camera track and when camera is enabled.
 - Mobile notification popover is fixed to the viewport above the mobile navigation area.
+
+## Rivo notifications
+
+Notifications are intentionally **in-app only**. Rivo listens to `public.rivo_notifications` through Supabase Realtime while the app is open, so there is no VAPID/Web Push setup, no browser permission prompt, and no extra Edge Function or webhook to configure.
