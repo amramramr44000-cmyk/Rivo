@@ -678,6 +678,18 @@
     invalidateProfileCache(currentUsername());
     return v;
   }
+  async function createCallSession(callId, calleeId, roomName, isVideo=false) {
+    requireClient();
+    const result = await callRpc("rivo_create_call_session", {
+      p_call_id: String(callId), p_callee_id: String(calleeId), p_room_name: String(roomName), p_is_video: !!isVideo
+    }, "CALL_SESSION_CREATE");
+    return result;
+  }
+  async function endCallSession(callId) {
+    requireClient();
+    return callRpc("rivo_end_call_session", { p_call_id: String(callId) }, "CALL_SESSION_END");
+  }
+
   async function sendMessage(username, content) {
     const u = normalizeUsername(username);
     // Normalize to NFC so the same word typed on different devices/keyboards
@@ -1006,42 +1018,558 @@
   }
   applySavedColorScheme();
 
-  // Rivo language layer. Full in-page translation of every string is a larger
-  // project (README already flags this), but navigation chrome — the parts a
-  // person sees on every single page — is fully wired here so the saved
-  // choice actually sticks instead of doing nothing after Settings.
+  // Rivo full interface language layer.
+  // Arabic translates the app chrome/UI and switches the document to RTL. User-created names, usernames, bios, posts and messages remain unchanged.
+  // User-created names, usernames, bios, posts and messages are never translated.
   const NAV_I18N = {
-    en: { menu: "Menu", search: "Search", profile: "Profile", messages: "Messages", home: "Home",
-      posts: "Posts", communities: "Communities", explore: "Explore", friends: "Friends",
-      editor: "Editor", settings: "Settings", signin: "Sign in", signout: "Sign out", createprofile: "Create profile" },
-    ar: { menu: "القائمة", search: "بحث", profile: "الملف الشخصي", messages: "الرسائل", home: "الرئيسية",
-      posts: "المنشورات", communities: "المجتمعات", explore: "استكشاف", friends: "الأصدقاء",
-      editor: "المحرر", settings: "الإعدادات", signin: "تسجيل الدخول", signout: "تسجيل الخروج", createprofile: "إنشاء حساب" }
+    en: { menu:"Menu", search:"Search", profile:"Profile", messages:"Messages", home:"Home",
+      posts:"Posts", communities:"Communities", explore:"Explore", friends:"Friends",
+      editor:"Editor", settings:"Settings", signin:"Sign in", signout:"Sign out", createprofile:"Create profile",
+      notifications:"Notifications" },
+    ar: { menu:"القائمة", search:"بحث", profile:"الملف الشخصي", messages:"الرسائل", home:"الرئيسية",
+      posts:"المنشورات", communities:"المجتمعات", explore:"استكشاف", friends:"الأصدقاء",
+      editor:"المحرر", settings:"الإعدادات", signin:"تسجيل الدخول", signout:"تسجيل الخروج", createprofile:"إنشاء حساب",
+      notifications:"الإشعارات" }
   };
-  function currentLanguage() {
-    return localStorage.getItem("rivo_language") === "ar" ? "ar" : "en";
+
+  const I18N = {
+    "Home":"الرئيسية","Posts":"المنشورات","Communities":"المجتمعات","Explore":"استكشاف","Search":"بحث",
+    "Messages":"الرسائل","Friends":"الأصدقاء","Profile":"الملف الشخصي","Editor":"المحرر","Edit profile":"تعديل الملف الشخصي",
+    "Settings":"الإعدادات","Sign in":"تسجيل الدخول","Sign out":"تسجيل الخروج","Create profile":"إنشاء حساب",
+    "Create your profile":"أنشئ ملفك الشخصي","Create my profile":"إنشاء ملفي الشخصي","Already have a profile?":"لديك ملف شخصي بالفعل؟",
+    "New here?":"جديد هنا؟","Verify":"تحقق","Verified":"تم التحقق","Save":"حفظ","Send":"إرسال","Cancel":"إلغاء",
+    "Upload":"رفع","Edit":"تعديل","Delete":"حذف","Remove":"إزالة","Accept":"قبول","Decline":"رفض","View":"عرض",
+    "Ready":"جاهز","Loading…":"جارٍ التحميل…","Loading feed…":"جارٍ تحميل المنشورات…","Loading communities…":"جارٍ تحميل المجتمعات…",
+    "Loading profile":"جارٍ تحميل الملف الشخصي","Loading admin tools":"جارٍ تحميل أدوات الإدارة","Unavailable":"غير متاح",
+    "None":"لا يوجد","Everyone":"الجميع","Friends only":"الأصدقاء فقط","Nobody":"لا أحد","Nobody (close messages)":"لا أحد (إغلاق الرسائل)",
+    "ACCOUNT":"الحساب","Appearance":"المظهر","Calls":"المكالمات","Messages.":"الرسائل","Notifications":"الإشعارات",
+    "About":"حول","About Rivo":"حول Rivo","Storage":"التخزين","Cloud data":"البيانات السحابية","Session":"الجلسة",
+    "Display name":"اسم العرض","Username":"اسم المستخدم","Password":"كلمة المرور","Confirm password":"تأكيد كلمة المرور",
+    "Birth date":"تاريخ الميلاد","Location":"الموقع","Bio":"نبذة","Social links":"الروابط الاجتماعية",
+    "Projects & music":"المشاريع والموسيقى","Projects and music":"المشاريع والموسيقى","Avatar":"الصورة الشخصية","Banner":"الغلاف",
+    "Badges":"الشارات","Avatar frame":"إطار الصورة","Accent color":"اللون المميز","Card shape":"شكل البطاقة",
+    "Sections":"الأقسام","Media":"الوسائط","Music cover":"غلاف الموسيقى","Upload audio":"رفع ملف صوتي","Choose audio":"اختيار ملف صوتي",
+    "Choose image":"اختيار صورة","Choose cover":"اختيار الغلاف","Gallery":"المعرض","Preview":"معاينة",
+    "LIVE PREVIEW":"المعاينة المباشرة","Templates":"القوالب","Profile basics":"أساسيات الملف الشخصي","Profile account":"حساب الملف الشخصي",
+    "Account settings":"إعدادات الحساب","Manage your account details from one place.":"أدر تفاصيل حسابك من مكان واحد.",
+    "Account details and the safe sign-out area.":"تفاصيل الحساب ومنطقة تسجيل الخروج الآمنة.",
+    "Choose the interface theme for this device. Your profile design stays unchanged.":"اختر مظهر الواجهة لهذا الجهاز. يظل تصميم ملفك الشخصي كما هو.",
+    "Choose your preferred language. This translates navigation and is saved across pages — full in-page content translation is coming soon.":"اختر لغتك المفضلة. سيتم حفظها وتطبيقها على واجهة التطبيق.",
+    "Who can call you?":"من يمكنه الاتصال بك؟","Who can message you?":"من يمكنه مراسلتك؟",
+    "Save call privacy":"حفظ خصوصية المكالمات","Save message privacy":"حفظ خصوصية الرسائل",
+    "Private conversations with voice and video calling.":"محادثات خاصة مع المكالمات الصوتية والمرئية.",
+    "Choose who is allowed to start a voice or video call with you.":"اختر من يمكنه بدء مكالمة صوتية أو مرئية معك.",
+    "Choose who can start a text conversation with you.":"اختر من يمكنه بدء محادثة نصية معك.",
+    "Your messages.":"رسائلك.","Conversations":"المحادثات","Choose a conversation":"اختر محادثة",
+    "Select someone from the left to start messaging.":"اختر شخصًا من القائمة لبدء المراسلة.",
+    "Search people…":"البحث عن أشخاص…","Search people...":"البحث عن أشخاص…","Search friends...":"البحث عن الأصدقاء…",
+    "Write a message...":"اكتب رسالة…","Write a message…":"اكتب رسالة…","Send voice":"إرسال الرسالة الصوتية",
+    "Hold to record":"اضغط باستمرار للتسجيل","Voice message":"رسالة صوتية","Voice ready":"الرسالة الصوتية جاهزة","Too many requests. Please try again later.":"طلبات كثيرة جدًا. حاول مرة أخرى لاحقًا.","Could not authorize the call.":"تعذر تفويض المكالمة.","Call session expired":"انتهت جلسة المكالمة.",
+    "Choose an image":"اختر صورة","Choose a conversation":"اختر محادثة","Private messages":"الرسائل الخاصة",
+    "Find people.":"اعثر على أشخاص.","Find your room.":"اعثر على مجتمعك.","Your circle.":"دائرتك.",
+    "Friends and requests":"الأصدقاء والطلبات","Requests":"الطلبات","No pending requests.":"لا توجد طلبات معلقة.",
+    "No friends found.":"لم يتم العثور على أصدقاء.","Friend added":"تمت إضافة الصديق","Friend removed":"تم حذف الصديق",
+    "Request declined":"تم رفض الطلب","View Profile":"عرض الملف الشخصي","View":"عرض",
+    "Search by username or display name.":"ابحث باسم المستخدم أو اسم العرض.",
+    "No profiles found":"لم يتم العثور على ملفات شخصية","No friends found.":"لم يتم العثور على أصدقاء",
+    "Create a profile":"إنشاء ملف شخصي","Create Profile — Rivo":"إنشاء حساب — Rivo","Sign In — Rivo":"تسجيل الدخول — Rivo",
+    "Sign in to your Rivo account.":"سجّل الدخول إلى حسابك في Rivo.",
+    "3–26 characters: letters, numbers, . _ -":"من 3 إلى 26 حرفًا: حروف وأرقام و . _ -",
+    "3–26 chars: letters, numbers, . _ -":"من 3 إلى 26 حرفًا: حروف وأرقام و . _ -",
+    "Choose year, month and day":"اختر السنة والشهر واليوم","Select your birth date":"اختر تاريخ ميلادك",
+    "Enter Profile":"أدخل إلى الملف الشخصي","Verification code":"رمز التحقق","Type the code":"اكتب الرمز",
+    "Verification complete.":"اكتمل التحقق.","Security check is not configured.":"لم يتم إعداد فحص الأمان.",
+    "Security check could not be completed. Please try again.":"تعذر إكمال فحص الأمان. حاول مرة أخرى.",
+    "Enter the 5–6 character code.":"أدخل الرمز المكوّن من 5–6 أحرف.",
+    "Checking…":"جارٍ التحقق…","Verification failed. Try a new code.":"فشل التحقق. جرّب رمزًا جديدًا.",
+    "I'm human":"أنا لست روبوتًا","SECURITY CHECK":"فحص الأمان",
+    "One local app, five real tools":"تطبيق واحد بخمس أدوات حقيقية","Local-first interactive profiles":"ملفات شخصية تفاعلية محلية أولًا",
+    "Built for phones":"مصمم للهواتف","Same profile engine used on the public page":"نفس محرك الملف المستخدم في الصفحة العامة",
+    "Full editor control":"تحكم كامل في المحرر","Cloud database + media storage":"قاعدة بيانات سحابية + تخزين الوسائط",
+    "Avatar, banner & music":"الصورة والغلاف والموسيقى","Choose up to 3":"اختر حتى 3",
+    "Add link":"+ إضافة رابط","+ Add link":" إضافة رابط",
+    "Social":"اجتماعي","People":"الأشخاص","Feed":"المنشورات","ABOUT RIVO":"حول Rivo","CONTROL ROOM":"لوحة التحكم",
+    "WELCOME BACK":"مرحبًا بعودتك","LIVE PREVIEW":"المعاينة المباشرة","SOCIAL FEED":"المنشورات الاجتماعية",
+    "COMMUNITIES":"المجتمعات","MESSAGING":"المراسلة","DISCOVER":"استكشاف","IDENTITY":"الهوية","START YOUR IDENTITY":"ابدأ هويتك",
+    "INTERACTIVE IDENTITY":"هوية تفاعلية","Make it yours":"اجعلها بطريقتك","Live identity":"هوية حية",
+    "Your Profile.":"ملفك الشخصي.","Your Identity.":"هويتك.","Your Profile. Your Identity.":"ملفك الشخصي. هويتك.",
+    "Developer":"مطور","Creator":"صانع محتوى","Online":"متصل","Offline":"غير متصل",
+    "Loading":"جارٍ التحميل","Choose a date":"اختر تاريخًا","Select a date":"اختر تاريخًا",
+    "January":"يناير","February":"فبراير","March":"مارس","April":"أبريل","May":"مايو","June":"يونيو",
+    "July":"يوليو","August":"أغسطس","September":"سبتمبر","October":"أكتوبر","November":"نوفمبر","December":"ديسمبر",
+    "Dark":"داكن","Light":"فاتح","🔔 Enabled":"🔔 مفعّل","🔕 Disabled":"🔕 معطّل",
+    "Night sky":"سماء ليلية","Clean edge":"حافة نظيفة","Soft depth":"عمق ناعم","Strong surface":"سطح قوي",
+    "Gallery border":"إطار معرض","Layered frame":"إطار متعدد الطبقات","Crystal layers":"طبقات كريستالية",
+    "Faceted light":"إضاءة متعددة الأوجه","Geometric mesh":"شبكة هندسية","Floating image":"صورة عائمة",
+    "Subtle motion":"حركة خفيفة","Glass circuit":"دائرة زجاجية","Tech corner nodes":"عقد تقنية في الزوايا",
+    "Layered side sweep":"تموج جانبي متعدد الطبقات","Soft orbital crown":"تاج مداري ناعم","Notched badge edge":"حافة شارة مقصوصة",
+    "Glow ribbons":"شرائط متوهجة","Satellite arcs":"أقواس قمرية","Starburst":"انفجار نجمي","Stellar sparks":"شرارات نجمية",
+    "Hologram":"هولوغرام","Terminal":"طرفية","Circuit":"دائرة","Aurora":"أورورا","Prism":"منشور",
+    "Frosted":"زجاج مصنفر","Notched":"مقصوص","Poster":"ملصق","Solid":"صلب","Outline":"مخطط",
+    "Double":"مزدوج","Split":"مقسم","Ribbon":"شريط","Halo":"هالة","Ring":"حلقة","Glow":"توهج","Paper":"ورق","Glass":"زجاج",
+    "Style":"النمط","STYLE":"النمط","LAYOUT":"التخطيط","BADGES":"الشارات","LINKS":"الروابط","MEDIA":"الوسائط","BASIC":"أساسي",
+    "Basic":"أساسي","Scan":"مسح","Day":"يوم","Month":"شهر","Year":"سنة","Clean":"نظيف","Ticket":"تذكرة",
+    "Rivo Admin.":"إدارة Rivo.","Admin":"الإدارة","Posts.":"المنشورات.","Loading admin tools":"جارٍ تحميل أدوات الإدارة",
+    "Call service is not configured.":"خدمة المكالمات غير مهيأة.","Connection quality":"جودة الاتصال","Connected":"متصل",
+    "Connecting…":"جارٍ الاتصال…","Reconnecting…":"جارٍ إعادة الاتصال…","Excellent":"ممتاز","Checking":"جارٍ الفحص",
+    "End call":"إنهاء المكالمة","Mute microphone":"كتم الميكروفون","Unmute microphone":"إلغاء كتم الميكروفون",
+    "Turn camera on":"تشغيل الكاميرا","Turn camera off":"إيقاف الكاميرا","Camera on/off":"تشغيل/إيقاف الكاميرا",
+    "Incoming video call":"مكالمة فيديو واردة","Incoming voice call":"مكالمة صوتية واردة","Incoming call":"مكالمة واردة",
+    "Calling…":"جارٍ الاتصال…","Ringing…":"يرن…","Call declined.":"تم رفض المكالمة.","Call ended.":"انتهت المكالمة.",
+    "Starting video call":"جارٍ بدء مكالمة فيديو","Starting voice call":"جارٍ بدء مكالمة صوتية","Voice · waiting for answer":"صوتية · في انتظار الرد",
+    "Video · waiting for answer":"فيديو · في انتظار الرد","Optimizing connection…":"جارٍ تحسين الاتصال…","Connecting video…":"جارٍ اتصال الفيديو…",
+    "Something went wrong":"حدث خطأ ما","Could not sign out.":"تعذر تسجيل الخروج.","Could not load your profile yet. Please try again.":"تعذر تحميل ملفك الشخصي. حاول مرة أخرى.",
+    "Please try again.":"حاول مرة أخرى.","Passwords do not match.":"كلمتا المرور غير متطابقتين.","Birth date is required.":"تاريخ الميلاد مطلوب.",
+    "You are already signed in. Sign out before creating another account.":"أنت مسجل الدخول بالفعل. سجّل الخروج قبل إنشاء حساب آخر.",
+    "Please take a moment and complete the form normally.":"أكمل النموذج بشكل طبيعي من فضلك.","Username format is valid.":"صيغة اسم المستخدم صحيحة.",
+    "Maximum 5 images per post":"الحد الأقصى 5 صور للمنشور","Write something or add a photo":"اكتب شيئًا أو أضف صورة",
+    "Post published":"تم نشر المنشور","Profile liked":"تم الإعجاب بالملف الشخصي","Like removed":"تم إلغاء الإعجاب",
+    "Profile deleted":"تم حذف الملف الشخصي","Story added for 12 hours":"تمت إضافة القصة لمدة 12 ساعة","Delete this story?":"حذف هذه القصة؟",
+    "Story deleted":"تم حذف القصة","Could not delete story":"تعذر حذف القصة","This story has expired.":"انتهت صلاحية هذه القصة.",
+    "Nothing new.":"لا توجد إشعارات جديدة.","Mark all read":"تعليم الكل كمقروء","Loading…":"جارٍ التحميل…",
+    "Ready":"جاهز","Preparing image…":"جارٍ تجهيز الصورة…","Start a new conversation":"بدء محادثة جديدة",
+    "Please choose a valid image.":"اختر صورة صالحة من فضلك.","No audio selected":"لم يتم اختيار ملف صوتي",
+    "Music":"الموسيقى","Website":"موقع إلكتروني","Save message privacy":"حفظ خصوصية الرسائل",
+    "Nobody (close messages)":"لا أحد (إغلاق الرسائل)","Friends only":"الأصدقاء فقط",
+    "Close":"إغلاق","Theme":"المظهر","Language":"اللغة","Your Name":"اسمك","Your profile":"ملفك الشخصي",
+    "Open menu":"فتح القائمة","Voice call":"مكالمة صوتية","Video call":"مكالمة فيديو","Send message":"إرسال الرسالة",
+    "Song title":"اسم الأغنية","Show password":"إظهار كلمة المرور","Your password":"كلمة المرور الخاصة بك",
+    "Enter the code":"أدخل الرمز","Hold to record":"اضغط باستمرار للتسجيل","Hold to record voice message":"اضغط باستمرار لتسجيل رسالة صوتية",
+    "Repeat password":"أعد كلمة المرور","8–28 characters":"8–28 حرفًا","Get another code":"الحصول على رمز آخر",
+    "Create community":"إنشاء مجتمع","Search communities":"البحث في المجتمعات","Confirm you are human":"أكد أنك إنسان",
+    "Search by community name…":"البحث باسم المجتمع…","Search @username or name...":"البحث باسم المستخدم أو الاسم…",
+    "Search your friends by username or name...":"ابحث عن أصدقائك باسم المستخدم أو الاسم…",
+    "Search by username or display name.":"ابحث باسم المستخدم أو اسم العرض.",
+    "Rivo — Your Profile. Your Identity.":"Rivo — ملفك الشخصي. هويتك.",
+    "Posts — Rivo":"المنشورات — Rivo","Admin — Rivo":"الإدارة — Rivo","Editor — Rivo":"المحرر — Rivo",
+    "Explore — Rivo":"استكشاف — Rivo","Profile — Rivo":"الملف الشخصي — Rivo","Friends — Rivo":"الأصدقاء — Rivo",
+    "Settings — Rivo":"الإعدادات — Rivo","Messages — Rivo":"الرسائل — Rivo","Communities — Rivo":"المجتمعات — Rivo",
+    "Create Profile — Rivo":"إنشاء حساب — Rivo",
+    "Rivo Admin.":"إدارة Rivo.",
+    "+ Add link":"+ إضافة رابط",
+    "Accent outline":"إطار اللون المميز",
+    "Account details and the safe sign-out area.":"تفاصيل الحساب ومنطقة تسجيل الخروج الآمنة.",
+    "Accounts, friends and profiles are saved on your device — fast, private, and available offline.":"الحسابات والأصدقاء والملفات الشخصية محفوظة على جهازك — بسرعة وخصوصية ومتاحة دون اتصال.",
+    "Accounts, friends, profiles, media and settings persist in the shared cloud database.":"الحسابات والأصدقاء والملفات الشخصية والوسائط والإعدادات محفوظة في قاعدة البيانات السحابية المشتركة.",
+    "Compact navigation, controlled preview sizes and responsive profile cards.":"تنقل مدمج وأحجام معاينة مضبوطة وبطاقات ملفات شخصية متجاوبة.",
+    "Create your Rivo account with secure authentication.":"أنشئ حساب Rivo الخاص بك بمصادقة آمنة.",
+    "Cut corners":"زوايا مقصوصة",
+    "Developer · creator · digital builder. A profile that feels like an identity card.":"مطور · صانع · منشئ رقمي. ملف شخصي يشبه بطاقة هوية.",
+    "Enter the 4–6 characters shown in the image. Uppercase and lowercase are different.":"أدخل الأحرف من 4 إلى 6 الظاهرة في الصورة. الأحرف الكبيرة والصغيرة مختلفة.",
+    "Every editor change is reflected in the same profile engine used publicly.":"كل تغيير في المحرر ينعكس على نفس محرك الملف الشخصي المستخدم في الصفحة العامة.",
+    "Feature project cards with links and thumbnails, or embed a music player styled to match your profile.":"اعرض بطاقات مشاريع مع روابط وصور مصغرة، أو أضف مشغل موسيقى بتصميم يناسب ملفك الشخصي.",
+    "Feature project cards with thumbnails and links, plus a music player styled to match your card.":"اعرض بطاقات مشاريع مع صور مصغرة وروابط، بالإضافة إلى مشغل موسيقى بتصميم يناسب بطاقتك.",
+    "Get in-app alerts when someone sends you a message or a friend request while Rivo is open.":"احصل على تنبيهات داخل التطبيق عندما يرسل لك شخص رسالة أو طلب صداقة أثناء فتح Rivo.",
+    "Join public spaces, request access, or create your own group chat.":"انضم إلى المساحات العامة، أو اطلب الانضمام، أو أنشئ مجموعة الدردشة الخاصة بك.",
+    "Live — the public profile uses this color.":"مباشر — يستخدم الملف الشخصي العام هذا اللون.",
+    "Manage your account details from one place.":"أدر تفاصيل حسابك من مكان واحد.",
+    "No audio selected":"لم يتم اختيار ملف صوتي",
+    "One local app, five real tools":"تطبيق محلي واحد، خمس أدوات حقيقية",
+    "Pick a template, frame, theme color and card style, then rearrange sections exactly how you want them shown.":"اختر قالبًا وإطارًا ولونًا للمظهر ونمطًا للبطاقة، ثم أعد ترتيب الأقسام تمامًا كما تريد ظهورها.",
+    "Private moderation, account lookup, profile editing and safe password reset.":"إدارة خاصة ومراجعة الحسابات وتعديل الملفات الشخصية وإعادة تعيين كلمة المرور بأمان.",
+    "Protected by Supabase Auth plus layered anti-automation checks. Never share your password.":"محمي بواسطة Supabase Auth وطبقات متعددة لمكافحة الاستخدام الآلي. لا تشارك كلمة المرور أبدًا.",
+    "Search people by username or display name and open their public card directly.":"ابحث عن الأشخاص باسم المستخدم أو اسم العرض وافتح بطاقتهم العامة مباشرة.",
+    "Send and accept friend requests, browse your circle, and search people by username or display name.":"أرسل طلبات الصداقة واقبلها وتصفح دائرتك وابحث عن الأشخاص باسم المستخدم أو اسم العرض.",
+    "Send, accept and browse friend requests, and keep track of your circle.":"أرسل طلبات الصداقة واقبلها وتصفحها وتابع دائرتك.",
+    "Share a thought, photos, reactions and conversations — all in one place.":"شارك فكرة وصورًا وتفاعلات ومحادثات — كل ذلك في مكان واحد.",
+    "Shown as a small decorative card near your avatar.":"يظهر كبطاقة زخرفية صغيرة بجوار صورتك الشخصية.",
+    "Sign out from this device. Your profile data remains saved in the cloud.":"سجّل الخروج من هذا الجهاز. تظل بيانات ملفك الشخصي محفوظة في السحابة.",
+    "Templates, frames, themes, card styles and reorderable sections, with a live preview beside every change.":"قوالب وإطارات ومظاهر وأنماط بطاقات وأقسام قابلة لإعادة الترتيب، مع معاينة مباشرة لكل تغيير.",
+    "Type the code":"اكتب الرمز",
+    "Use a unique password. Automated submissions are rejected when the human-check signals are missing or inconsistent.":"استخدم كلمة مرور فريدة. يتم رفض المحاولات الآلية عند غياب إشارات التحقق البشري أو عدم اتساقها.",
+    "Use date":"استخدم التاريخ",
+    "Select a date":"اختر تاريخًا",
+    "Accounts": "الحسابات",
+    "Cloud database":"قاعدة البيانات السحابية",
+    "English":"العربية",
+    "Light":"فاتح",
+    "Dark":"داكن",
+    "Enabled":"مفعّل",
+    "Disabled":"معطّل",
+
+    /* Social / Posts */
+    "Posts.":"المنشورات.",
+    "POSTS":"المنشورات",
+    "Your posts":"منشوراتك",
+    "Active":"نشط",
+    "Views":"المشاهدات",
+    "VIEWS":"المشاهدات",
+    "views":"المشاهدات",
+    "Badges":"الشارات",
+    "NEW POST":"منشور جديد",
+    "New Post":"منشور جديد",
+    "Report this post?":"هل تريد الإبلاغ عن هذا المنشور؟",
+    "Could not report post":"تعذر الإبلاغ عن المنشور",
+    "Post removed after reaching the report limit.":"تمت إزالة المنشور بعد وصول عدد البلاغات إلى الحد المسموح.",
+    "Report submitted.":"تم إرسال البلاغ.",
+    "Maximum 5 images per post":"الحد الأقصى 5 صور لكل منشور",
+    "Write something or add a photo":"اكتب شيئًا أو أضف صورة",
+    "Publish":"نشر",
+    "Share a thought, photos, reactions and conversations — all in one place.":"شارك فكرة أو صورًا أو تفاعلات ومحادثات — كل ذلك في مكان واحد.",
+    "Feed":"المنشورات",
+    "People":"الأشخاص",
+    "Share":"مشاركة",
+    "Like":"إعجاب",
+    "Likes":"الإعجابات",
+    "Comment":"تعليق",
+    "Comments":"التعليقات",
+    "Repost":"إعادة نشر",
+    "Reposted":"تمت إعادة النشر",
+    "Publish":"نشر",
+    "Post published":"تم نشر المنشور",
+    "Post deleted":"تم حذف المنشور",
+    "Post removed after reaching the report limit.":"تمت إزالة المنشور بعد وصول البلاغات إلى الحد المسموح.",
+    "Report submitted.":"تم إرسال البلاغ.",
+    "No posts yet":"لا توجد منشورات بعد",
+    "Be the first to share something.":"كن أول من يشارك شيئًا.",
+    "This profile has not shared anything yet.":"هذا الملف الشخصي لم يشارك أي شيء بعد.",
+    "Feed unavailable":"المنشورات غير متاحة",
+    "What are you thinking about?":"بماذا تفكر؟",
+    "Add photos":"إضافة صور",
+    "Add photo":"إضافة صورة",
+    "0/5 photos":"0/5 صور",
+    "Maximum 5 images per post":"الحد الأقصى 5 صور لكل منشور",
+    "Write something or add a photo":"اكتب شيئًا أو أضف صورة",
+    "Public post · up to 5 images":"منشور عام · حتى 5 صور",
+    "No comments yet. Start the conversation.":"لا توجد تعليقات بعد. ابدأ المحادثة.",
+    "Write a comment…":"اكتب تعليقًا…",
+    "Write a comment...":"اكتب تعليقًا…",
+    "Add a comment":"إضافة تعليق",
+    "Reposted to this profile":"تمت إعادة نشره في هذا الملف الشخصي",
+    "Reposted by":"أعاد نشره",
+    " and ":" و",
+    " more":" آخرين",
+    "Remove post":"إزالة المنشور",
+    "Delete post":"حذف المنشور",
+    "Report":"إبلاغ",
+    "Open image":"فتح الصورة",
+    "Close image":"إغلاق الصورة",
+
+    /* Composer / creation menus */
+    "Create post":"إنشاء منشور",
+    "New post":"منشور جديد",
+    "YOUR POSTS":"منشوراتك",
+    "NEW POST":"منشور جديد",
+    "PROFILE VIEWS":"مشاهدات الملف الشخصي",
+    "YOUR PROFILE":"ملفك الشخصي",
+    "NO POSTS YET":"لا توجد منشورات بعد",
+    "Create":"إنشاء",
+    "Add":"إضافة",
+    "Add link":"إضافة رابط",
+    "Add photos":"إضافة صور",
+    "Add media":"إضافة وسائط",
+    "Add section":"إضافة قسم",
+    "Add project":"إضافة مشروع",
+    "Add badge":"إضافة شارة",
+    "Add social link":"إضافة رابط اجتماعي",
+    "Choose image":"اختيار صورة",
+    "Choose audio":"اختيار ملف صوتي",
+    "Choose cover":"اختيار الغلاف",
+    "No audio selected":"لم يتم اختيار ملف صوتي",
+    "Upload image":"رفع صورة",
+    "Remove image":"إزالة الصورة",
+    "Save changes":"حفظ التغييرات",
+    "Changes saved":"تم حفظ التغييرات",
+    "Discard changes":"تجاهل التغييرات",
+    "Close":"إغلاق",
+    "Open":"فتح",
+    "Back":"رجوع",
+    "Next":"التالي",
+    "Previous":"السابق",
+    "Done":"تم",
+
+    /* Community */
+    "Find your room.":"اعثر على مجتمعك.",
+    "Join public spaces, request access, or create your own group chat.":"انضم إلى المساحات العامة، أو اطلب الوصول، أو أنشئ محادثتك الجماعية الخاصة.",
+    "Search communities":"البحث عن المجتمعات",
+    "Search by community name…":"ابحث باسم المجتمع…",
+    "Search by community name...":"ابحث باسم المجتمع…",
+    "Create community":"إنشاء مجتمع",
+    "New community":"مجتمع جديد",
+    "Community":"المجتمع",
+    "Community name":"اسم المجتمع",
+    "Description":"الوصف",
+    "Public":"عام",
+    "Private":"خاص",
+    "Join":"انضمام",
+    "Leave":"مغادرة",
+    "Request access":"طلب الوصول",
+    "Pending":"قيد الانتظار",
+    "Members":"الأعضاء",
+    "No communities found.":"لم يتم العثور على مجتمعات.",
+
+    /* Explore / Friends */
+    "Find people.":"اعثر على أشخاص.",
+    "Search by username or display name.":"ابحث باسم المستخدم أو اسم العرض.",
+    "Search":"بحث",
+    "Search people…":"البحث عن أشخاص…",
+    "Search people...":"البحث عن أشخاص…",
+    "Send friend request":"إرسال طلب صداقة",
+    "Friend request sent":"تم إرسال طلب الصداقة",
+    "Cancel request":"إلغاء الطلب",
+    "Accept request":"قبول الطلب",
+    "Decline request":"رفض الطلب",
+    "Remove friend":"إزالة الصديق",
+    "No profiles found":"لم يتم العثور على ملفات شخصية",
+    "No friends found.":"لم يتم العثور على أصدقاء.",
+    "No pending requests.":"لا توجد طلبات معلقة.",
+    "Your circle.":"دائرتك.",
+
+    /* Messages */
+    "Your messages.":"رسائلك.",
+    "Private conversations with voice and video calling.":"محادثات خاصة مع المكالمات الصوتية والمرئية.",
+    "Conversations":"المحادثات",
+    "Choose a conversation":"اختر محادثة",
+    "Select someone from the left to start messaging.":"اختر شخصًا من القائمة لبدء المراسلة.",
+    "Start a new conversation":"ابدأ محادثة جديدة",
+    "Type a message":"اكتب رسالة",
+    "Write a message...":"اكتب رسالة…",
+    "Write a message…":"اكتب رسالة…",
+    "Send voice":"إرسال رسالة صوتية",
+    "Hold to record":"اضغط باستمرار للتسجيل",
+    "Voice message":"رسالة صوتية",
+    "Ready":"جاهز",
+    "Mute microphone":"كتم الميكروفون",
+    "Unmute microphone":"تشغيل الميكروفون",
+    "Start call":"بدء المكالمة",
+    "End call":"إنهاء المكالمة",
+    "Video call":"مكالمة فيديو",
+    "Voice call":"مكالمة صوتية",
+
+    /* Editor */
+    "Profile Editor":"محرر الملف الشخصي",
+    "Profile basics":"أساسيات الملف الشخصي",
+    "Avatar, banner & music":"الصورة والغلاف والموسيقى",
+    "Floating image":"الصورة العائمة",
+    "Shown as a small decorative card near your avatar.":"تظهر كبطاقة زخرفية صغيرة بجوار صورتك الشخصية.",
+    "Profile music · max 10 MB":"موسيقى الملف الشخصي · الحد الأقصى 10 ميجابايت",
+    "Make it yours":"اجعلها بطريقتك",
+    "Radius":"الاستدارة",
+    "Live — the public profile uses this color.":"مباشر — الملف الشخصي العام يستخدم هذا اللون.",
+    "Same profile engine used on the public page":"نفس محرك الملف المستخدم في الصفحة العامة",
+    "No audio selected":"لم يتم اختيار ملف صوتي",
+    "Choose up to 3":"اختر حتى 3",
+    "Section":"قسم",
+    "Sections":"الأقسام",
+    "Layout":"التخطيط",
+    "Badges":"الشارات",
+    "Media":"الوسائط",
+    "Links":"الروابط",
+
+    /* Auth */
+    "Create your Rivo account with secure authentication.":"أنشئ حساب Rivo الخاص بك باستخدام مصادقة آمنة.",
+    "Protected by Supabase Auth plus layered anti-automation checks. Never share your password.":"محمي بواسطة مصادقة Supabase وطبقات متعددة لمكافحة الأتمتة. لا تشارك كلمة المرور.",
+    "Select your birth date":"اختر تاريخ ميلادك",
+    "Repeat password":"أعد كتابة كلمة المرور",
+    "Your Name":"اسمك",
+    "Set a new password":"تعيين كلمة مرور جديدة",
+    "Show password":"إظهار كلمة المرور",
+    "Hide password":"إخفاء كلمة المرور",
+    "Use a unique password. Automated submissions are rejected when the human-check signals are missing or inconsistent.":"استخدم كلمة مرور فريدة. يتم رفض المحاولات الآلية عند غياب إشارات التحقق البشري أو عدم اتساقها.",
+    "Already have a profile?":"لديك ملف شخصي بالفعل؟",
+    "New here?":"جديد هنا؟",
+    "Create a profile":"إنشاء ملف شخصي",
+    "Enter Profile":"دخول إلى الملف الشخصي",
+    "Type the code":"اكتب الرمز",
+    "Enter the 4–6 characters shown in the image. Uppercase and lowercase are different.":"أدخل الأحرف الأربعة إلى الستة الظاهرة في الصورة. الأحرف الكبيرة والصغيرة مختلفة.",
+    "Use date":"استخدام التاريخ",
+
+    /* Admin */
+    "Rivo Admin.":"إدارة Rivo.",
+    "Private moderation, account lookup, profile editing and safe password reset.":"إدارة خاصة، والبحث عن الحسابات، وتعديل الملفات الشخصية، وإعادة تعيين آمنة لكلمات المرور.",
+    "Find account":"البحث عن حساب",
+    "username or display name":"اسم المستخدم أو اسم العرض",
+    "Select an account":"اختر حسابًا",
+    "Choose a user from the list to inspect or moderate.":"اختر مستخدمًا من القائمة لفحصه أو إدارته.",
+    "No accounts found.":"لم يتم العثور على حسابات.",
+    "User not found":"المستخدم غير موجود",
+    "Active":"نشط",
+    "Banned":"محظور",
+    "Unban account":"إلغاء حظر الحساب",
+    "Block account":"حظر الحساب",
+    "Open profile":"فتح الملف الشخصي",
+    "Profile views":"مشاهدات الملف الشخصي",
+    "Profile likes":"إعجابات الملف الشخصي",
+    "Adjust public counters":"تعديل العدادات العامة",
+    "Save counters":"حفظ العدادات",
+    "Counters updated":"تم تحديث العدادات",
+    "Recent profile visitors":"زوار الملف الشخصي مؤخرًا",
+    "No identified visitors yet.":"لا يوجد زوار معروفون حتى الآن.",
+    "Delete account permanently":"حذف الحساب نهائيًا",
+    "Delete":"حذف",
+    "Removes the auth account and cascading profile data. This cannot be undone.":"يحذف حساب المصادقة وبيانات الملف المرتبطة به. لا يمكن التراجع عن هذا الإجراء.",
+    "For security, the current password can never be displayed or recovered. Enter a new password to replace it.":"لأسباب أمنية، لا يمكن عرض كلمة المرور الحالية أو استعادتها. أدخل كلمة مرور جديدة لاستبدالها.",
+
+    /* Generic UI / status */
+    "Nothing new.":"لا توجد إشعارات جديدة.",
+    "Mark all read":"تحديد الكل كمقروء",
+    "unread":"غير مقروء",
+    "total":"الإجمالي",
+    "Unavailable":"غير متاح",
+    "Not set":"غير محدد",
+    "Could not sign out.":"تعذر تسجيل الخروج.",
+    "Access denied":"تم رفض الوصول",
+    "This area is restricted to Rivo administrators.":"هذه المنطقة مخصصة لمسؤولي Rivo فقط.",
+    "Loading account":"جارٍ تحميل الحساب",
+    "joined":"انضم في",
+    "DANGER ZONE":"منطقة خطرة",
+    "VISITORS":"الزوار",
+    "ACCOUNT EDIT":"تعديل الحساب",
+    "CLOUD":"السحابة",
+    "SOCIAL":"اجتماعي",
+    "BASIC":"أساسي",
+    "LIVE":"مباشر",
+    "Scan":"مسح",
+    "Not configured":"غير مهيأ",
+
+    /* Additional page labels and editor choices */
+    "ABOUT RIVO":"حول Rivo", "CONTROL ROOM":"لوحة التحكم", "SOCIAL FEED":"منشورات اجتماعية",
+    "DISCOVER":"اكتشاف", "MESSAGING":"المراسلة", "IDENTITY":"الهوية", "ACCOUNT EDIT":"تعديل الحساب",
+    "Avatar":"الصورة الشخصية", "Avatar frame":"إطار الصورة", "Banner":"الغلاف", "Bio":"النبذة",
+    "Website":"الموقع الإلكتروني", "Location":"الموقع", "Music cover":"غلاف الموسيقى",
+    "Appearance":"المظهر", "Card shape":"شكل البطاقة", "Cinematic":"سينمائي", "Technical":"تقني",
+    "Dual-surface layout":"تخطيط بسطحين", "Gallery sheet":"ورقة معرض", "Diamond":"مُعين",
+    "Sharp shape":"شكل حاد", "Light halo":"هالة مضيئة", "Orbit":"مدار", "Lattice":"شبكة",
+    "Layered frame":"إطار متعدد الطبقات", "Social links":"الروابط الاجتماعية", "Upload audio":"رفع ملف صوتي",
+    "Save":"حفظ", "Preview":"معاينة", "Requests":"الطلبات", "Edit":"تعديل", "Edit profile":"تعديل الملف الشخصي",
+    "Confirm password":"تأكيد كلمة المرور", "SECURITY CHECK":"فحص الأمان", "START YOUR IDENTITY":"ابدأ هويتك",
+    "YOUR BIRTH DATE":"تاريخ ميلادك", "Verification code":"رمز التحقق", "Verify":"تحقق",
+    "Cancel":"إلغاء", "Send":"إرسال", "0:00":"0:00",
+    "Cloud database + media storage":"قاعدة بيانات سحابية + تخزين الوسائط",
+    "Save message privacy":"حفظ خصوصية الرسائل", "Session":"الجلسة", "Sign out":"تسجيل الخروج",
+    "Enable notifications":"تفعيل الإشعارات", "Disable notifications":"تعطيل الإشعارات",
+    "Notifications are enabled":"الإشعارات مفعّلة", "Notifications are disabled":"الإشعارات معطّلة",
+    "Get in-app alerts when someone sends you a message or a friend request while Rivo is open.":"احصل على إشعارات داخل التطبيق عند إرسال رسالة أو طلب صداقة أثناء فتح Rivo.",
+    "Choose the interface theme for this device. Your profile design stays unchanged.":"اختر مظهر الواجهة لهذا الجهاز. يظل تصميم ملفك الشخصي كما هو.",
+    "Choose your preferred language. This translates navigation and is saved across pages — full in-page content translation is coming soon.":"اختر لغتك المفضلة. سيتم حفظها وتطبيقها على واجهة التطبيق.",
+    "Cloud data":"البيانات السحابية", "Local-first interactive profiles":"ملفات شخصية تفاعلية محلية أولًا",
+    "Local-first":"محلي أولًا", "Global X":"Global X", "Trusted":"موثوق", "Online":"متصل",
+    "Live identity":"هوية حية", "Projects and music":"المشاريع والموسيقى", "Creator":"صانع محتوى",
+    "Communities":"المجتمعات", "Posts":"المنشورات", "Explore":"استكشاف", "Friends":"الأصدقاء", "Profile":"الملف الشخصي",
+    "Editor":"المحرر", "Settings":"الإعدادات", "Messages":"الرسائل", "Sign in":"تسجيل الدخول",
+    "Create profile":"إنشاء حساب", "Profile":"الملف الشخصي",
+
+    /* Frequently rendered dynamic states */
+    "Loading feed…":"جارٍ تحميل المنشورات…", "Loading communities…":"جارٍ تحميل المجتمعات…",
+    "Loading profile":"جارٍ تحميل الملف الشخصي", "Loading admin tools":"جارٍ تحميل أدوات الإدارة",
+    "Loading account":"جارٍ تحميل الحساب", "No accounts found.":"لم يتم العثور على حسابات.",
+    "No comments yet. Start the conversation.":"لا توجد تعليقات بعد. ابدأ المحادثة.",
+    "Nothing new.":"لا توجد إشعارات جديدة.", "Mark all read":"تحديد الكل كمقروء",
+    "This area is restricted to Rivo administrators.":"هذه المنطقة مخصصة لمسؤولي Rivo فقط.",
+    "Could not sign out.":"تعذر تسجيل الخروج.", "Access denied":"تم رفض الوصول"
+  };
+
+  const SKIP_ANCESTORS = [
+    "textarea","input","select","option","script","style","code","pre",
+    ".post-content",".message-bubble",".message-text",".bio",".profile-bio",
+    ".comment-content",".user-content",".story-caption"
+  ];
+
+  function currentLanguage() { return localStorage.getItem("rivo_language") === "ar" ? "ar" : "en"; }
+
+  function translateString(value) {
+    const s = String(value ?? "");
+    if (currentLanguage() !== "ar" || !s.trim()) return s;
+    if (I18N[s] != null) return I18N[s];
+
+    // Preserve names/usernames while translating notification system text.
+    let m = s.match(/^(.+?) sent you a message$/); if (m) return `${m[1]} أرسل لك رسالة`;
+    m = s.match(/^(.+?) sent you a friend request$/); if (m) return `${m[1]} أرسل لك طلب صداقة`;
+    m = s.match(/^(.+?) accepted your friend request$/); if (m) return `${m[1]} وافق على طلب صداقتك`;
+    m = s.match(/^(\d+) unread$/); if (m) return `${m[1]} غير مقروء`;
+    m = s.match(/^(\d+) total$/); if (m) return `${m[1]} الإجمالي`;
+    m = s.match(/^(\d+)m left$/); if (m) return `${m[1]} د متبقية`;
+    m = s.match(/^(\d+)h left$/); if (m) return `${m[1]} س متبقية`;
+    m = s.match(/^(\d+)\/5 photos$/); if (m) return `${m[1]}/5 صور`;
+    m = s.match(/^joined (.+)$/); if (m) return `انضم في ${m[1]}`;
+    return s;
   }
+
+  function isSkippableTextNode(node) {
+    const p = node?.parentElement;
+    if (!p) return true;
+    if (SKIP_ANCESTORS.some(sel => p.closest?.(sel))) return true;
+    return false;
+  }
+
+  function applyI18n(root = document) {
+    const lang = currentLanguage();
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+
+    for (const node of nodes) {
+      if (isSkippableTextNode(node)) continue;
+      const current = node.nodeValue || "";
+      const trimmed = current.trim();
+      if (!trimmed) continue;
+
+      // Keep the original UI string so changing the language back to English
+      // restores the exact source text instead of leaving Arabic behind.
+      if (!node.__rivoI18nSource && lang === "ar") {
+        node.__rivoI18nSource = current;
+      }
+
+      if (lang === "ar") {
+        const source = node.__rivoI18nSource || current;
+        const sourceTrimmed = source.trim();
+        const translated = translateString(sourceTrimmed);
+        if (translated !== sourceTrimmed) {
+          node.nodeValue = source.replace(sourceTrimmed, translated);
+        }
+      } else if (node.__rivoI18nSource) {
+        node.nodeValue = node.__rivoI18nSource;
+        delete node.__rivoI18nSource;
+      }
+    }
+
+    root.querySelectorAll?.("input[placeholder], textarea[placeholder], [aria-label], [title]").forEach(el => {
+      el.__rivoI18nAttrs ||= {};
+      for (const attr of ["placeholder","aria-label","title"]) {
+        if (!el.hasAttribute(attr)) continue;
+        const val = el.getAttribute(attr) || "";
+        if (lang === "ar") {
+          if (!(attr in el.__rivoI18nAttrs)) el.__rivoI18nAttrs[attr] = val;
+          const source = el.__rivoI18nAttrs[attr];
+          const translated = translateString(source);
+          if (translated !== source) el.setAttribute(attr, translated);
+        } else if (attr in el.__rivoI18nAttrs) {
+          el.setAttribute(attr, el.__rivoI18nAttrs[attr]);
+          delete el.__rivoI18nAttrs[attr];
+        }
+      }
+    });
+  }
+
   function applySavedLanguage() {
     const lang = currentLanguage();
     document.documentElement.dataset.language = lang;
     document.documentElement.lang = lang;
-    // Note: dir is intentionally left as the page's built-in "ltr". The
-    // layout (icon order, flex/grid direction, mixed Arabic/English lines)
-    // was built LTR-only; mirroring the whole document with dir="rtl"
-    // scrambled unrelated text and icon positions instead of just
-    // translating labels. Arabic text still renders correctly right-to-left
-    // on its own inside an LTR container.
+    const dir = lang === "ar" ? "rtl" : "ltr";
+    document.documentElement.dir = dir;
+    document.body?.setAttribute("dir", dir);
+    document.body?.classList.toggle("is-rtl", lang === "ar");
+    applyI18n(document);
     return lang;
   }
+
   applySavedLanguage();
 
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-      const onPages = /\/pages\//.test(location.pathname);
-      const swPath = onPages ? "../sw.js" : "sw.js";
-      navigator.serviceWorker.register(swPath, { scope: onPages ? "../" : "./" }).catch(err => console.warn("[Rivo] Service worker registration failed", err));
-    });
-  }
+  // Translate newly rendered UI without observing characterData changes.
+  // Watching characterData while rewriting translated text can create a
+  // mutation loop that freezes the page during language switching.
+  const i18nObserver = new MutationObserver(mutations => {
+    if (currentLanguage() !== "ar") return;
+    for (const m of mutations) {
+      if (m.addedNodes?.length) {
+        m.addedNodes.forEach(n => {
+          if (n.nodeType === 1) applyI18n(n);
+        });
+      }
+    }
+  });
+  i18nObserver.observe(document.documentElement, { childList: true, subtree: true });
+
 
   if (sb) {
     sb.auth.onAuthStateChange((_event, session) => {
@@ -1162,21 +1690,9 @@
     return async () => { try { await sb.removeChannel(channel); } catch {} };
   }
 
-  async function requestBrowserNotifications() {
-    if (!("Notification" in window)) return "unsupported";
-    if (Notification.permission === "granted") { setNotificationsEnabled(true); return "granted"; }
-    const result = await Notification.requestPermission();
-    if (result === "granted") setNotificationsEnabled(true);
-    return result;
-  }
-
-  // Browser permission is one-way: once granted, a site can never revoke it
-  // itself (only the user can, from the browser's own settings), so a
-  // second click on "Enable" always just reported "granted" again with no
-  // way to turn notifications back off. This adds a real app-level on/off
-  // switch on top of the browser permission: notifyBrowser() checks both,
-  // so turning it "off" here reliably stops notifications regardless of
-  // what the browser permission still says.
+  // Notifications are intentionally in-app only. No browser permission,
+  // Web Push, VAPID keys, or background delivery are required. Realtime
+  // notifications work while the Rivo app is open.
   const NOTIFICATIONS_PREF_KEY = "rivo_notifications_enabled";
   function notificationsEnabled() {
     const v = localStorage.getItem(NOTIFICATIONS_PREF_KEY);
@@ -1184,22 +1700,9 @@
   }
   function setNotificationsEnabled(on) {
     localStorage.setItem(NOTIFICATIONS_PREF_KEY, on ? "1" : "0");
-    return on;
+    return !!on;
   }
 
-  async function notifyBrowser(title, options = {}) {
-    try {
-      if (!notificationsEnabled()) return false;
-      if (!("Notification" in window) || Notification.permission !== "granted") return false;
-      const reg = await navigator.serviceWorker?.getRegistration?.();
-      if (reg?.showNotification) {
-        await reg.showNotification(title, { icon: options.icon || undefined, badge: options.badge || undefined, body: options.body || "", tag: options.tag || "rivo", data: options.data || {}, renotify: true });
-        return true;
-      }
-      new Notification(title, options);
-      return true;
-    } catch { return false; }
-  }
 
   async function listProfileVisitors(username, limit = 50) {
     requireClient();
@@ -1300,7 +1803,8 @@ async function uploadVoiceBlob(blob) {
   if (blob.size > 8 * 1024 * 1024) throw new Error("Voice message is too large.");
   const me = await currentProfile();
   if (!me?.id) throw new Error("No signed-in profile.");
-  const mime = blob.type || "audio/webm";
+  const mime = (blob.type || "audio/webm").toLowerCase();
+  if (!(mime.startsWith("audio/") || mime === "application/ogg")) throw new Error("Unsupported voice format.");
   const ext = mime.includes("ogg") ? "ogg" : mime.includes("mp4") || mime.includes("m4a") ? "m4a" : "webm";
   const path = `${me.id}/voice/${Date.now()}-${crypto.randomUUID()}.${ext}`;
   const { error } = await sb.storage.from("rivo-voice").upload(path, blob, {
@@ -1409,8 +1913,8 @@ async function getVoiceUrl(path) {
     removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
-    subscribeNotifications, subscribeMessageReactions, requestBrowserNotifications, notifyBrowser, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, reportPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
-    NAV_I18N, currentLanguage, applySavedLanguage
+    subscribeNotifications, subscribeMessageReactions, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, reportPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, createCallSession, endCallSession, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
+    NAV_I18N, I18N, currentLanguage, translateString, applyI18n, applySavedLanguage
   };
 })();

@@ -29,3 +29,4 @@ window.RIVO_SECURITY = {
 window.RIVO_CALL_CONFIG = {
   tokenUrl: "https://stfjcrcualeggmiygqur.supabase.co/functions/v1/rivo-livekit-token"
 };
+

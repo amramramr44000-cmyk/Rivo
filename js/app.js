@@ -46,17 +46,14 @@
     // On phones the bottom bar owns the primary destinations. Keep the menu
     // compact by removing those same destinations and retaining Home + tools.
     if (window.innerWidth <= 760) {
-      if (!panel.querySelector("[data-menu-home]")) {
-        const home = document.createElement("a");
-        home.href = panel.closest("body")?.querySelector(".brand")?.getAttribute("href") || (location.pathname.includes("/pages/") ? "../index.html" : "index.html");
-        home.textContent = "Home";
-        home.setAttribute("data-menu-home", "true");
-        panel.prepend(home);
-      }
-      const duplicateHrefs = ["posts.html", "explore.html", "messages.html", "profile.html"];
+      // The bottom bar is the primary phone navigation. Do not repeat its
+      // destinations in the overflow menu; the menu keeps only secondary tools.
+      const duplicateHrefs = ["index.html", "posts.html", "explore.html", "messages.html", "profile.html"];
       panel.querySelectorAll("a").forEach(a => {
         const href = (a.getAttribute("href") || "").split("?")[0];
-        if (duplicateHrefs.some(x => href.endsWith("/" + x) || href === x)) a.classList.add("mobile-menu-duplicate");
+        if (duplicateHrefs.some(x => href.endsWith("/" + x) || href === x)) {
+          a.remove();
+        }
       });
     }
   }
@@ -188,25 +185,50 @@
   }
 
   async function initNotificationCenter() {
+    const mobile = window.innerWidth <= 760;
     if ($("[data-rivo-notifications]")) return;
-    const host = window.innerWidth <= 760 ? $("[data-menu-panel]") : $(".topbar-right");
+
+    // Desktop: keep a compact bell in the top bar.
+    // Mobile: notifications are a normal menu row, not a separate icon.
+    const host = mobile ? $("[data-menu-panel]") : $(".topbar-right");
     if (!host) return;
+
     const wrap = document.createElement("div");
-    wrap.className = "rivo-notification-wrap";
-    wrap.innerHTML = `<button class="icon-btn notification-btn" type="button" data-rivo-notifications aria-label="Notifications"><span>🔔</span><i class="notification-badge hidden" data-notification-badge>0</i></button><div class="notification-popover glass" data-notification-popover><div class="notification-head"><div><b>Notifications</b><small data-notification-count>Loading…</small></div><button class="btn btn-sm btn-ghost" data-notification-readall>Mark all read</button></div><div class="notification-list" data-notification-list></div></div>`;
-    if (window.innerWidth <= 760) {
-      wrap.classList.add("mobile-menu-notifications");
-      host.prepend(wrap);
-    } else {
-      host.prepend(wrap);
-    }
+    wrap.className = mobile ? "rivo-notification-wrap mobile-menu-notifications" : "rivo-notification-wrap";
+    wrap.innerHTML = `
+      <button class="${mobile ? "menu-notification-item" : "icon-btn notification-btn"}" type="button"
+        data-rivo-notifications aria-label="Notifications" aria-expanded="false">
+        ${mobile ? '<span class="menu-notification-icon" aria-hidden="true">🔔</span><span data-i18n="Notifications">Notifications</span>' : '<span>🔔</span>'}
+        <i class="notification-badge hidden" data-notification-badge>0</i>
+      </button>
+      <div class="notification-popover glass" data-notification-popover>
+        <div class="notification-head">
+          <div><b data-i18n="Notifications">Notifications</b><small data-notification-count>Loading…</small></div>
+          <button class="btn btn-sm btn-ghost" data-notification-readall>Mark all read</button>
+        </div>
+        <div class="notification-list" data-notification-list></div>
+      </div>`;
+    host.appendChild(wrap);
+
     const button = $("[data-rivo-notifications]", wrap);
     const pop = $("[data-notification-popover]", wrap);
     const list = $("[data-notification-list]", wrap);
     const badge = $("[data-notification-badge]", wrap);
     const count = $("[data-notification-count]", wrap);
     let notifications = [];
-    const icon = type => type === "message" ? "✉️" : type === "friend_request" ? "👋" : type === "friend_accept" ? "🤝" : "🔔";
+
+    const icon = type => type === "message" ? "✉️" :
+      type === "friend_request" ? "👋" :
+      type === "friend_accept" ? "🤝" : "🔔";
+
+    const targetFor = n => {
+      const username = PF.normalizeUsername(n?.actor_username || n?.payload?.username || "");
+      const base = location.pathname.includes("/pages/") ? "" : "pages/";
+      if (n?.type === "message") return username ? `${base}messages.html?u=${encodeURIComponent(username)}` : `${base}messages.html`;
+      if (n?.type === "friend_request" || n?.type === "friend_accept") return username ? `${base}friends.html?u=${encodeURIComponent(username)}` : `${base}friends.html`;
+      return n?.payload?.url || (username ? `${base}profile.html?u=${encodeURIComponent(username)}` : `${base}posts.html`);
+    };
+
     const label = n => {
       const a = n.actor_display_name || n.actor_username || "Someone";
       if (n.type === "message") return `${a} sent you a message`;
@@ -214,60 +236,53 @@
       if (n.type === "friend_accept") return `${a} accepted your friend request`;
       return n.body || "You have a new notification";
     };
+
     const render = () => {
       const unread = notifications.filter(n => !n.read_at).length;
       badge.textContent = unread > 99 ? "99+" : String(unread);
       badge.classList.toggle("hidden", unread === 0);
       count.textContent = unread ? `${unread} unread` : `${notifications.length} total`;
-      list.innerHTML = notifications.length ? notifications.map(n => `<button type="button" class="notification-item ${n.read_at ? "read" : "unread"}" data-notification-id="${esc(n.id)}"><span class="notification-icon">${icon(n.type)}</span><span><b>${esc(label(n))}</b><small>${esc(new Date(n.created_at).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}))}</small></span></button>`).join("") : `<div class="notification-empty">Nothing new.</div>`;
-      $$('[data-notification-id]', wrap).forEach(btn => btn.onclick = async () => {
-        try { await PF.markNotificationRead(btn.dataset.notificationId); notifications = notifications.map(n => String(n.id) === String(btn.dataset.notificationId) ? {...n, read_at:new Date().toISOString()} : n); render(); } catch {}
+      list.innerHTML = notifications.length
+        ? notifications.map(n => `<button type="button" class="notification-item ${n.read_at ? "read" : "unread"}" data-notification-id="${esc(n.id)}">
+            <span class="notification-icon">${icon(n.type)}</span>
+            <span><b>${esc(label(n))}</b><small>${esc(new Date(n.created_at).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}))}</small></span>
+          </button>`).join("")
+        : `<div class="notification-empty">Nothing new.</div>`;
+
+      if (PF.applyI18n) PF.applyI18n(list);
+      $$("[data-notification-id]", wrap).forEach(btn => btn.onclick = async () => {
+        const n = notifications.find(x => String(x.id) === String(btn.dataset.notificationId));
+        try { await PF.markNotificationRead(btn.dataset.notificationId); } catch {}
+        if (n) {
+          n.read_at = n.read_at || new Date().toISOString();
+          render();
+          const target = targetFor(n);
+          // Navigate directly to the related feature, exactly like a social app.
+          if (target) location.href = target;
+        }
       });
     };
-    const load = async () => { try { notifications = await PF.listNotifications(50); render(); } catch { count.textContent = "Unavailable"; } };
+
+    const load = async () => {
+      try { notifications = await PF.listNotifications(50); render(); }
+      catch { count.textContent = "Unavailable"; }
+    };
+
     button.onclick = async e => {
       e.preventDefault();
       e.stopPropagation();
       const open = !pop.classList.contains("open");
-
-      if (open) {
-        // Mobile browsers can trap absolute popovers inside sticky/transformed headers.
-        // Portal the existing popover to body only while it is open, without changing
-        // its data bindings or notification logic.
-        if (window.innerWidth <= 760 && pop.parentElement !== document.body) {
-          document.body.appendChild(pop);
-        }
-
-        if (window.innerWidth <= 760) {
-          const r = button.getBoundingClientRect();
-          pop.style.position = "fixed";
-          const top = Math.max(
-            56 + (window.safeAreaInsets?.top || 0),
-            Math.min(r.bottom + 8, window.innerHeight - 360)
-          );
-          pop.style.top = `${top}px`;
-          pop.style.right = "10px";
-          pop.style.left = "10px";
-          pop.style.width = "auto";
-          pop.style.maxHeight = "min(68vh, 520px)";
-          pop.style.zIndex = "2147483000";
-        }
-
-        pop.classList.add("open");
-        await load();
-
-        if ("Notification" in window && Notification.permission === "default") {
-          await PF.requestBrowserNotifications();
-        }
-      } else {
-        pop.classList.remove("open");
-      }
+      pop.classList.toggle("open", open);
+      button.setAttribute("aria-expanded", String(open));
+      if (open) await load();
     };
 
-    $("[data-notification-readall]", wrap).onclick = async () => {
+    $("[data-notification-readall]", wrap).onclick = async e => {
+      e.preventDefault();
+      e.stopPropagation();
       try {
         await PF.markAllNotificationsRead();
-        notifications = notifications.map(n => ({...n,read_at:new Date().toISOString()}));
+        notifications = notifications.map(n => ({...n, read_at: new Date().toISOString()}));
         render();
       } catch {}
     };
@@ -275,8 +290,10 @@
     document.addEventListener("click", e => {
       if (!wrap.contains(e.target) && !pop.contains(e.target)) {
         pop.classList.remove("open");
+        button.setAttribute("aria-expanded", "false");
       }
     });
+
     try {
       const unsubscribe = await PF.subscribeNotifications(async n => {
         if (!n) return;
@@ -284,11 +301,12 @@
         render();
         const body = label(n);
         notify(body, "success");
-        if (document.hidden) await PF.notifyBrowser("Rivo", {body, tag:`rivo-${n.id}`});
       });
       window.addEventListener("beforeunload", () => { try { unsubscribe?.(); } catch {} });
     } catch {}
-    load();
+
+    await load();
+    if (PF.applyI18n) PF.applyI18n(wrap);
   }
 
   // -----------------------------
@@ -695,7 +713,7 @@
           "Content-Type": "application/json",
           "Authorization": `Bearer ${session.access_token}`
         },
-        body: JSON.stringify({ roomName, participantName })
+        body: JSON.stringify({ roomName, participantName, callId: active?.callId || "" })
       });
 
       const d = await r.json().catch(() => ({}));
@@ -1012,6 +1030,8 @@
       };
 
       try {
+        active.channel = await PF.createCallSession(callId, peer.userId, roomName, isVideo);
+
         active.channel = await PF.openCallChannel(
           `rivo-call-${callId}`,
           handleSignal
@@ -1156,6 +1176,7 @@
     async function endCall(send = true) {
       const old = active;
       active = null;
+      if (old?.callId) { try { await PF.endCallSession(old.callId); } catch {} }
 
       try {
         if (send && old?.channel) {
@@ -2867,27 +2888,24 @@ voiceMessageSend?.addEventListener("click",async()=>{
     $("#langEn") && ($("#langEn").checked = lang === "en");
     $$('input[name="languageMode"]').forEach(r => r.addEventListener("change", () => {
       localStorage.setItem("rivo_language", r.value);
+      PF.applySavedLanguage?.();
       applyNavLanguage();
+      document.dispatchEvent(new CustomEvent("rivo:languagechange", { detail: { language: r.value } }));
       notify(r.value === "ar" ? "تم حفظ اللغة" : "Language saved", "success");
     }));
     const notifOn = $("#notifOn"), notifOff = $("#notifOff"), nsupport = $("#notificationSupport");
     if (notifOn && notifOff) {
-      const supported = "Notification" in window;
       const syncNotifUI = () => {
-        const enabled = supported && Notification.permission === "granted" && PF.notificationsEnabled();
+        const enabled = PF.notificationsEnabled();
         notifOn.checked = enabled;
         notifOff.checked = !enabled;
-        nsupport.textContent = !supported
-          ? "This browser does not support web notifications."
-          : Notification.permission === "denied"
-            ? "Blocked in browser settings — allow notifications for this site to enable them here."
-            : `Browser permission: ${Notification.permission}`;
+        nsupport.textContent = lang === "ar"
+          ? "الإشعارات داخل تطبيق Rivo فقط أثناء فتح التطبيق."
+          : "In-app notifications only while Rivo is open.";
       };
-      notifOn.disabled = notifOff.disabled = !supported;
-      notifOn.addEventListener("change", async () => {
+      notifOn.addEventListener("change", () => {
         if (!notifOn.checked) return;
-        const result = await PF.requestBrowserNotifications();
-        if (result !== "granted") notify("Allow notifications in your browser to enable this.", "error");
+        PF.setNotificationsEnabled(true);
         syncNotifUI();
       });
       notifOff.addEventListener("change", () => {
@@ -2896,6 +2914,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
         syncNotifUI();
       });
       syncNotifUI();
+      document.addEventListener("rivo:languagechange", syncNotifUI);
     }
     try { const isAdmin = await PF.adminStatus(); $$("[data-admin-link]").forEach(a => a.classList.toggle("hidden", !isAdmin)); } catch {}
     if (select) select.value = currentSetting;
