@@ -2040,57 +2040,6 @@ html[data-color-scheme="light"] .social-side-link.active{background:rgba(16,24,4
   .community-tools{max-width:360px}
 }
 
-/* Rivo social navigation + community tools — authoritative mobile override */
-.community-tools{display:flex;flex-direction:column;gap:6px;min-width:min(100%,320px);margin-inline-start:auto;align-items:flex-end}
-.community-search-row{display:flex;align-items:center;gap:7px;width:min(100%,360px)}
-.community-search-wrap{position:relative;display:block;flex:1;min-width:0}
-.community-search-icon{position:absolute;inset-inline-start:12px;top:50%;transform:translateY(-50%);color:#788395;font-size:17px;line-height:1;pointer-events:none}
-.community-search-input{min-height:40px!important;padding-inline-start:34px!important;padding-inline-end:12px!important;margin:0!important}
-.community-create-icon{width:40px!important;height:40px!important;min-width:40px!important;padding:0!important;font-size:20px!important}
-.community-create-icon:disabled{opacity:.45;cursor:not-allowed;transform:none!important}
-.community-limit{color:#727d8e;font-size:9px;letter-spacing:.04em}
-.community-limit.limit-reached{color:#e5a0aa}
-@media(max-width:760px){
-  .social-page .topbar{
-    position:fixed!important;
-    top:6px!important;
-    right:6px!important;
-    bottom:auto!important;
-    left:6px!important;
-    inset:auto 6px auto 6px!important;
-    width:calc(100% - 12px)!important;
-    z-index:9000!important;
-  }
-  .social-page .menu-panel{
-    position:fixed!important;
-    top:70px!important;
-    right:12px!important;
-    bottom:auto!important;
-    left:12px!important;
-    inset:70px 12px auto 12px!important;
-    width:auto!important;
-    min-width:0!important;
-    max-width:none!important;
-    max-height:calc(100svh - 84px)!important;
-    overflow:auto!important;
-    z-index:9100!important;
-    display:none!important;
-  }
-  .social-page .menu-panel.open{
-    display:grid!important;
-    visibility:visible!important;
-    opacity:1!important;
-    pointer-events:auto!important;
-  }
-  .social-page .menu-button{position:relative!important;z-index:9101!important;display:grid!important;visibility:visible!important;opacity:1!important}
-  .community-head{gap:12px!important}
-  .community-tools{width:100%;align-items:stretch;margin-inline-start:0}
-  .community-search-row{width:100%;}
-}
-@media(min-width:761px){
-  .community-tools{max-width:360px}
-}
-
 /* Rivo Calls — compact, responsive voice/video calling UI */
 .thread-call-actions{display:flex;align-items:center;gap:7px;flex:0 0 auto}.call-action,.profile-call-btn{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;font-size:14px;line-height:1}.profile-call-btn{border:1px solid color-mix(in srgb,var(--accent) 28%,var(--border));background:color-mix(in srgb,var(--accent) 9%,transparent);color:inherit}.profile-call-btn svg,.call-action svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.profile-call-btn:hover,.call-action:hover{border-color:color-mix(in srgb,var(--accent) 55%,transparent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
 #rivoCallUI{position:fixed;inset:0;z-index:12000;pointer-events:none}.call-backdrop{position:fixed;inset:0;display:grid;place-items:center;padding:18px;background:rgba(3,5,9,.72);backdrop-filter:blur(18px);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .2s ease,visibility .2s ease}.call-backdrop.open{opacity:1;visibility:visible;pointer-events:auto}.call-panel{width:min(520px,calc(100vw - 24px));overflow:hidden;border:1px solid color-mix(in srgb,var(--accent) 20%,var(--border));border-radius:26px;box-shadow:0 30px 90px rgba(0,0,0,.48)}.call-panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:15px 17px;border-bottom:1px solid var(--border)}.call-panel-head h2{margin:4px 0 1px;font-size:16px}.call-panel-head small{color:#7e8999;font-size:9px}.call-stage{position:relative;min-height:420px;display:grid;place-items:center;background:radial-gradient(circle at 50% 30%,color-mix(in srgb,var(--accent) 13%,transparent),transparent 45%),#070a10;overflow:hidden}.call-remote-placeholder{display:flex;flex-direction:column;align-items:center;gap:9px;text-align:center;color:#dbe1eb}.call-remote-placeholder small{font-size:10px;color:#7c8797}.call-avatar-large{width:88px;height:88px;border-radius:50%;display:grid;place-items:center;overflow:hidden;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 55px color-mix(in srgb,var(--accent) 23%,transparent);font-size:28px;font-weight:900}.call-avatar-large img{width:100%;height:100%;object-fit:cover}.call-remote-video,.call-local-video{display:none;background:#000;object-fit:cover}.call-remote-video.live{display:block;position:absolute;inset:0;width:100%;height:100%}.call-local-video.live{display:block;position:absolute;right:14px;bottom:14px;width:120px;height:170px;border-radius:16px;border:1px solid rgba(255,255,255,.16);box-shadow:0 14px 32px rgba(0,0,0,.4)}.call-connected .call-remote-placeholder{display:none}.call-controls{display:flex;justify-content:center;gap:14px;padding:16px;border-top:1px solid var(--border)}.call-control{width:48px;height:48px;border-radius:50%;border:1px solid var(--border);background:rgba(255,255,255,.045);color:inherit;display:grid;place-items:center;cursor:pointer;transition:transform .16s ease,background .16s ease,border-color .16s ease}.call-control svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.call-control.is-off{background:rgba(255,255,255,.08);border-color:color-mix(in srgb,var(--border) 90%,white)}.call-control.end{background:#b43d4a;border-color:#d15a67}.call-control.end svg{transform:rotate(-135deg);stroke-width:2.2}.call-control:hover{transform:translateY(-1px)}.call-incoming-actions{display:flex;gap:8px;padding:0 15px 15px}.call-incoming-actions .btn{flex:1}.hidden.call-incoming-actions{display:none!important}
@@ -2753,3 +2702,99 @@ body,main,.container,.messages-shell,.messages-layout{max-width:100%;overflow-x:
   .editor-page .editor-actions .btn{flex:1;max-width:220px;min-height:44px!important;height:44px!important;font-size:12px!important}
 }
 @media(min-width:761px){.rivo-mobile-bottom-nav{display:none!important}}
+
+
+/* Rivo Arabic UI: translate text without mirroring the visual layout. */
+html[data-language="ar"] body,
+html[data-language="ar"] .menu-panel,
+html[data-language="ar"] .notification-popover,
+html[data-language="ar"] button,
+html[data-language="ar"] input,
+html[data-language="ar"] textarea,
+html[data-language="ar"] select {
+  direction: ltr;
+}
+html[data-language="ar"] .menu-notification-item{
+  width:100%;
+  min-height:42px;
+  border:0;
+  border-radius:11px;
+  background:transparent;
+  color:#c7ced9;
+  display:flex;
+  align-items:center;
+  gap:9px;
+  padding:0 14px;
+  font:inherit;
+  font-size:13px;
+  text-align:left;
+  cursor:pointer;
+}
+html[data-language="ar"] .menu-notification-item:hover{background:rgba(255,255,255,.05);color:#fff}
+html[data-language="ar"] .menu-notification-icon{width:20px;display:grid;place-items:center}
+.mobile-menu-notifications .notification-badge{position:relative;top:auto;right:auto;margin-left:auto;transform:none}
+@media(max-width:760px){
+  .mobile-menu-notifications{display:block!important;margin:2px 1px 4px!important;padding:0!important}
+  .mobile-menu-notifications .notification-popover{
+    position:fixed!important;
+    left:10px!important;
+    right:10px!important;
+    top:auto!important;
+    bottom:calc(74px + env(safe-area-inset-bottom))!important;
+    width:auto!important;
+    max-height:min(68vh,520px)!important;
+  }
+}
+
+/* Arabic UI: keep the original LTR geometry while improving readability. */
+html[data-language="ar"] body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Tahoma, Arial, sans-serif;
+}
+html[data-language="ar"] .btn,
+html[data-language="ar"] .field,
+html[data-language="ar"] .field-input,
+html[data-language="ar"] textarea,
+html[data-language="ar"] select,
+html[data-language="ar"] .menu-panel,
+html[data-language="ar"] .topbar,
+html[data-language="ar"] .notification-popover {
+  line-height: 1.55;
+}
+
+
+/* Rivo Stage 3 UX hardening — additive, RTL-aware and mobile-safe. */
+html[dir="rtl"] body { text-align: start; }
+html[dir="rtl"] .topbar,
+html[dir="rtl"] .topbar-right,
+html[dir="rtl"] .desktop-nav,
+html[dir="rtl"] .page-head,
+html[dir="rtl"] .composer-head,
+html[dir="rtl"] .post-author,
+html[dir="rtl"] .conversation-item,
+html[dir="rtl"] .thread-head,
+html[dir="rtl"] .message-compose { direction: rtl; }
+html[dir="rtl"] .message-bubble,
+html[dir="rtl"] .post-content,
+html[dir="rtl"] textarea,
+html[dir="rtl"] input { text-align: start; }
+html[dir="rtl"] [dir="ltr"],
+html[dir="rtl"] code,
+html[dir="rtl"] pre { direction: ltr; }
+:where(button,a,input,select,textarea):focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.is-loading { cursor: progress !important; }
+[aria-busy="true"] { pointer-events: none; }
+.empty-state[data-state="error"] { border-color: rgba(255,90,110,.28); }
+.empty-state .state-icon { font-size: 28px; margin-bottom: 8px; opacity:.8; }
+@media (max-width:760px) {
+  .container { width: min(100% - 20px, 1120px); }
+  .page-head { overflow-wrap:anywhere; }
+  .btn, button, select, input, textarea { touch-action: manipulation; }
+  .message-compose textarea { min-height: 44px; max-height: 140px; }
+  .post-card, .community-card, .result-card, .settings-card, .glass { max-width: 100%; }
+  .post-content, .message-text, .bio { overflow-wrap:anywhere; word-break:break-word; }
+}
+@media (max-width:430px) {
+  .topbar { padding-inline:10px; }
+  .container { width: min(100% - 14px, 1120px); }
+  .toast-stack { width: calc(100vw - 14px); }
+}
