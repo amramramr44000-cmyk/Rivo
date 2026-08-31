@@ -678,18 +678,6 @@
     invalidateProfileCache(currentUsername());
     return v;
   }
-  async function createCallSession(callId, calleeId, roomName, isVideo=false) {
-    requireClient();
-    const result = await callRpc("rivo_create_call_session", {
-      p_call_id: String(callId), p_callee_id: String(calleeId), p_room_name: String(roomName), p_is_video: !!isVideo
-    }, "CALL_SESSION_CREATE");
-    return result;
-  }
-  async function endCallSession(callId) {
-    requireClient();
-    return callRpc("rivo_end_call_session", { p_call_id: String(callId) }, "CALL_SESSION_END");
-  }
-
   async function sendMessage(username, content) {
     const u = normalizeUsername(username);
     // Normalize to NFC so the same word typed on different devices/keyboards
@@ -1019,7 +1007,7 @@
   applySavedColorScheme();
 
   // Rivo full interface language layer.
-  // Arabic translates the app chrome/UI and switches the document to RTL. User-created names, usernames, bios, posts and messages remain unchanged.
+  // Arabic translates the app chrome/UI only and deliberately keeps the document LTR.
   // User-created names, usernames, bios, posts and messages are never translated.
   const NAV_I18N = {
     en: { menu:"Menu", search:"Search", profile:"Profile", messages:"Messages", home:"Home",
@@ -1064,7 +1052,7 @@
     "Select someone from the left to start messaging.":"اختر شخصًا من القائمة لبدء المراسلة.",
     "Search people…":"البحث عن أشخاص…","Search people...":"البحث عن أشخاص…","Search friends...":"البحث عن الأصدقاء…",
     "Write a message...":"اكتب رسالة…","Write a message…":"اكتب رسالة…","Send voice":"إرسال الرسالة الصوتية",
-    "Hold to record":"اضغط باستمرار للتسجيل","Voice message":"رسالة صوتية","Voice ready":"الرسالة الصوتية جاهزة","Too many requests. Please try again later.":"طلبات كثيرة جدًا. حاول مرة أخرى لاحقًا.","Could not authorize the call.":"تعذر تفويض المكالمة.","Call session expired":"انتهت جلسة المكالمة.",
+    "Hold to record":"اضغط باستمرار للتسجيل","Voice message":"رسالة صوتية","Voice ready":"الرسالة الصوتية جاهزة",
     "Choose an image":"اختر صورة","Choose a conversation":"اختر محادثة","Private messages":"الرسائل الخاصة",
     "Find people.":"اعثر على أشخاص.","Find your room.":"اعثر على مجتمعك.","Your circle.":"دائرتك.",
     "Friends and requests":"الأصدقاء والطلبات","Requests":"الطلبات","No pending requests.":"لا توجد طلبات معلقة.",
@@ -1545,10 +1533,9 @@
     const lang = currentLanguage();
     document.documentElement.dataset.language = lang;
     document.documentElement.lang = lang;
-    const dir = lang === "ar" ? "rtl" : "ltr";
-    document.documentElement.dir = dir;
-    document.body?.setAttribute("dir", dir);
-    document.body?.classList.toggle("is-rtl", lang === "ar");
+    // IMPORTANT: keep the visual/layout direction unchanged; Arabic changes text only.
+    document.documentElement.dir = "ltr";
+    document.body?.setAttribute("dir","ltr");
     applyI18n(document);
     return lang;
   }
@@ -1803,8 +1790,7 @@ async function uploadVoiceBlob(blob) {
   if (blob.size > 8 * 1024 * 1024) throw new Error("Voice message is too large.");
   const me = await currentProfile();
   if (!me?.id) throw new Error("No signed-in profile.");
-  const mime = (blob.type || "audio/webm").toLowerCase();
-  if (!(mime.startsWith("audio/") || mime === "application/ogg")) throw new Error("Unsupported voice format.");
+  const mime = blob.type || "audio/webm";
   const ext = mime.includes("ogg") ? "ogg" : mime.includes("mp4") || mime.includes("m4a") ? "m4a" : "webm";
   const path = `${me.id}/voice/${Date.now()}-${crypto.randomUUID()}.${ext}`;
   const { error } = await sb.storage.from("rivo-voice").upload(path, blob, {
@@ -1914,7 +1900,7 @@ async function getVoiceUrl(path) {
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, reportPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, createCallSession, endCallSession, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, reportPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
     NAV_I18N, I18N, currentLanguage, translateString, applyI18n, applySavedLanguage
   };
 })();

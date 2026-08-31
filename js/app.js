@@ -713,7 +713,7 @@
           "Content-Type": "application/json",
           "Authorization": `Bearer ${session.access_token}`
         },
-        body: JSON.stringify({ roomName, participantName, callId: active?.callId || "" })
+        body: JSON.stringify({ roomName, participantName })
       });
 
       const d = await r.json().catch(() => ({}));
@@ -1030,8 +1030,6 @@
       };
 
       try {
-        active.channel = await PF.createCallSession(callId, peer.userId, roomName, isVideo);
-
         active.channel = await PF.openCallChannel(
           `rivo-call-${callId}`,
           handleSignal
@@ -1176,7 +1174,6 @@
     async function endCall(send = true) {
       const old = active;
       active = null;
-      if (old?.callId) { try { await PF.endCallSession(old.callId); } catch {} }
 
       try {
         if (send && old?.channel) {
