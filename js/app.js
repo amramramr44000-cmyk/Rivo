@@ -2337,7 +2337,7 @@
         ${standaloneMini}
         ${!isMe && !PF.currentUsername() ? `<div class="profile-actions-row"><span class="compact-likes-label">${displayViews(likeCount)} likes</span></div>` : ""}
         <div class="profile-stats">
-          <div><span>متابعين</span><b>${Array.isArray(p.followers) ? p.followers.length : 0}</b></div>
+          <div><span>متابعين</span><b>${Number.isFinite(Number(p.followersCount)) ? Number(p.followersCount) : (Array.isArray(p.followers) ? p.followers.length : 0)}</b></div>
           <div class="view-stat"><span><span class="eye-mini">◉</span> المشاهدات</span><b>${views}</b></div>
         </div>
         <div class="social-row">${social}</div>
@@ -2634,23 +2634,26 @@ async function initProfile() {
   async function initFriends() {
     const me = await PF.currentProfile(); if (!me) { location.href = "login.html"; return; }
     const requestBox = $("#requestList"), sentBox = $("#sentRequestList"), friendBox = $("#friendList"), search = $("#friendSearch");
+    let renderSeq = 0;
     const render = async query => {
-      const fresh = await PF.currentProfile();
+      const seq = ++renderSeq;
+      const fresh = await PF.currentProfile({ force: true });
+      if (seq !== renderSeq) return;
       const incoming = fresh.friendRequests?.incoming || [], outgoing = fresh.friendRequests?.outgoing || [], friends = fresh.friends || [];
-      const requestProfiles = await PF.getProfiles(incoming);
-      const sentProfiles = await PF.getProfiles(outgoing);
+      const requestProfiles = await Promise.all(incoming.map(u => PF.getProfile(u, { force: true })));
+      const sentProfiles = await Promise.all(outgoing.map(u => PF.getProfile(u, { force: true })));
       const requests = requestProfiles.filter(Boolean);
       const sentRequests = sentProfiles.filter(Boolean);
       let profiles = (await PF.getProfiles(friends)).filter(Boolean);
       const q = String(query || "").trim().toLowerCase().replace(/^@/, "");
       if (q) profiles = profiles.filter(p => p.username.includes(q) || (p.displayName || "").toLowerCase().includes(q));
-      requestBox.innerHTML = requests.length ? requests.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><div class="hero-actions"><button class="btn btn-sm btn-primary" data-accept="${esc(p.username)}">Accept</button><button class="btn btn-sm btn-danger" data-reject="${esc(p.username)}">Decline</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No pending requests.</div>`;
-      sentBox.innerHTML = sentRequests.length ? sentRequests.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><div class="hero-actions"><a class="btn btn-sm" href="profile.html?u=${encodeURIComponent(p.username)}">View</a><button class="btn btn-sm btn-danger" data-cancel-sent="${esc(p.username)}">Cancel request</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No sent requests.</div>`;
-      friendBox.innerHTML = profiles.length ? profiles.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><p>${esc(p.bio || "")}</p><div class="hero-actions"><a class="btn btn-sm btn-primary" href="profile.html?u=${encodeURIComponent(p.username)}">View</a><button class="btn btn-sm btn-danger" data-remove="${esc(p.username)}">Remove</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No friends found.</div>`;
-      $$('[data-accept]').forEach(b => b.onclick = async () => { try { await PF.acceptFriendRequest(b.dataset.accept); notify("Friend added", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
-      $$('[data-reject]').forEach(b => b.onclick = async () => { try { await PF.rejectFriendRequest(b.dataset.reject); notify("Request declined", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
-      $$('[data-cancel-sent]').forEach(b => b.onclick = async () => { try { await PF.cancelFriendRequest(b.dataset.cancelSent); notify("Friend request cancelled", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
-      $$('[data-remove]').forEach(b => b.onclick = async () => { try { await PF.removeFriend(b.dataset.remove); notify("Friend removed", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
+      requestBox.innerHTML = requests.length ? requests.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><div class="hero-actions"><button class="btn btn-sm btn-primary" type="button" data-accept="${esc(p.username)}">Accept</button><button class="btn btn-sm btn-danger" type="button" data-reject="${esc(p.username)}">Decline</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No pending requests.</div>`;
+      sentBox.innerHTML = sentRequests.length ? sentRequests.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><div class="hero-actions"><a class="btn btn-sm" href="profile.html?u=${encodeURIComponent(p.username)}">View</a><button class="btn btn-sm btn-danger" type="button" data-cancel-sent="${esc(p.username)}">Cancel request</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No sent requests.</div>`;
+      friendBox.innerHTML = profiles.length ? profiles.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><p>${esc(p.bio || "")}</p><div class="hero-actions"><a class="btn btn-sm btn-primary" href="profile.html?u=${encodeURIComponent(p.username)}">View</a><button class="btn btn-sm btn-danger" type="button" data-remove="${esc(p.username)}">Remove</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No friends found.</div>`;
+      $$('[data-accept]').forEach(b => b.onclick = async e => { e.preventDefault(); e.stopPropagation(); try { await PF.acceptFriendRequest(b.dataset.accept); notify("Friend added", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
+      $$('[data-reject]').forEach(b => b.onclick = async e => { e.preventDefault(); e.stopPropagation(); try { await PF.rejectFriendRequest(b.dataset.reject); notify("Request declined", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
+      $$('[data-cancel-sent]').forEach(b => b.onclick = async e => { e.preventDefault(); e.stopPropagation(); try { await PF.cancelFriendRequest(b.dataset.cancelSent); notify("Friend request cancelled", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
+      $$('[data-remove]').forEach(b => b.onclick = async e => { e.preventDefault(); e.stopPropagation(); try { await PF.removeFriend(b.dataset.remove); notify("Friend removed", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
     };
     search?.addEventListener("input", () => render(search.value)); await render("");
   }
@@ -2899,6 +2902,7 @@ async function initProfile() {
 
     async function openConversation(username) {
       messagesLayout.classList.add("conversation-open");
+      if (window.innerWidth <= 760) document.body.classList.add("rivo-chat-fullscreen");
       window.__rivoActiveMessageUser = PF.normalizeUsername(username);
       activeUser = PF.normalizeUsername(username);
       const c = conversations.find(x => x.username === activeUser);
@@ -3015,8 +3019,14 @@ async function initProfile() {
       }
     });
     search.addEventListener("input", renderConversations);
+    window.addEventListener("resize", () => {
+      if (!messagesLayout.classList.contains("conversation-open")) return;
+      if (window.innerWidth <= 760) document.body.classList.add("rivo-chat-fullscreen");
+      else document.body.classList.remove("rivo-chat-fullscreen");
+    }, { passive: true });
     mobileBack?.addEventListener("click", () => {
       messagesLayout.classList.remove("conversation-open");
+      document.body.classList.remove("rivo-chat-fullscreen");
       activeUser = "";
       activeUserId = "";
       window.__rivoActiveMessageUser = "";
@@ -3322,27 +3332,19 @@ voiceMessageSend?.addEventListener("click",async()=>{
       syncNotifUI();
       document.addEventListener("rivo:languagechange", syncNotifUI);
     }
-    // Economy: live balance, transfer modal, ad reward, and owned inventory.
+    // Economy: live balance, transfer modal, and reward video.
     const balanceEl = $("#coinsBalance");
     const transferModal = $("#coinTransferModal");
     const transferForm = $("#coinTransferForm");
     const transferUser = $("#coinTransferUsername");
     const transferAmount = $("#coinTransferAmount");
-    const inventoryBox = $("#settingsInventory");
     const refreshEconomy = async () => {
       try {
         const balance = await PF.getCoinBalance();
         if (balanceEl) balanceEl.textContent = Number(balance).toLocaleString();
-        if (inventoryBox) {
-          const inv = await PF.listMyInventory();
-          inventoryBox.innerHTML = inv.length
-            ? `<div class="inventory-head"><span>عناصرك المملوكة</span><span class="section-sub">يمكن فتح العناصر من داخل محرر الملف الشخصي</span></div>` + inv.slice(0,10).map(x => `<div class="inventory-row"><div><b>${esc(x.name)}</b><small>${esc(storeTypeLabel(x.type))} · ${x.is_equipped ? "مجهز" : "غير مجهز"}</small></div><button type="button" class="btn btn-sm ${x.is_equipped ? "" : "btn-primary"}" data-inventory-equip="${esc(x.item_id)}">${x.is_equipped ? "إلغاء التجهيز" : "تجهيز"}</button></div>`).join("")
-            : `<div class="inventory-empty">لم تملك عناصر بعد. افتح محرر الملف الشخصي لفتح العناصر بالعملات.</div>`;
-          inventoryBox.querySelectorAll("[data-inventory-equip]").forEach(btn => btn.addEventListener("click", async () => {
-            try { btn.disabled = true; await PF.equipStoreItem(btn.dataset.inventoryEquip); notify("تم تحديث العنصر", "success"); await refreshEconomy(); } catch(e) { notify(e.message || "تعذر تحديث العنصر", "error"); btn.disabled = false; }
-          }));
-        }
-      } catch (e) { if (balanceEl) balanceEl.textContent = "—"; if (inventoryBox) inventoryBox.innerHTML = `<div class="inventory-empty">${esc(e.message || "تعذر تحميل الاقتصاد")}</div>`; }
+      } catch (e) {
+        if (balanceEl) balanceEl.textContent = "—";
+      }
     };
     const openTransfer = () => { if (!transferModal) return; transferModal.classList.add("open"); transferModal.setAttribute("aria-hidden", "false"); transferUser?.focus(); };
     const closeTransfer = () => { if (!transferModal) return; transferModal.classList.remove("open"); transferModal.setAttribute("aria-hidden", "true"); transferForm?.reset(); };
@@ -3370,14 +3372,14 @@ voiceMessageSend?.addEventListener("click",async()=>{
       modal.hidden = true;
       modal.innerHTML = `
         <div class="video-reward-backdrop" data-video-close></div>
-        <section class="video-reward-dialog" role="dialog" aria-modal="true" aria-labelledby="videoRewardTitle">
-          <div class="video-reward-head"><div><div class="eyebrow">RIVO REWARDS</div><h2 id="videoRewardTitle">شاهد فيديو واكسب عملات</h2></div><button type="button" class="icon-btn" data-video-close aria-label="إغلاق">×</button></div>
+        <section class="video-reward-dialog" role="dialog" aria-modal="true" aria-label="فيديو المكافأة">
+          <button type="button" class="video-reward-close" data-video-close aria-label="إغلاق">×</button>
           <div class="video-reward-stage">
             <video id="coinRewardVideo" playsinline controls preload="auto"></video>
             <button type="button" class="video-reward-play" id="coinRewardPlay" aria-label="تشغيل الفيديو">▶</button>
-            <div id="coinRewardState" class="video-reward-state">جارٍ تجهيز الفيديو…</div>
+            <div id="coinRewardState" class="sr-only">جارٍ تجهيز الفيديو…</div>
+            <span id="coinRewardTimer" class="sr-only">0:30</span>
           </div>
-          <div class="video-reward-foot"><div class="video-reward-timer"><span id="coinRewardTimer">0:30</span><span class="video-reward-audio">🔊 الصوت مفعّل</span></div><small>شاهد حتى 30 ثانية. يمكنك التحكم في الصوت من مشغل الفيديو.</small></div>
         </section>`;
       document.body.appendChild(modal);
       const video = modal.querySelector("#coinRewardVideo");
@@ -3424,7 +3426,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
       let timer = null;
       let startedAt = 0;
       try {
-        if (btn) { btn.disabled = true; btn.textContent = "🎬 جاري تجهيز الفيديو…"; }
+        if (btn) { btn.disabled = true; }
         const videos = await loadRewardVideoList();
         if (!videos.length) throw new Error("لا توجد فيديوهات صالحة داخل مجلد videos.");
         const randomFile = videos[Math.floor(Math.random() * videos.length)];
@@ -3495,9 +3497,19 @@ voiceMessageSend?.addEventListener("click",async()=>{
         if (!rewarded) closeVideoReward();
         notify(e.message || "تعذر تشغيل فيديو المكافأة", "error");
       } finally {
-        if (btn) { btn.disabled = false; btn.textContent = "🎬 مشاهدة إعلان لكسب عملات"; }
+        if (btn) { btn.disabled = false; }
       }
     };
+    const rewardPreview = $("#rewardAdPreview");
+    if (rewardPreview) {
+      try {
+        const videos = await loadRewardVideoList();
+        const previewFile = videos[Math.floor(Math.random() * videos.length)];
+        rewardPreview.src = `../videos/${encodeURIComponent(previewFile)}`;
+        rewardPreview.load();
+        rewardPreview.play().catch(() => {});
+      } catch {}
+    }
     $("#rewardAdCoins")?.addEventListener("click", startVideoReward);
     await refreshEconomy();
     if (!window.__rivoEconomyTimer) window.__rivoEconomyTimer = setInterval(() => refreshEconomy(), 15000);

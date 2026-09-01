@@ -641,7 +641,9 @@
       const raw = sessionStorage.getItem(CURRENT_PROFILE_CACHE_KEY);
       const parsed = raw ? JSON.parse(raw) : null;
       const p = parsed?.v || {};
-      return { following: Array.isArray(p.following) ? p.following : [] };
+      return {
+        following: Array.isArray(p.following) ? p.following.map(normalizeUsername).filter(Boolean) : []
+      };
     } catch { return { following: [] }; }
   }
   async function toggleFollow(targetUsername) {
