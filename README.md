@@ -219,3 +219,8 @@ Economy v20: the storefront is intentionally removed from Explore. Cosmetic and 
 - Validation now targets `NEW.id`, which is correct for `SECURITY DEFINER` social RPCs that update another profile row.
 - Added `supabase_social_economy_trigger_fix.sql
 - `supabase_social_economy_guard_fix_v2.sql` (recommended final social/economy interoperability fix)` as a standalone migration for an already-running Supabase project.
+
+
+## Final social/economy desktop fix
+
+After applying `supabase_schema.sql` and `supabase_economy.sql`, run `supabase_desktop_social_economy_final_fix.sql` once in Supabase SQL Editor. This final migration replaces the friend-request RPCs with transaction-local trusted writes so the legacy profile guard cannot return a false `Access denied` for legitimate friend actions.

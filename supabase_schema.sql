@@ -1549,8 +1549,6 @@ end; $$;
 revoke all on function public.rivo_delete_community(bigint) from public;
 grant execute on function public.rivo_delete_community(bigint) to authenticated;
 
-
--- Rivo economy system. See supabase_economy.sql for the full idempotent migration.
 -- Rivo Economy System
 -- Run after the existing Rivo schema. Safe to re-run.
 
@@ -1568,7 +1566,7 @@ create table if not exists public.store_items (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   description text not null default '',
-  type text not null check (type in ('avatar','frame','template','badge')),
+  type text not null check (type in ('avatar','frame','template','badge','feature')),
   price bigint not null default 0 check (price >= 0),
   image_url text,
   is_active boolean not null default true,
@@ -1577,6 +1575,10 @@ create table if not exists public.store_items (
 
 create unique index if not exists store_items_name_type_uq on public.store_items(lower(name), type);
 create index if not exists store_items_active_type_idx on public.store_items(is_active, type, price);
+
+-- Backward-compatible migration for an older v19 database that allowed only four item types.
+alter table public.store_items drop constraint if exists store_items_type_check;
+alter table public.store_items add constraint store_items_type_check check (type in ('avatar','frame','template','badge','feature'));
 
 create table if not exists public.user_inventory (
   id uuid primary key default gen_random_uuid(),
@@ -1709,6 +1711,7 @@ declare
   new_balance bigint;
 begin
   if uid is null then raise exception 'Not authenticated'; end if;
+  perform set_config('rivo.internal_coin_update','on',true);
 
   select * into item
   from public.store_items
@@ -1729,8 +1732,10 @@ begin
   update public.profiles set coins_balance = new_balance, updated_at = now() where id = uid;
   insert into public.user_inventory(user_id, item_id, is_equipped)
   values(uid, item.id, false);
-  insert into public.coin_transactions(sender_id, receiver_id, amount, type, item_id)
-  values(uid, null, greatest(item.price, 1), 'purchase', item.id);
+  if item.price > 0 then
+    insert into public.coin_transactions(sender_id, receiver_id, amount, type, item_id)
+    values(uid, null, item.price, 'purchase', item.id);
+  end if;
 
   return jsonb_build_object(
     'item_id', item.id,
@@ -1758,6 +1763,7 @@ declare
   lookup text := lower(trim(both '@' from coalesce(target_username, '')));
 begin
   if uid is null then raise exception 'Not authenticated'; end if;
+  perform set_config('rivo.internal_coin_update','on',true);
   if transfer_amount is null or transfer_amount <= 0 then raise exception 'Transfer amount must be greater than 0'; end if;
   if transfer_amount > 1000000000 then raise exception 'Transfer amount is too large'; end if;
 
@@ -1807,7 +1813,13 @@ declare
   day_claims integer;
 begin
   if uid is null then raise exception 'Not authenticated'; end if;
+  perform set_config('rivo.internal_coin_update','on',true);
   if reward_amount is null or reward_amount < 10 or reward_amount > 25 then raise exception 'Reward must be between 10 and 25 coins'; end if;
+
+  -- Lock the user's profile before checking limits so concurrent reward
+  -- requests cannot both pass the cooldown/daily-cap checks.
+  select coins_balance into current_balance from public.profiles where id = uid for update;
+  if current_balance is null then raise exception 'Profile not found'; end if;
 
   select max(created_at) into last_claim
   from public.coin_ad_claims where user_id = uid;
@@ -1820,8 +1832,6 @@ begin
   where user_id = uid and created_at >= date_trunc('day', now());
   if day_claims >= 20 then raise exception 'Daily ad reward limit reached'; end if;
 
-  select coins_balance into current_balance from public.profiles where id = uid for update;
-  if current_balance is null then raise exception 'Profile not found'; end if;
   new_balance := current_balance + reward_amount;
 
   update public.profiles set coins_balance = new_balance, updated_at = now() where id = uid;
@@ -1847,18 +1857,12 @@ declare
   item public.store_items;
 begin
   if uid is null then raise exception 'Not authenticated'; end if;
-  -- PostgreSQL/PLpgSQL cannot assign two composite records from one SELECT
-  -- using `select ui.*, s.* into inv, item`. Fetch and lock each row separately.
-  select ui.* into inv
+  select ui.id, ui.user_id, ui.item_id, ui.purchased_at, ui.is_equipped into inv
   from public.user_inventory ui
   where ui.user_id = uid and ui.item_id = target_item_id
   for update;
-  if inv.id is null then raise exception 'You do not own this item'; end if;
-
-  select s.* into item
-  from public.store_items s
-  where s.id = target_item_id;
-  if item.id is null then raise exception 'Store item not found'; end if;
+  select * into item from public.store_items where id = target_item_id and is_active = true;
+  if inv.id is null or item.id is null then raise exception 'You do not own this item'; end if;
 
   if item.type in ('frame','avatar','template') then
     update public.user_inventory ui
@@ -1877,6 +1881,298 @@ revoke all on function public.equip_store_item(uuid) from public;
 grant execute on function public.equip_store_item(uuid) to authenticated;
 
 -- Public profiles expose only equipped cosmetic items, never the inventory.
+-- Public profile RPC is finalized by the latest profile migration.
+-- Keep the economy migration focused on economy tables/RPCs so rerunning it
+-- cannot accidentally overwrite Story, followers, calls, or equipped cosmetics.
+
+
+-- Editor-unlock catalogue. These items are surfaced inside the profile editor,
+-- not through a separate storefront. Ownership unlocks the corresponding editor option.
+insert into public.store_items (name, description, type, price, image_url, is_active)
+values
+  ('Starter Avatar', 'Basic avatar option.', 'avatar', 0, null, true),
+  ('Starter Frame', 'Basic clean avatar frame.', 'frame', 0, null, true),
+  ('Starter Badge', 'Basic starter badge.', 'badge', 0, null, true),
+
+  ('Frame · Ring', 'Accent outline frame.', 'frame', 75, null, true),
+  ('Frame · Double', 'Layered premium frame.', 'frame', 120, null, true),
+  ('Frame · Diamond', 'Sharp diamond frame.', 'frame', 180, null, true),
+  ('Frame · Glow', 'Soft luminous halo.', 'frame', 250, null, true),
+  ('Frame · Scan', 'Animated scan frame.', 'frame', 350, null, true),
+  ('Frame · Hologram', 'Glass hologram frame.', 'frame', 600, null, true),
+  ('Frame · Orbit', 'Orbiting satellite frame.', 'frame', 800, null, true),
+  ('Frame · Prism', 'Faceted prism frame.', 'frame', 1000, null, true),
+  ('Frame · Starburst', 'Stellar burst frame.', 'frame', 1500, null, true),
+  ('Frame · Halo', 'Soft orbital crown.', 'frame', 1800, null, true),
+  ('Frame · Ribbon', 'Layered side sweep.', 'frame', 2200, null, true),
+  ('Frame · Circuit', 'Tech circuit frame.', 'frame', 2600, null, true),
+  ('Frame · Lattice', 'Geometric mesh frame.', 'frame', 3200, null, true),
+
+  ('Badge · Developer', 'Developer profile badge.', 'badge', 100, null, true),
+  ('Badge · Creator', 'Creator profile badge.', 'badge', 120, null, true),
+  ('Badge · Gamer', 'Gamer profile badge.', 'badge', 80, null, true),
+  ('Badge · Early User', 'Early supporter badge.', 'badge', 250, null, true),
+  ('Badge · VIP', 'VIP cosmetic badge.', 'badge', 500, null, true),
+  ('Badge · Top Creator', 'Rare creator badge.', 'badge', 1500, null, true),
+  ('Badge · Trusted', 'Trusted member badge.', 'badge', 800, null, true),
+
+  ('Template · Discord Noir', 'Core Rivo social HUD.', 'template', 0, null, true),
+  ('Template · Anime Cinema', 'Cinematic editorial profile.', 'template', 450, null, true),
+  ('Template · Neon Arena', 'Competitive luminous profile.', 'template', 700, null, true),
+  ('Template · Cyber Terminal', 'Technical console profile.', 'template', 900, null, true),
+  ('Template · Dark Luxury', 'Luxury obsidian profile.', 'template', 1200, null, true),
+  ('Template · Minimal Ice', 'Ultra-clean precision profile.', 'template', 1400, null, true),
+  ('Template · Samurai Ink', 'Ink poster profile.', 'template', 1700, null, true),
+  ('Template · Deep Space', 'Cosmic depth profile.', 'template', 1900, null, true),
+  ('Template · Creator Pulse', 'Media-first creator profile.', 'template', 2200, null, true),
+  ('Template · Monochrome Pro', 'Executive grayscale profile.', 'template', 2500, null, true),
+  ('Template · Starlight Royal', 'Constellation profile.', 'template', 3000, null, true),
+  ('Template · Aurora Glass', 'Crystalline aurora profile.', 'template', 3500, null, true),
+  ('Template · Obsidian Court', 'Luxury court profile.', 'template', 5000, null, true),
+  ('Template · Pixel Arcade', 'Retro arcade profile.', 'template', 2800, null, true),
+  ('Template · Botanical Night', 'Night garden profile.', 'template', 2400, null, true),
+  ('Template · White Atelier', 'Editorial white profile.', 'template', 3200, null, true),
+  ('Template · White Signal', 'Crisp white tech profile.', 'template', 3600, null, true),
+
+  ('Template · Card Style Glass', 'Glass card surface.', 'template', 0, null, true),
+  ('Template · Card Style Solid', 'Strong solid card surface.', 'template', 100, null, true),
+  ('Template · Card Style Outline', 'Clean outlined card surface.', 'template', 150, null, true),
+  ('Template · Card Style Poster', 'Cinematic poster card surface.', 'template', 250, null, true),
+  ('Template · Card Style Terminal', 'Technical terminal card surface.', 'template', 300, null, true),
+  ('Template · Card Style Frosted', 'Crystal frosted card surface.', 'template', 350, null, true),
+  ('Template · Card Style Notched', 'Cut-corner card surface.', 'template', 450, null, true),
+  ('Template · Card Style Frame', 'Gallery frame card surface.', 'template', 550, null, true),
+  ('Template · Card Style Aurora', 'Aurora glow card surface.', 'template', 700, null, true),
+  ('Template · Card Style Starfield', 'Night sky card surface.', 'template', 800, null, true),
+  ('Template · Card Style Paper', 'Editorial paper card surface.', 'template', 900, null, true),
+  ('Template · Card Style Split', 'Dual-surface card layout.', 'template', 1000, null, true),
+  ('Template · Card Style Ticket', 'Notched ticket card surface.', 'template', 1200, null, true),
+
+  ('Feature · Avatar Upload', 'Unlock custom avatar uploads.', 'feature', 150, null, true),
+  ('Feature · Banner Upload', 'Unlock custom profile banner uploads.', 'feature', 200, null, true),
+  ('Feature · Floating Image', 'Unlock your floating profile image.', 'feature', 250, null, true),
+  ('Feature · Profile Music', 'Unlock profile music and audio.', 'feature', 500, null, true),
+  ('Feature · Music Cover', 'Unlock custom music cover art.', 'feature', 150, null, true),
+  ('Feature · Custom Accent', 'Unlock custom accent colors.', 'feature', 120, null, true),
+  ('Feature · Radius Control', 'Unlock advanced card radius control.', 'feature', 100, null, true),
+  ('Feature · Glow Control', 'Unlock advanced glow control.', 'feature', 180, null, true),
+  ('Feature · Social Links', 'Unlock custom social links.', 'feature', 100, null, true),
+  ('Feature · Profile Sections', 'Unlock advanced profile section controls.', 'feature', 300, null, true)
+on conflict (lower(name), type) do update set
+  description = excluded.description,
+  price = excluded.price,
+  image_url = excluded.image_url,
+  is_active = excluded.is_active;
+
+-- ================================================================
+-- Server-side anti-bypass protection for paid editor cosmetics.
+-- A client may update public_data, so paid values must be validated on
+-- the database too; otherwise a modified browser could unlock badges,
+-- frames, templates or media features without spending coins.
+-- ================================================================
+create or replace function public.rivo_inventory_owned_by_name(p_user_id uuid, p_name text)
+returns boolean
+language sql
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.user_inventory ui
+    join public.store_items si on si.id = ui.item_id
+    where ui.user_id = p_user_id
+      and si.is_active = true
+      and lower(si.name) = lower(trim(p_name))
+  );
+$$;
+revoke all on function public.rivo_inventory_owned_by_name(uuid,text) from public;
+
+
+create or replace function public.rivo_validate_paid_profile_data()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid := NEW.id;
+  value text;
+  badge_name text;
+  template_name text;
+  frame_name text;
+  old_data jsonb;
+  new_data jsonb := coalesce(NEW.public_data, '{}'::jsonb);
+begin
+  old_data := case when TG_OP = 'UPDATE' then coalesce(OLD.public_data, '{}'::jsonb) else '{}'::jsonb end;
+
+  if TG_OP = 'INSERT' or new_data->'badges' is distinct from old_data->'badges' then
+    for value in select jsonb_array_elements_text(coalesce(new_data->'badges','[]'::jsonb)) loop
+      if value in ('verified','founder') then continue; end if;
+      badge_name := case value
+        when 'developer' then 'Badge · Developer'
+        when 'creator' then 'Badge · Creator'
+        when 'gamer' then 'Badge · Gamer'
+        when 'early' then 'Badge · Early User'
+        when 'vip' then 'Badge · VIP'
+        when 'top' then 'Badge · Top Creator'
+        when 'trusted' then 'Badge · Trusted'
+        else null
+      end;
+      if badge_name is null or not public.rivo_inventory_owned_by_name(uid, badge_name) then
+        raise exception 'This badge is not owned';
+      end if;
+    end loop;
+  end if;
+
+  if TG_OP = 'INSERT' or new_data->>'template' is distinct from old_data->>'template' then
+    value := coalesce(new_data->>'template','discord-noir');
+    template_name := case value
+      when 'discord-noir' then null
+      when 'anime-cinema' then 'Template · Anime Cinema'
+      when 'neon-arena' then 'Template · Neon Arena'
+      when 'cyber-terminal' then 'Template · Cyber Terminal'
+      when 'dark-luxury' then 'Template · Dark Luxury'
+      when 'minimal-ice' then 'Template · Minimal Ice'
+      when 'samurai-ink' then 'Template · Samurai Ink'
+      when 'deep-space' then 'Template · Deep Space'
+      when 'creator-pulse' then 'Template · Creator Pulse'
+      when 'monochrome-pro' then 'Template · Monochrome Pro'
+      when 'starlight-royal' then 'Template · Starlight Royal'
+      when 'aurora-glass' then 'Template · Aurora Glass'
+      when 'obsidian-court' then 'Template · Obsidian Court'
+      when 'pixel-arcade' then 'Template · Pixel Arcade'
+      when 'botanical-night' then 'Template · Botanical Night'
+      when 'white-atelier' then 'Template · White Atelier'
+      when 'white-signal' then 'Template · White Signal'
+      else null
+    end;
+    if value <> 'discord-noir' and (template_name is null or not public.rivo_inventory_owned_by_name(uid, template_name)) then
+      raise exception 'This template is not owned';
+    end if;
+  end if;
+
+  if TG_OP = 'INSERT' or new_data->>'cardStyle' is distinct from old_data->>'cardStyle' then
+    value := coalesce(new_data->>'cardStyle','glass');
+    if value <> 'glass' and not public.rivo_inventory_owned_by_name(uid, 'Template · Card Style ' || initcap(value)) then
+      raise exception 'This card style is not owned';
+    end if;
+  end if;
+
+  if TG_OP = 'INSERT' or new_data->>'avatarFrame' is distinct from old_data->>'avatarFrame' then
+    value := coalesce(new_data->>'avatarFrame','none');
+    if value <> 'none' then
+      frame_name := 'Frame · ' || initcap(value);
+      if not public.rivo_inventory_owned_by_name(uid, frame_name) then
+        raise exception 'This frame is not owned';
+      end if;
+    end if;
+  end if;
+
+  if coalesce(new_data->>'avatar','') <> coalesce(old_data->>'avatar','') and coalesce(new_data->>'avatar','') <> ''
+     and not public.rivo_inventory_owned_by_name(uid,'Feature · Avatar Upload') then raise exception 'Avatar upload feature is not owned'; end if;
+  if coalesce(new_data->>'banner','') <> coalesce(old_data->>'banner','') and coalesce(new_data->>'banner','') <> ''
+     and not public.rivo_inventory_owned_by_name(uid,'Feature · Banner Upload') then raise exception 'Banner upload feature is not owned'; end if;
+  if coalesce(new_data->>'miniImage','') <> coalesce(old_data->>'miniImage','') and coalesce(new_data->>'miniImage','') <> ''
+     and not public.rivo_inventory_owned_by_name(uid,'Feature · Floating Image') then raise exception 'Floating image feature is not owned'; end if;
+  if coalesce(new_data->'music'->>'audio','') <> coalesce(old_data->'music'->>'audio','')
+     and coalesce(new_data->'music'->>'audio','') <> ''
+     and not public.rivo_inventory_owned_by_name(uid,'Feature · Profile Music') then raise exception 'Profile music feature is not owned'; end if;
+  if coalesce(new_data->'music'->>'cover','') <> coalesce(old_data->'music'->>'cover','') and coalesce(new_data->'music'->>'cover','') <> ''
+     and not public.rivo_inventory_owned_by_name(uid,'Feature · Music Cover') then raise exception 'Music cover feature is not owned'; end if;
+
+  if (new_data ? 'accent') and coalesce(new_data->>'accent','#7488ff') <> coalesce(old_data->>'accent','#7488ff')
+     and coalesce(new_data->>'accent','#7488ff') <> '#7488ff'
+     and not public.rivo_inventory_owned_by_name(uid,'Feature · Custom Accent') then raise exception 'Custom accent feature is not owned'; end if;
+  if (new_data ? 'cardRadius') and coalesce((new_data->>'cardRadius')::numeric,22) <> coalesce((old_data->>'cardRadius')::numeric,22)
+     and not public.rivo_inventory_owned_by_name(uid,'Feature · Radius Control') then raise exception 'Radius control feature is not owned'; end if;
+  if (new_data ? 'glow') and coalesce((new_data->>'glow')::numeric,40) <> coalesce((old_data->>'glow')::numeric,40)
+     and not public.rivo_inventory_owned_by_name(uid,'Feature · Glow Control') then raise exception 'Glow control feature is not owned'; end if;
+  if jsonb_array_length(coalesce(new_data->'socials','[]'::jsonb)) > 0
+     and jsonb_array_length(coalesce(old_data->'socials','[]'::jsonb)) = 0
+     and not public.rivo_inventory_owned_by_name(uid,'Feature · Social Links') then raise exception 'Social links feature is not owned'; end if;
+
+  return NEW;
+end;
+$$;
+
+revoke all on function public.rivo_validate_paid_profile_data() from public;
+
+drop trigger if exists trg_rivo_validate_paid_profile_data on public.profiles;
+create trigger trg_rivo_validate_paid_profile_data
+before insert or update of public_data on public.profiles
+for each row execute function public.rivo_validate_paid_profile_data();
+
+
+-- ================================================================
+-- v22 economy hardening
+-- ================================================================
+create or replace function public.rivo_guard_coin_balance()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if NEW.coins_balance is distinct from OLD.coins_balance
+     and coalesce(current_setting('rivo.internal_coin_update', true), '') <> 'on' then
+    raise exception 'Coins balance can only be changed by the Rivo economy';
+  end if;
+  return NEW;
+end;
+$$;
+revoke all on function public.rivo_guard_coin_balance() from public;
+drop trigger if exists trg_rivo_guard_coin_balance on public.profiles;
+create trigger trg_rivo_guard_coin_balance
+before update of coins_balance on public.profiles
+for each row execute function public.rivo_guard_coin_balance();
+
+update public.profiles
+set public_data = public_data - 'coinsBalance' - 'coins_balance'
+where public_data ? 'coinsBalance' or public_data ? 'coins_balance';
+
+create or replace function public.rivo_grant_starter_inventory(p_user_id uuid)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  insert into public.user_inventory(user_id, item_id, is_equipped)
+  select p_user_id, s.id, false
+  from public.store_items s
+  where s.is_active = true
+    and s.price = 0
+    and s.name in ('Starter Avatar','Starter Frame','Starter Badge')
+    and not exists (select 1 from public.user_inventory ui where ui.user_id = p_user_id and ui.item_id = s.id);
+$$;
+revoke all on function public.rivo_grant_starter_inventory(uuid) from public;
+
+create or replace function public.rivo_grant_starter_inventory_on_profile_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.rivo_grant_starter_inventory(NEW.id);
+  return NEW;
+end;
+$$;
+revoke all on function public.rivo_grant_starter_inventory_on_profile_insert() from public;
+drop trigger if exists trg_rivo_grant_starter_inventory on public.profiles;
+create trigger trg_rivo_grant_starter_inventory
+after insert on public.profiles
+for each row execute function public.rivo_grant_starter_inventory_on_profile_insert();
+
+insert into public.user_inventory(user_id, item_id, is_equipped)
+select p.id, s.id, false
+from public.profiles p
+cross join public.store_items s
+where s.is_active = true
+  and s.price = 0
+  and s.name in ('Starter Avatar','Starter Frame','Starter Badge')
+  and not exists (select 1 from public.user_inventory ui where ui.user_id = p.id and ui.item_id = s.id);
+
+
 create or replace function public.rivo_get_public_profile(p_username text)
 returns jsonb
 language plpgsql
@@ -1949,23 +2245,132 @@ end;
 $$;
 revoke all on function public.rivo_get_public_profile(text) from public;
 grant execute on function public.rivo_get_public_profile(text) to anon, authenticated;
+-- Rivo Admin Economy Controls
+-- Run AFTER the current Rivo schema/economy migrations.
+-- Adds an admin-only RPC for setting a user's coin balance.
 
--- Starter inventory catalogue. Free basics + tiered prices.
-insert into public.store_items (name, description, type, price, image_url, is_active)
-values
-  ('Starter Avatar', 'Basic avatar for every new collection.', 'avatar', 0, null, true),
-  ('Starter Frame', 'A clean starter frame.', 'frame', 0, null, true),
-  ('Starter Badge', 'A simple Rivo starter badge.', 'badge', 0, null, true),
-  ('Silver Frame', 'Simple polished frame.', 'frame', 75, null, true),
-  ('Rivo Supporter', 'Regular supporter badge.', 'badge', 120, null, true),
-  ('Anime Cinema', 'Cinematic profile template.', 'template', 450, null, true),
-  ('Neon Arena', 'Competitive profile template.', 'template', 700, null, true),
-  ('Midnight Avatar', 'Premium dark avatar.', 'avatar', 800, null, true),
-  ('Royal Frame', 'Premium luminous frame.', 'frame', 1800, null, true),
-  ('Legend Badge', 'Rare collector badge.', 'badge', 3200, null, true),
-  ('Obsidian Court', 'Luxury profile template.', 'template', 5000, null, true)
-on conflict (lower(name), type) do update set
-  description = excluded.description,
-  price = excluded.price,
-  image_url = excluded.image_url,
-  is_active = excluded.is_active;
+create or replace function public.rivo_admin_set_coins(p_username text, p_coins bigint)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target public.profiles;
+  clean_username text := lower(trim(both '@' from coalesce(p_username, '')));
+begin
+  if not public.rivo_is_admin(auth.uid()) then
+    raise exception 'Access denied';
+  end if;
+
+  if p_coins is null or p_coins < 0 then
+    raise exception 'Coin amount must be zero or greater';
+  end if;
+
+  select * into target
+  from public.profiles
+  where username = clean_username
+  for update;
+
+  if target.id is null then
+    raise exception 'User not found';
+  end if;
+
+  -- Allow only this trusted server-side admin operation to cross the
+  -- coins_balance trigger. The setting is local to this transaction.
+  perform set_config('rivo.internal_coin_update', 'on', true);
+
+  update public.profiles
+  set coins_balance = p_coins,
+      updated_at = now()
+  where id = target.id;
+
+  return jsonb_build_object(
+    'userId', target.id,
+    'username', target.username,
+    'coins_balance', p_coins
+  );
+end;
+$$;
+
+revoke all on function public.rivo_admin_set_coins(text, bigint) from public;
+grant execute on function public.rivo_admin_set_coins(text, bigint) to authenticated;
+
+-- Include the balance in admin account lookup/list results.
+create or replace function public.rivo_admin_list_users(p_query text default '', p_limit int default 100)
+returns setof jsonb
+language sql
+stable
+security definer
+set search_path=public
+as $$
+  select jsonb_build_object(
+    'userId',p.id,
+    'username',p.username,
+    'displayName',coalesce(p.public_data->>'displayName',p.username),
+    'avatar',coalesce(p.public_data->>'avatar',''),
+    'is_banned',p.is_banned,
+    'views',coalesce((p.public_data->'stats'->>'views')::int,0),
+    'likes',coalesce((p.public_data->'likes'->>'count')::int,0),
+    'coins_balance',p.coins_balance,
+    'created_at',p.created_at
+  )
+  from public.profiles p
+  where public.rivo_is_admin(auth.uid())
+    and (p_query='' or p.username ilike '%'||lower(p_query)||'%' or coalesce(p.public_data->>'displayName','') ilike '%'||p_query||'%')
+  order by p.created_at desc
+  limit greatest(1,least(coalesce(p_limit,100),200));
+$$;
+revoke all on function public.rivo_admin_list_users(text,int) from public;
+grant execute on function public.rivo_admin_list_users(text,int) to authenticated;
+
+create or replace function public.rivo_admin_get_user_details(p_username text)
+returns jsonb
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  p public.profiles;
+  vis jsonb;
+begin
+  if not public.rivo_is_admin(auth.uid()) then raise exception 'Access denied'; end if;
+
+  select * into p
+  from public.profiles
+  where username=lower(trim(both '@' from p_username));
+
+  if p.id is null then return null; end if;
+
+  select coalesce(jsonb_agg(x order by x.last_seen desc),'[]'::jsonb) into vis
+  from (
+    select pr.username,
+           coalesce(pr.public_data->>'displayName',pr.username) as display_name,
+           max(v.viewed_at) as last_seen,
+           count(*)::int as visits
+    from public.rivo_profile_views v
+    join public.profiles pr on pr.id=v.viewer_id
+    where v.profile_id=p.id
+    group by pr.id,pr.username,pr.public_data->>'displayName'
+    order by max(v.viewed_at) desc
+    limit 50
+  ) x;
+
+  return jsonb_build_object(
+    'userId',p.id,
+    'username',p.username,
+    'displayName',coalesce(p.public_data->>'displayName',p.username),
+    'is_banned',p.is_banned,
+    'created_at',p.created_at,
+    'coins_balance',coalesce(p.coins_balance,0),
+    'views',coalesce((p.public_data->'stats'->>'views')::int,0),
+    'likes',coalesce((p.public_data->'likes'->>'count')::int,0),
+    'friends',jsonb_array_length(coalesce(p.public_data->'friends','[]'::jsonb)),
+    'visitors',vis
+  );
+end;
+$$;
+revoke all on function public.rivo_admin_get_user_details(text) from public;
+grant execute on function public.rivo_admin_get_user_details(text) to authenticated;
+
+select 'Rivo admin economy controls installed' as status;

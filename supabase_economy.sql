@@ -43,7 +43,7 @@ create table if not exists public.coin_transactions (
   id uuid primary key default gen_random_uuid(),
   sender_id uuid references public.profiles(id) on delete set null,
   receiver_id uuid references public.profiles(id) on delete set null,
-  amount bigint not null check (amount >= 0),
+  amount bigint not null check (amount > 0),
   type text not null check (type in ('transfer','ad_reward','purchase')),
   item_id uuid references public.store_items(id) on delete set null,
   created_at timestamptz not null default now()
@@ -160,6 +160,7 @@ declare
   new_balance bigint;
 begin
   if uid is null then raise exception 'Not authenticated'; end if;
+  perform set_config('rivo.internal_coin_update','on',true);
 
   select * into item
   from public.store_items
@@ -180,8 +181,10 @@ begin
   update public.profiles set coins_balance = new_balance, updated_at = now() where id = uid;
   insert into public.user_inventory(user_id, item_id, is_equipped)
   values(uid, item.id, false);
-  insert into public.coin_transactions(sender_id, receiver_id, amount, type, item_id)
-  values(uid, null, item.price, 'purchase', item.id);
+  if item.price > 0 then
+    insert into public.coin_transactions(sender_id, receiver_id, amount, type, item_id)
+    values(uid, null, item.price, 'purchase', item.id);
+  end if;
 
   return jsonb_build_object(
     'item_id', item.id,
@@ -209,6 +212,7 @@ declare
   lookup text := lower(trim(both '@' from coalesce(target_username, '')));
 begin
   if uid is null then raise exception 'Not authenticated'; end if;
+  perform set_config('rivo.internal_coin_update','on',true);
   if transfer_amount is null or transfer_amount <= 0 then raise exception 'Transfer amount must be greater than 0'; end if;
   if transfer_amount > 1000000000 then raise exception 'Transfer amount is too large'; end if;
 
@@ -258,6 +262,7 @@ declare
   day_claims integer;
 begin
   if uid is null then raise exception 'Not authenticated'; end if;
+  perform set_config('rivo.internal_coin_update','on',true);
   if reward_amount is null or reward_amount < 10 or reward_amount > 25 then raise exception 'Reward must be between 10 and 25 coins'; end if;
 
   -- Lock the user's profile before checking limits so concurrent reward
@@ -518,8 +523,8 @@ begin
      and not public.rivo_inventory_owned_by_name(uid,'Feature · Banner Upload') then raise exception 'Banner upload feature is not owned'; end if;
   if coalesce(new_data->>'miniImage','') <> coalesce(old_data->>'miniImage','') and coalesce(new_data->>'miniImage','') <> ''
      and not public.rivo_inventory_owned_by_name(uid,'Feature · Floating Image') then raise exception 'Floating image feature is not owned'; end if;
-  if coalesce(new_data->'music','{}'::jsonb) <> coalesce(old_data->'music','{}'::jsonb)
-     and coalesce(new_data->'music','{}'::jsonb) <> '{}'::jsonb
+  if coalesce(new_data->'music'->>'audio','') <> coalesce(old_data->'music'->>'audio','')
+     and coalesce(new_data->'music'->>'audio','') <> ''
      and not public.rivo_inventory_owned_by_name(uid,'Feature · Profile Music') then raise exception 'Profile music feature is not owned'; end if;
   if coalesce(new_data->'music'->>'cover','') <> coalesce(old_data->'music'->>'cover','') and coalesce(new_data->'music'->>'cover','') <> ''
      and not public.rivo_inventory_owned_by_name(uid,'Feature · Music Cover') then raise exception 'Music cover feature is not owned'; end if;
@@ -545,3 +550,73 @@ drop trigger if exists trg_rivo_validate_paid_profile_data on public.profiles;
 create trigger trg_rivo_validate_paid_profile_data
 before insert or update of public_data on public.profiles
 for each row execute function public.rivo_validate_paid_profile_data();
+
+
+-- ================================================================
+-- v22 economy hardening
+-- ================================================================
+create or replace function public.rivo_guard_coin_balance()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if NEW.coins_balance is distinct from OLD.coins_balance
+     and coalesce(current_setting('rivo.internal_coin_update', true), '') <> 'on' then
+    raise exception 'Coins balance can only be changed by the Rivo economy';
+  end if;
+  return NEW;
+end;
+$$;
+revoke all on function public.rivo_guard_coin_balance() from public;
+drop trigger if exists trg_rivo_guard_coin_balance on public.profiles;
+create trigger trg_rivo_guard_coin_balance
+before update of coins_balance on public.profiles
+for each row execute function public.rivo_guard_coin_balance();
+
+update public.profiles
+set public_data = public_data - 'coinsBalance' - 'coins_balance'
+where public_data ? 'coinsBalance' or public_data ? 'coins_balance';
+
+create or replace function public.rivo_grant_starter_inventory(p_user_id uuid)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  insert into public.user_inventory(user_id, item_id, is_equipped)
+  select p_user_id, s.id, false
+  from public.store_items s
+  where s.is_active = true
+    and s.price = 0
+    and s.name in ('Starter Avatar','Starter Frame','Starter Badge')
+    and not exists (select 1 from public.user_inventory ui where ui.user_id = p_user_id and ui.item_id = s.id);
+$$;
+revoke all on function public.rivo_grant_starter_inventory(uuid) from public;
+
+create or replace function public.rivo_grant_starter_inventory_on_profile_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.rivo_grant_starter_inventory(NEW.id);
+  return NEW;
+end;
+$$;
+revoke all on function public.rivo_grant_starter_inventory_on_profile_insert() from public;
+drop trigger if exists trg_rivo_grant_starter_inventory on public.profiles;
+create trigger trg_rivo_grant_starter_inventory
+after insert on public.profiles
+for each row execute function public.rivo_grant_starter_inventory_on_profile_insert();
+
+insert into public.user_inventory(user_id, item_id, is_equipped)
+select p.id, s.id, false
+from public.profiles p
+cross join public.store_items s
+where s.is_active = true
+  and s.price = 0
+  and s.name in ('Starter Avatar','Starter Frame','Starter Badge')
+  and not exists (select 1 from public.user_inventory ui where ui.user_id = p.id and ui.item_id = s.id);
