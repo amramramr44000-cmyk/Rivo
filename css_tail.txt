@@ -1,0 +1,220 @@
+  .rivo-mobile-nav-icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.85;stroke-linecap:round;stroke-linejoin:round}
+  .rivo-mobile-nav-item.is-active .rivo-mobile-nav-icon svg{stroke-width:2.15}
+  .rivo-mobile-menu-trigger{order:-1}
+
+  .menu-panel{
+    position:fixed!important;
+    left:10px!important;
+    right:auto!important;
+    bottom:calc(72px + env(safe-area-inset-bottom))!important;
+    top:auto!important;
+    width:min(250px,calc(100vw - 20px))!important;
+    max-height:min(68vh,430px)!important;
+    padding:7px!important;
+    margin:0!important;
+    border-radius:16px!important;
+    overflow:auto!important;
+    transform-origin:left bottom;
+    visibility:visible!important;
+    pointer-events:none!important;
+    z-index:2147483001!important;
+  }
+  .menu-panel.open{display:grid!important;gap:2px;pointer-events:auto!important}
+  .menu-panel > a{
+    min-height:40px!important;
+    padding:0 11px!important;
+    border-radius:10px!important;
+    font-size:12px!important;
+  }
+  .menu-panel .mobile-menu-duplicate{display:none!important}
+  .menu-panel .mobile-menu-notifications{display:flex;align-items:center;margin:2px 1px 4px;padding:0;border-radius:10px}
+  .mobile-menu-notifications .notification-btn{
+    width:100%;
+    min-height:40px;
+    padding:0 11px;
+    display:flex;
+    align-items:center;
+    justify-content:flex-start;
+    gap:9px;
+    border:0;
+    border-radius:10px;
+    background:transparent;
+    color:#c7ced9;
+  }
+  .mobile-menu-notifications .notification-btn:hover{background:rgba(255,255,255,.05);color:#fff}
+  .mobile-menu-notifications .notification-popover{z-index:2147483647!important}
+
+  /* The old mobile quick controls belong to the hidden header only. */
+  .mobile-quick-nav{display:none!important}
+
+  /* The topbar (and Save/Preview inside .editor-actions) is hidden on
+     mobile above in favor of the bottom nav. Give the editor page its
+     own always-visible action bar so Save is never lost. */
+  .editor-page{padding-bottom:calc(136px + env(safe-area-inset-bottom))!important}
+  .editor-page .editor-actions{
+    position:fixed!important;
+    visibility:visible!important;
+    pointer-events:auto!important;
+    left:0;right:0;
+    bottom:calc(64px + env(safe-area-inset-bottom));
+    z-index:2147483000;
+    display:flex!important;
+    justify-content:center;
+    gap:8px;
+    margin:0!important;
+    padding:9px 12px;
+    background:linear-gradient(180deg,rgba(10,13,19,.94),rgba(6,9,14,.99));
+    border-top:1px solid rgba(255,255,255,.085);
+    box-shadow:0 -6px 20px rgba(0,0,0,.22);
+    backdrop-filter:blur(18px) saturate(150%);
+    -webkit-backdrop-filter:blur(18px) saturate(150%);
+  }
+  .editor-page .editor-actions .btn{flex:1;max-width:220px;min-height:44px!important;height:44px!important;font-size:12px!important}
+}
+@media(min-width:761px){.rivo-mobile-bottom-nav{display:none!important}}
+
+
+/* Rivo Arabic UI: translate text without mirroring the visual layout. */
+html[data-language="ar"] body,
+html[data-language="ar"] .menu-panel,
+html[data-language="ar"] .notification-popover,
+html[data-language="ar"] button,
+html[data-language="ar"] input,
+html[data-language="ar"] textarea,
+html[data-language="ar"] select {
+  direction: ltr;
+}
+html[data-language="ar"] .menu-notification-item{
+  width:100%;
+  min-height:42px;
+  border:0;
+  border-radius:11px;
+  background:transparent;
+  color:#c7ced9;
+  display:flex;
+  align-items:center;
+  gap:9px;
+  padding:0 14px;
+  font:inherit;
+  font-size:13px;
+  text-align:left;
+  cursor:pointer;
+}
+html[data-language="ar"] .menu-notification-item:hover{background:rgba(255,255,255,.05);color:#fff}
+html[data-language="ar"] .menu-notification-icon{width:20px;display:grid;place-items:center}
+.mobile-menu-notifications .notification-badge{position:relative;top:auto;right:auto;margin-left:auto;transform:none}
+@media(max-width:760px){
+  .mobile-menu-notifications{display:block!important;margin:2px 1px 4px!important;padding:0!important}
+  .mobile-menu-notifications .notification-popover{
+    position:fixed!important;
+    left:10px!important;
+    right:10px!important;
+    top:auto!important;
+    bottom:calc(74px + env(safe-area-inset-bottom))!important;
+    width:auto!important;
+    max-height:min(68vh,520px)!important;
+  }
+}
+
+/* Arabic UI: keep the original LTR geometry while improving readability. */
+html[data-language="ar"] body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Tahoma, Arial, sans-serif;
+}
+html[data-language="ar"] .btn,
+html[data-language="ar"] .field,
+html[data-language="ar"] .field-input,
+html[data-language="ar"] textarea,
+html[data-language="ar"] select,
+html[data-language="ar"] .menu-panel,
+html[data-language="ar"] .topbar,
+html[data-language="ar"] .notification-popover {
+  line-height: 1.55;
+}
+
+/* Unified profile relationship action: one visible button, contextual choices inside. */
+.relationship-action-menu{position:relative;display:inline-flex;flex:0 0 auto}
+.relationship-action-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-width:112px}
+.relationship-action-chevron{font-size:13px;line-height:1;opacity:.8;transform:translateY(-1px)}
+.relationship-action-popover{position:absolute;z-index:80;top:calc(100% + 7px);right:0;min-width:170px;padding:6px;border:1px solid rgba(255,255,255,.09);border-radius:12px;background:rgba(13,16,23,.98);box-shadow:0 18px 42px rgba(0,0,0,.38);backdrop-filter:blur(18px)}
+.relationship-action-popover[hidden]{display:none!important}
+.relationship-menu-item{width:100%;border:0;background:transparent;color:#e8edf5;border-radius:9px;padding:9px 11px;text-align:left;font:inherit;font-size:13px;cursor:pointer}
+.relationship-menu-item:hover{background:rgba(255,255,255,.06)}
+.relationship-menu-item.primary{color:#fff}
+.relationship-menu-item.danger{color:#ff9c9c}
+.relationship-menu-item:disabled{opacity:.55;cursor:wait}
+@media(max-width:760px){
+  .relationship-action-popover{right:auto;left:0;min-width:180px}
+}
+
+/* =========================================================
+   Rivo mobile profile micro-positioning — final correction
+   Keep presence directly under the avatar and lift the
+   decorative floating image into the identity/badge zone.
+   Desktop layout is intentionally untouched.
+   ========================================================= */
+@media (max-width:760px){
+  .profile-presence{
+    margin-top:13px!important;
+    gap:6px!important;
+    min-height:14px;
+    white-space:nowrap;
+  }
+  .profile-presence .status-dot{
+    flex:0 0 7px;
+  }
+
+  /* Owner/self profile: the standalone floating image is lifted beside
+     the name/badges area instead of sitting low beside the stats. */
+  .profile-content{position:relative!important;}
+  .profile-mini-standalone{
+    position:absolute!important;
+    top:142px!important;
+    right:12px!important;
+    margin:0!important;
+    z-index:18!important;
+    display:flex!important;
+    align-items:center!important;
+    gap:7px!important;
+    pointer-events:none;
+  }
+  .profile-mini-standalone .profile-mini-float{
+    width:46px!important;
+    height:46px!important;
+    margin:0!important;
+  }
+  .profile-mini-standalone .profile-owner-likes{
+    min-height:32px!important;
+  }
+
+  /* Other profiles: same visual height, kept above the call/action row
+     and aligned to the right side of the badge/name zone. */
+  .profile-head{position:relative!important;}
+  .profile-social-actions .profile-mini-float{
+    position:absolute!important;
+    top:-66px!important;
+    right:6px!important;
+    bottom:auto!important;
+    width:46px!important;
+    height:46px!important;
+    margin:0!important;
+    z-index:18!important;
+    pointer-events:none;
+  }
+}
+@media (max-width:430px){
+  .profile-presence{margin-top:15px!important;}
+  .profile-mini-standalone{
+    top:139px!important;
+    right:10px!important;
+  }
+  .profile-mini-standalone .profile-mini-float,
+  .profile-social-actions .profile-mini-float{
+    width:44px!important;
+    height:44px!important;
+  }
+  .profile-social-actions .profile-mini-float{
+    top:-63px!important;
+    right:5px!important;
+  }
+}
+

@@ -189,3 +189,26 @@ The LiveKit client SDK is loaded from jsDelivr in the HTML pages. For production
 ## Rivo notifications
 
 Notifications are intentionally **in-app only**. Rivo listens to `public.rivo_notifications` through Supabase Realtime while the app is open, so there is no VAPID/Web Push setup, no browser permission prompt, and no extra Edge Function or webhook to configure.
+
+
+## Rivo Economy
+The package now includes `supabase_economy.sql`, which adds coins, the store, user inventory, transaction history, secure RPCs, starter items, and ad-reward throttling. Run the existing schema first, then run `supabase_economy.sql` in Supabase SQL Editor. The Settings page contains the coin balance + transfer modal, and Explore contains the Store.
+
+The ad reward RPC intentionally enforces a 10–25 coin range, a short cooldown, and a daily cap. A production ad provider should call the reward RPC only after its own verified completion callback; the included button is the Rivo-side reward flow.
+
+
+Economy v20: the storefront is intentionally removed from Explore. Cosmetic and profile-feature unlocks are presented directly inside the Profile Editor, with inline coin prices and purchase-on-click locks. Run supabase_economy.sql after the base schema so the Feature item type and catalog are available.
+
+## Economy editor hardening (v22)
+- Compact coin-only balance in the editor sidebar.
+- Paid unlocks require an explicit confirmation modal before charging coins.
+- Insufficient balance is reported only after the user confirms payment.
+- Badge selection is independently gated per badge and cannot unlock sibling badges.
+- Template selection no longer silently changes/opens a separately paid card style.
+- Added a server-side `profiles.public_data` validation trigger in `supabase_economy.sql` to reject forged paid badges, frames, templates, card styles, and gated media/features when the required inventory item is not owned.
+
+
+## v23 UI / reward video updates
+- Mobile editor Save bar follows the mobile bottom navigation: it slides down when the nav hides and returns directly above it when the nav reappears. Preview is hidden on mobile to keep only Save.
+- Coin reward videos are loaded from `videos/manifest.json`, selected randomly, and playback is capped at 30 seconds.
+- Add MP4/WebM/OGG files to `videos/` and list their filenames in `videos/manifest.json`.
