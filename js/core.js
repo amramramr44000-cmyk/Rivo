@@ -1946,10 +1946,11 @@ async function getVoiceUrl(path) {
     const url=await uploadBlob(blob,path,"image/webp");
     return {url,path,type:"image/webp"};
   }
-  async function createCommunity(name, description, joinPolicy, image=null) {
+  async function createCommunity(name, description, joinPolicy, image=null, voiceStartPolicy="everyone") {
     return callRpc("rivo_create_community", {
       p_name:name,p_description:description,p_join_policy:joinPolicy,
-      p_image_url:image?.url||null,p_image_path:image?.path||null
+      p_image_url:image?.url||null,p_image_path:image?.path||null,
+      p_voice_start_policy:voiceStartPolicy === "owner" ? "owner" : voiceStartPolicy === "moderators" ? "moderators" : "everyone"
     });
   }
   async function deleteCommunity(id) { return callRpc("rivo_delete_community", { p_id:Number(id) }); }
@@ -1975,6 +1976,42 @@ async function getVoiceUrl(path) {
     return async()=>{try{await sb.removeChannel(channel)}catch{}};
   }
 
+  async function getCommunityVoice(communityId) { return callRpc("rivo_get_community_voice", { p_id:Number(communityId) }); }
+  async function startCommunityVoice(communityId) { return callRpc("rivo_start_community_voice", { p_id:Number(communityId) }, "COMMUNITY_VOICE_START"); }
+  async function endCommunityVoice(communityId) { return callRpc("rivo_end_community_voice", { p_id:Number(communityId) }, "COMMUNITY_VOICE_END"); }
+  async function setCommunityVoicePolicy(communityId, policy) {
+    const v = policy === "owner" ? "owner" : policy === "moderators" ? "moderators" : "everyone";
+    return callRpc("rivo_set_community_voice_policy", { p_id:Number(communityId), p_policy:v }, "COMMUNITY_VOICE_POLICY");
+  }
+  async function setCommunityModerator(communityId, username, enabled) {
+    return callRpc("rivo_set_community_moderator", { p_id:Number(communityId), p_username:String(username||""), p_enabled:!!enabled }, "COMMUNITY_MODERATOR");
+  }
+  async function setCommunityVoiceMute(communityId, username, muted) {
+    return callRpc("rivo_set_community_voice_mute", { p_id:Number(communityId), p_username:String(username||""), p_muted:!!muted }, "COMMUNITY_VOICE_MUTE");
+  }
+  async function moderateCommunityVoice(communityId, username, action) {
+    requireClient();
+    const cfg=window.RIVO_CALL_CONFIG||{};
+    const session=(await sb.auth.getSession()).data?.session;
+    if(!cfg.tokenUrl||!session?.access_token) throw new Error("Voice service is not configured or your session expired.");
+    const normalized=String(action||"").trim().toLowerCase();
+    if(!["kick_member","mute_member","unmute_member"].includes(normalized)) throw new Error("Unsupported voice moderation action.");
+    const response=await fetch(cfg.tokenUrl,{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${session.access_token}`},body:JSON.stringify({action:normalized,communityId:Number(communityId),username:String(username||"")})});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok) throw new Error(data.error||`Voice moderation failed (${response.status}).`);
+    return data;
+  }
+  async function subscribeCommunityVoice(communityId, callback) {
+    requireClient();
+    const session=(await sb.auth.getSession()).data?.session;
+    if(!session?.user?.id) return async()=>{};
+    await syncRealtimeAuth(session);
+    const channel=sb.channel(`rivo-community-voice-${communityId}-${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", {event:"*",schema:"public",table:"rivo_community_voice_sessions",filter:`community_id=eq.${Number(communityId)}`}, payload=>callback?.(payload||null))
+      .subscribe();
+    return async()=>{try{await sb.removeChannel(channel)}catch{}};
+  }
+
   window.PF = {
     defaults, badgeCatalog, templates, getProfile, listProfiles, putProfile: saveProfile, deleteProfile,
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
@@ -1983,7 +2020,7 @@ async function getVoiceUrl(path) {
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminSetCoins, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCommunityVoice, startCommunityVoice, endCommunityVoice, setCommunityVoicePolicy, setCommunityModerator, setCommunityVoiceMute, moderateCommunityVoice, subscribeCommunityVoice, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
     NAV_I18N, I18N, currentLanguage, translateString, applyI18n, applySavedLanguage
   };
 })();

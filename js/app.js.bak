@@ -3761,7 +3761,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
       <div class="community-row-copy">
         <div class="community-row-title"><h3>${esc(c.name)}</h3>${c.voice_active?'<span class="community-live-dot" title="Voice room live">Live</span>':''}</div>
         <p>${esc(c.description||'A new Rivo community.')}</p>
-        <div class="community-row-meta"><span>${Number(c.members_count||0)}/50 members</span><span>${esc(policy)}</span><span>${esc(voicePolicy)}</span>${role&&role!=='guest'?`<span class="community-role-tag ${esc(role)}">${role==='owner'?'Owner':role==='moderator'?'Moderator':'Member'}</span>`:''}</div>
+        <div class="community-row-meta"><span>${Number(c.members_count||0)} members</span><span>${esc(policy)}</span><span>${esc(voicePolicy)}</span>${role&&role!=='guest'?`<span class="community-role-tag ${esc(role)}">${role==='owner'?'Owner':role==='moderator'?'Moderator':'Member'}</span>`:''}</div>
       </div>
       <div class="community-row-actions">${action}${manage}${owner?`<button type="button" class="btn btn-sm btn-danger" data-delete-community="${esc(c.id)}">Delete</button>`:''}</div>
     </article>`;
@@ -3847,7 +3847,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
           <label>Description<textarea class="field-input" id="communityDescription" maxlength="500" rows="3" placeholder="What is this community about?"></textarea></label>
           <label>Who can join<select class="field-input" id="communityPolicy"><option value="public">Everyone</option><option value="friends">Friends of the owner</option><option value="request">Approval required</option></select></label>
           <label>Who can start voice calls<select class="field-input" id="communityVoicePolicy"><option value="everyone">Everyone in the community</option><option value="moderators">Owner & moderators</option><option value="owner">Owner only</option></select></label>
-          <div class="community-create-warning">Community limit: 50 members · Voice room limit: 5 people. 10,000 coins are deducted only when creation succeeds. The charge is done server-side and cannot be bypassed from the browser.</div>
+          <div class="community-create-warning">10,000 coins are deducted only when creation succeeds. The charge is done server-side and cannot be bypassed from the browser.</div>
           <button class="btn btn-primary" id="createCommunitySubmit">Create community · 10,000 coins</button>
         </form>
       </div>`;
@@ -3894,31 +3894,20 @@ voiceMessageSend?.addEventListener("click",async()=>{
     let chatStop=async()=>{};
     let liveKitRoom=null;
     let liveKitAudio=[];
-    let voiceJoined=false;
-    let voiceJoinBusy=false;
-    let voicePresenceTimer=null;
-    let voicePresenceSyncBusy=false;
 
     const role=()=>String(community?.my_role||'member');
     const canModerate=()=>['owner','moderator'].includes(role());
     const isOwner=()=>role()==='owner';
     const canStartVoice=()=>community.voice_start_policy==='owner'?isOwner():community.voice_start_policy==='moderators'?canModerate():true;
     const currentVoicePolicyLabel=()=>community.voice_start_policy==='owner'?'Owner only':community.voice_start_policy==='moderators'?'Owner & moderators':'Everyone';
-    const roleLabel=r=>r==='owner'?'Owner':r==='moderator'?'Moderator':'Member';
 
     root.innerHTML=`<div class="community-chat-header">
       <a class="community-chat-back" href="communities.html" aria-label="Back">‹</a>
       ${communityAvatar(community,'community-chat-avatar')}
-      <div class="community-chat-heading"><div class="community-chat-title-line"><h1>${esc(community.name)}</h1><span class="community-chat-role">${roleLabel(role())}</span></div><p>${Number(community.members_count||0)}/50 members · ${esc(currentVoicePolicyLabel())} can start voice</p></div>
-      <div class="community-chat-head-actions">
-        <button class="icon-btn community-voice-head-btn" id="communityVoiceHeadBtn" title="Community voice" aria-label="Community voice"><span class="community-voice-head-icon">⌁</span><i class="community-voice-head-dot"></i></button>
-        <button class="icon-btn" id="communityMembersBtn" title="Members" aria-label="Members">☷</button>
-        ${isOwner()?'<button class="icon-btn" id="communityManageBtn" title="Manage community" aria-label="Manage community">⚙</button>':''}
-      </div>
+      <div class="community-chat-heading"><div class="community-chat-title-line"><h1>${esc(community.name)}</h1><span class="community-chat-role">${role()==='owner'?'Owner':role()==='moderator'?'Moderator':'Member'}</span></div><p>${Number(community.members_count||0)} members · ${esc(currentVoicePolicyLabel())} can start voice</p></div>
+      <div class="community-chat-head-actions"><button class="icon-btn" id="communityMembersBtn" title="Members">☷</button>${isOwner()?'<button class="icon-btn" id="communityManageBtn" title="Manage community">⚙</button>':''}</div>
     </div>
     <section id="communityVoiceBar" class="community-voice-bar"></section>
-    <div id="communityVoiceMini" class="community-voice-mini hidden"></div>
-    <div id="communityVoiceInvite" class="community-voice-invite hidden"></div>
     <div class="community-chat-layout">
       <section class="community-chat-main">
         <div id="communityMessages" class="community-messages"></div>
@@ -3928,10 +3917,11 @@ voiceMessageSend?.addEventListener("click",async()=>{
         <div class="community-members-head"><div><b>Members</b><small id="communityMembersCount">${Number(community.members_count||0)}</small></div><button class="icon-btn" id="communityMembersClose">×</button></div>
         <div id="communityMembersList" class="community-members-list"></div>
         <div id="communityRequests" class="community-requests"></div>
-        <div class="community-permission-note"><b>Voice</b><span>Start: <strong id="communityVoicePolicyLabel">${esc(currentVoicePolicyLabel())}</strong></span><span>Join: <strong>All members</strong></span></div>
+        <div class="community-permission-note">Voice starts: <b id="communityVoicePolicyLabel">${esc(currentVoicePolicyLabel())}</b></div>
       </aside>
     </div>
-    <div id="communityManageModal" class="modal-backdrop"></div>`;
+    <div id="communityManageModal" class="modal-backdrop"></div>
+    <div id="communityVoiceModal" class="modal-backdrop"></div>`;
 
     const renderMessages=async()=>{
       const box=$('#communityMessages');
@@ -3947,414 +3937,105 @@ voiceMessageSend?.addEventListener("click",async()=>{
     };
 
     const renderMembers=async()=>{
-      try{members=await PF.listCommunityMembers(id);}catch(e){members=[];notify(e.message||'Could not load members','error');}
+      members=await PF.listCommunityMembers(id);
       const list=$('#communityMembersList');
-      const groups=[
-        {key:'owner',label:'Owner'},
-        {key:'moderator',label:'Moderators'},
-        {key:'member',label:'Members'}
-      ];
-      const memberRow=(m)=>{
+      list.innerHTML=members.map(m=>{
         const targetRole=String(m.role||'member');
-        const isSelf=PF.normalizeUsername(m.username||'')===PF.normalizeUsername(me);
-        const actionable=!isSelf && ((isOwner() && targetRole!=='owner') || (role()==='moderator' && targetRole==='member'));
-        const voiceMuted=!!m.voice_muted;
-        return `<div class="community-member-item ${isSelf?'is-self':''}" data-community-member="${esc(m.username)}">
-          ${identityLink(m,profileMini(m),'community-member-avatar-link')}
-          <div class="community-member-copy">${identityLink(m,`<b>${esc(m.displayName||m.username)}</b>`)}<span>${roleLabel(targetRole)}${isSelf?' · You':''}${voiceMuted?' · Voice muted':''}</span></div>
-          <div class="community-member-actions">
-            ${actionable?`<button class="icon-btn community-member-more" type="button" data-community-member-menu="${esc(m.username)}" aria-label="Manage ${esc(m.username)}" title="Manage member">•••</button>`:''}
-          </div>
-        </div>`;
-      };
-      list.innerHTML=groups.map(g=>{
-        const rows=members.filter(m=>String(m.role||'member')===g.key);
-        if(!rows.length)return '';
-        return `<div class="community-member-group"><div class="community-section-label">${g.label} · ${rows.length}</div>${rows.map(memberRow).join('')}</div>`;
+        const canManageTarget=isOwner()&&targetRole!=='owner';
+        const canKick=(isOwner()&&targetRole!=='owner')||(role()==='moderator'&&targetRole==='member');
+        return `<div class="community-member-item">${identityLink(m,profileMini(m),'community-member-avatar-link')}<div class="community-member-copy">${identityLink(m,`<b>${esc(m.displayName||m.username)}</b>`)}<span>${targetRole==='owner'?'Owner':targetRole==='moderator'?'Moderator':'Member'}</span></div><div class="community-member-actions">${canManageTarget?`<button class="btn btn-xxs ${targetRole==='moderator'?'btn-ghost':'btn-primary'}" data-toggle-mod="${esc(m.username)}" data-enabled="${targetRole==='moderator'?'0':'1'}">${targetRole==='moderator'?'Member':'Mod'}</button>`:''}${canKick?`<button class="btn btn-xxs btn-danger" data-kick-member="${esc(m.username)}">Kick</button>`:''}</div></div>`;
       }).join('');
-      list.querySelectorAll('[data-community-member-menu]').forEach(b=>b.onclick=(e)=>{e.stopPropagation();openMemberActionMenu(b.dataset.communityMember);});
-      list.querySelectorAll('[data-community-member]').forEach(row=>row.addEventListener('click',e=>{
-        if(e.target.closest('button,a'))return;
-        const u=row.dataset.communityMember;
-        const m=members.find(x=>PF.normalizeUsername(x.username||'')===PF.normalizeUsername(u||''));
-        if(m){openMemberActionMenu(m.username);}
-      }));
-      $('#communityMembersCount').textContent=`${members.length}/50`;
+      list.querySelectorAll('[data-kick-member]').forEach(b=>b.onclick=async()=>{if(!confirm(`Remove @${b.dataset.kickMember} from this community?`))return;try{await PF.kickCommunityMember(id,b.dataset.kickMember);await refreshCommunity();notify('Member removed','success');}catch(e){notify(e.message,'error')}});
+      list.querySelectorAll('[data-toggle-mod]').forEach(b=>b.onclick=async()=>{try{await PF.setCommunityModerator(id,b.dataset.toggleMod,b.dataset.enabled==='1');await refreshCommunity();notify(b.dataset.enabled==='1'?'Moderator role granted':'Moderator role removed','success');}catch(e){notify(e.message,'error')}});
+      $('#communityMembersCount').textContent=String(members.length);
     };
-
-    function openMemberActionMenu(username){
-      const target=members.find(m=>PF.normalizeUsername(m.username||'')===PF.normalizeUsername(username||''));
-      if(!target)return;
-      const targetRole=String(target.role||'member');
-      const isSelf=PF.normalizeUsername(target.username||'')===PF.normalizeUsername(me);
-      const canManage=!isSelf && ((isOwner()&&targetRole!=='owner')||(role()==='moderator'&&targetRole==='member'));
-      if(!canManage)return;
-      document.getElementById('communityMemberActionMenu')?.remove();
-      const canRole=isOwner()&&targetRole!=='owner';
-      const muted=!!target.voice_muted;
-      const el=document.createElement('div');
-      el.id='communityMemberActionMenu';
-      el.className='community-member-action-sheet';
-      el.innerHTML=`<div class="community-member-action-card glass"><div class="community-member-action-head"><div><b>${esc(target.displayName||target.username)}</b><small>@${esc(target.username)}</small></div><button class="icon-btn" data-member-sheet-close>×</button></div>
-        ${canRole?`<button class="community-action-item" data-member-role>${targetRole==='moderator'?'♙ Remove moderator':'♙ Make moderator'}</button>`:''}
-        <button class="community-action-item" data-member-voice>${muted?'🎙 Unmute voice':'🎙 Mute voice'}</button>
-        <button class="community-action-item danger" data-member-kick>⌫ Remove from community</button>
-      </div>`;
-      document.body.appendChild(el);
-      el.addEventListener('click',e=>{if(e.target===el)el.remove();});
-      el.querySelector('[data-member-sheet-close]')?.addEventListener('click',()=>el.remove());
-      el.querySelector('[data-member-role]')?.addEventListener('click',async()=>{
-        try{await PF.setCommunityModerator(id,target.username,targetRole!=='moderator');el.remove();await refreshCommunity();notify(targetRole==='moderator'?'Moderator role removed':'Moderator role granted','success');}
-        catch(err){notify(err.message||'Could not update role','error');}
-      });
-      el.querySelector('[data-member-voice]')?.addEventListener('click',async()=>{
-        try{await PF.moderateCommunityVoice(id,target.username,muted?'unmute_member':'mute_member');el.remove();await refreshCommunity();notify(muted?'Voice unmuted':'Voice muted','success');}
-        catch(err){notify(err.message||'Could not change voice mute','error');}
-      });
-      el.querySelector('[data-member-kick]')?.addEventListener('click',async()=>{
-        if(!confirm(`Remove @${target.username} from this community?`))return;
-        try{await PF.moderateCommunityVoice(id,target.username,'kick_member');el.remove();await refreshCommunity();notify('Member removed','success');}
-        catch(err){notify(err.message||'Could not remove member','error');}
-      });
-    }
 
     const renderRequests=async()=>{
       const box=$('#communityRequests');
       if(!canModerate()){box.innerHTML='';return;}
       try{requests=await PF.listCommunityRequests(id);}catch{requests=[];}
-      box.innerHTML=requests.length?`<div class="community-section-label">Join requests · ${requests.length}</div>${requests.map(r=>`<div class="community-request-item"><div class="community-member-copy"><b>${esc(r.displayName||r.username)}</b><span>@${esc(r.username)}</span></div><button class="btn btn-xxs btn-primary" data-accept-request="${esc(r.username)}">Accept</button><button class="btn btn-xxs btn-danger" data-decline-request="${esc(r.username)}" aria-label="Decline">×</button></div>`).join('')}`:'';
-      box.querySelectorAll('[data-accept-request]').forEach(b=>b.onclick=async()=>{try{await PF.respondCommunityRequest(id,b.dataset.acceptRequest,true);await refreshCommunity();notify('Request accepted','success');}catch(e){notify(e.message||'Could not accept request','error');}});
-      box.querySelectorAll('[data-decline-request]').forEach(b=>b.onclick=async()=>{try{await PF.respondCommunityRequest(id,b.dataset.declineRequest,false);await refreshCommunity();}catch(e){notify(e.message||'Could not decline request','error');}});
-    };
-
-    const participantLabel=p=>String(p?.name||p?.identity||'Member').trim()||'Member';
-    const participantInitials=p=>participantLabel(p).slice(0,2).toUpperCase();
-    const isLocalParticipant=p=>p===liveKitRoom?.localParticipant;
-    const participantIsMuted=p=>{
-      try{return p?.isMicrophoneEnabled===false;}catch{return false;}
-    };
-    const activeSpeakerIds=new Set();
-    const participantIsSpeaking=p=>activeSpeakerIds.has(p?.identity);
-    const remoteAudioState=new Map();
-
-    const voiceParticipants=()=>liveKitRoom?[liveKitRoom.localParticipant,...liveKitRoom.remoteParticipants.values()]:[];
-
-    const renderVoiceParticipants=()=>{
-      const mini=$('#communityVoiceMini');
-      if(!liveKitRoom){if(mini)mini.classList.add('hidden');return;}
-      const people=voiceParticipants();
-      if(mini)mini.innerHTML=`<div class="community-voice-mini-head"><div class="community-voice-mini-title"><span class="community-voice-mini-status">LIVE</span><strong>Community voice</strong><small>${people.length}/5 connected</small></div><button class="icon-btn community-voice-mini-close" id="leaveCommunityVoice" aria-label="Leave voice">×</button></div>
-        <div class="community-voice-mini-people">${people.slice(0,5).map(p=>{
-          const pid=String(p?.identity||'');
-          const speakerMuted=remoteAudioState.get(pid)===true;
-          return `<div class="community-voice-person ${participantIsMuted(p)?'muted':''} ${participantIsSpeaking(p)?'speaking':''}">
-            <span class="community-voice-person-avatar">${esc(participantInitials(p))}</span>
-            <span class="community-voice-person-name">${esc(participantLabel(p))}${isLocalParticipant(p)?' · You':''}</span>
-            <button class="voice-person-tool ${speakerMuted?'off':''}" type="button" data-voice-output="${esc(pid)}" aria-label="${speakerMuted?'Unmute this participant':'Mute this participant locally'}" title="${speakerMuted?'Unmute their audio':'Mute their audio for you'}">${speakerMuted?'🔇':'🔊'}</button>
-            <span class="voice-person-mic" title="${participantIsMuted(p)?'Microphone muted':'Microphone on'}">${participantIsMuted(p)?'🎙️':'🎤'}</span>
-          </div>`;
-        }).join('')}</div>
-        <form class="community-voice-mini-chat" id="communityVoiceMiniChat"><input id="communityVoiceMiniInput" maxlength=2000 autocomplete="off" placeholder="Message the community…"><button class="voice-mini-chat-send" type="submit" aria-label="Send message">➤</button></form>
-        <div class="community-voice-mini-actions"><button class="btn btn-primary" id="enableCommunityVoiceAudio">🔊 Audio</button><button class="btn btn-ghost" id="toggleCommunityVoiceMute">${participantIsMuted(liveKitRoom.localParticipant)?'🎤 Unmute':'🔇 Mute'}</button><button class="btn btn-danger" id="leaveCommunityVoice2">Leave</button></div>`;
-      mini?.classList.remove('hidden');
-      $('#leaveCommunityVoice')?.addEventListener('click',leaveVoice,{once:true});
-      $('#leaveCommunityVoice2')?.addEventListener('click',leaveVoice,{once:true});
-      $('#toggleCommunityVoiceMute')?.addEventListener('click',toggleVoiceMute,{once:true});
-      $('#enableCommunityVoiceAudio')?.addEventListener('click',()=>enableVoiceAudio(true),{once:true});
-      mini.querySelector('#communityVoiceMiniChat')?.addEventListener('submit',async ev=>{
-        ev.preventDefault();
-        const input=mini.querySelector('#communityVoiceMiniInput');
-        const content=input?.value?.trim();
-        if(!content)return;
-        const send=mini.querySelector('.voice-mini-chat-send');
-        try{send.disabled=true;await PF.sendCommunityMessage(id,content);input.value='';await renderMessages();}
-        catch(e){notify(e.message||'Could not send message','error');}
-        finally{send.disabled=false;input.focus();}
-      });
-      mini.querySelectorAll('[data-voice-output]').forEach(btn=>btn.addEventListener('click',()=>toggleParticipantOutput(btn.dataset.voiceOutput)));
-      updateVoiceHeadButton();
-    };
-
-    const updateVoiceHeadButton=()=>{
-      const btn=$('#communityVoiceHeadBtn'); if(!btn)return;
-      const live=!!voiceRoom?.active;
-      btn.classList.toggle('is-live',live); btn.classList.toggle('is-joined',!!liveKitRoom);
-      btn.innerHTML=`<span class="community-voice-head-icon">📞</span><i class="community-voice-head-dot"></i>`;
-      btn.title=live?(liveKitRoom?`In voice · ${voiceParticipants().length}/5`:'Voice is ringing · up to 5'):'Start voice';
-      btn.setAttribute('aria-label',btn.title);
+      box.innerHTML=requests.length?`<div class="community-section-label">Join requests</div>${requests.map(r=>`<div class="community-request-item"><div class="community-member-copy"><b>${esc(r.displayName||r.username)}</b><span>@${esc(r.username)}</span></div><button class="btn btn-xxs btn-primary" data-accept-request="${esc(r.username)}">Accept</button><button class="btn btn-xxs btn-danger" data-decline-request="${esc(r.username)}">×</button></div>`).join('')}`:'';
+      box.querySelectorAll('[data-accept-request]').forEach(b=>b.onclick=async()=>{try{await PF.respondCommunityRequest(id,b.dataset.acceptRequest,true);await refreshCommunity();}catch(e){notify(e.message,'error')}});
+      box.querySelectorAll('[data-decline-request]').forEach(b=>b.onclick=async()=>{try{await PF.respondCommunityRequest(id,b.dataset.declineRequest,false);await refreshCommunity();}catch(e){notify(e.message,'error')}});
     };
 
     const renderVoiceBar=()=>{
       const box=$('#communityVoiceBar');
-      if(!box)return;
-      const active=!!voiceRoom?.active;
+      const active=voiceRoom?.active;
       if(!active){
-        box.className='community-voice-bar hidden';
-        box.innerHTML='';
-        updateVoiceHeadButton();
-        return;
-      }
-      const joined=!!liveKitRoom;
-      const people=joined?voiceParticipants().length:0;
-      const starter=voiceRoom.started_by?.displayName||voiceRoom.started_by?.username||'A member';
-      const moderation=canModerate();
-      box.className='community-voice-bar is-active';
-      box.innerHTML=`
-        <div class="community-voice-copy">
-          <div class="community-voice-status"><span class="community-voice-live-dot"></span><b>Voice live</b><span>${joined?`${people}/5 connected`:`${esc(starter)} started the call`}</span></div>
-          <small>${joined?'You are in the community voice room.':'The call is available above the message box. Join only if you want to.'}</small>
-        </div>
-        <div class="community-voice-actions">
-          ${joined?`<button class="btn btn-ghost" id="communityVoiceAudioBar" type="button">🔊 Audio</button><button class="btn btn-danger" id="communityVoiceLeaveBar" type="button">Leave</button>`:`<button class="btn btn-primary" id="communityVoiceJoinBar" type="button">Join</button>`}
-          ${moderation?`<button class="btn btn-danger community-voice-end-btn" id="communityVoiceEndBar" type="button">End for everyone</button>`:''}
-        </div>`;
-      if(joined){
-        $('#communityVoiceAudioBar')?.addEventListener('click',async()=>{await enableVoiceAudio(true);renderVoiceBar();},{once:true});
-        $('#communityVoiceLeaveBar')?.addEventListener('click',leaveVoice,{once:true});
+        box.className='community-voice-bar community-voice-bar-idle';
+        box.innerHTML=`<div class="community-voice-copy"><span class="community-voice-icon">◉</span><div><b>Community voice</b><small>${esc(currentVoicePolicyLabel())} can start · anyone in the community can join an active room.</small></div></div><button class="btn btn-primary" id="startCommunityVoice" ${canStartVoice()?'':'disabled'}>${canStartVoice()?'Start voice':'Owner/staff only'}</button>`;
       }else{
-        $('#communityVoiceJoinBar')?.addEventListener('click',async()=>{primeVoiceAudio();await joinVoice();},{once:true});
+        box.className='community-voice-bar community-voice-bar-live';
+        const starter=active.started_by?.displayName||active.started_by?.username||'A member';
+        box.innerHTML=`<div class="community-voice-copy"><span class="community-voice-live-pulse"></span><div><b>Voice room is live</b><small>${esc(starter)} started it · anyone in the community can join now.</small></div></div><div class="community-voice-actions"><span class="community-voice-count" id="communityVoiceCount">${liveKitRoom?liveKitRoom.remoteParticipants.size+1:0} online</span><button class="btn btn-primary" id="joinCommunityVoice">${liveKitRoom?'In voice':'Join voice'}</button><div class="community-voice-participants" aria-label="Voice participants"></div>${canModerate()?'<button class="btn btn-ghost" id="endCommunityVoice">End</button>':''}</div>`;
       }
-      $('#communityVoiceEndBar')?.addEventListener('click',()=>endVoice(true),{once:true});
-      updateVoiceHeadButton();
-    };
-
-    const showVoiceInvite=()=>{
-      const box=$('#communityVoiceInvite');
-      if(box){box.classList.add('hidden');box.innerHTML='';}
-      renderVoiceBar();
+      $('#startCommunityVoice')?.addEventListener('click',startVoice);
+      $('#joinCommunityVoice')?.addEventListener('click',()=>joinVoice());
+      $('#endCommunityVoice')?.addEventListener('click',()=>endVoice(true));
     };
 
     const refreshCommunity=async()=>{
       community=await PF.getCommunity(id);
-      if(!community?.is_member){await leaveVoice();location.href='communities.html';return;}
+      if(!community?.is_member){location.href='communities.html';return;}
       $('#communityVoicePolicyLabel').textContent=currentVoicePolicyLabel();
-      const roleEl=$('.community-chat-role');if(roleEl)roleEl.textContent=roleLabel(role());
       await renderMembers();
       await renderRequests();
       voiceRoom=await PF.getCommunityVoice(id);
       renderVoiceBar();
-      showVoiceInvite();
-      if(voiceRoom?.active)startVoicePresenceWatcher();
-      else if(voicePresenceTimer){clearInterval(voicePresenceTimer);voicePresenceTimer=null;}
     };
 
-    async function stopLiveKit(silent=false){
+    async function stopLiveKit(){
       try{await liveKitRoom?.disconnect();}catch{}
-      liveKitRoom=null; voiceJoined=false; activeSpeakerIds.clear(); remoteAudioState.clear();
-      liveKitAudio.forEach(el=>{try{el.pause?.();el.srcObject=null;el.remove();}catch{}});
-      liveKitAudio=[]; liveKitAudioByParticipant.clear();
-      renderVoiceParticipants(); renderVoiceBar();
-      if(!silent)showVoiceInvite();
+      liveKitRoom=null;
+      liveKitAudio.forEach(el=>{try{el.remove();}catch{}});
+      liveKitAudio=[];
+      renderVoiceBar();
     }
-
     async function getLiveKitToken(roomName,participantName){
       const cfg=window.RIVO_CALL_CONFIG||{};
       const session=(await window.__rivoSupabase?.auth.getSession())?.data?.session;
-      if(!cfg.tokenUrl||!session?.access_token)throw new Error('Voice service is not configured or your session expired.');
-      let r;
-      try{r=await fetch(cfg.tokenUrl,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},body:JSON.stringify({roomName,participantName})});}
-      catch(e){throw new Error('Could not reach the voice service. Check your connection and try again.');}
+      if(!cfg.tokenUrl||!session?.access_token)throw new Error('Voice service is not configured.');
+      const r=await fetch(cfg.tokenUrl,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},body:JSON.stringify({roomName,participantName})});
       const d=await r.json().catch(()=>({}));
-      if(!r.ok)throw new Error(d.error||`Voice authorization failed (${r.status}).`);
-      if(!d.server_url||!d.participant_token)throw new Error('Voice service returned an invalid room token.');
+      if(!r.ok)throw new Error(d.error||'Could not authorize the voice room.');
       return d;
     }
-
-    const liveKitAudioByParticipant=new Map();
-    let voiceAudioUnlocked=false;
-    let voiceAudioContext=null;
-
-    async function primeVoiceAudio(){
-      try{
-        if(!voiceAudioContext){
-          const AC=window.AudioContext||window.webkitAudioContext;
-          if(AC)voiceAudioContext=new AC();
-        }
-        await voiceAudioContext?.resume?.();
-      }catch{}
-      if(liveKitRoom){
-        try{
-          await liveKitRoom.startAudio?.();
-          voiceAudioUnlocked=true;
-        }catch{}
-      }
-    }
-
-    async function enableVoiceAudio(showToast=false){
-      await primeVoiceAudio();
-      if(liveKitRoom){
-        try{
-          await liveKitRoom.startAudio?.();
-          voiceAudioUnlocked=true;
-        }catch{}
-        for(const el of liveKitAudio){
-          try{
-            el.muted=false;
-            el.volume=1;
-            if(el.paused)await el.play();
-          }catch{}
-        }
-      }
-      renderVoiceParticipants();
-      renderVoiceBar();
-      if(showToast){
-        if(liveKitRoom?.canPlaybackAudio===false)notify('Tap Audio again to allow call sound on this phone.','error');
-        else notify('Voice audio enabled','success');
-      }
-    }
-
-    function attachAudioElement(track,participant){
-      try{track.detach().forEach(x=>x.remove());}catch{}
-      const pid=String(participant?.identity||'unknown');
-      const el=document.createElement('audio');
-      el.autoplay=true;
-      el.playsInline=true;
-      el.setAttribute('autoplay','true');
-      el.setAttribute('playsinline','true');
-      el.controls=false;
-      el.muted=false;
-      el.volume=1;
-      el.className='community-voice-audio';
-      el.addEventListener('playing',()=>{voiceAudioUnlocked=true;renderVoiceBar();},{once:true});
-      track.attach(el);
-      const bucket=liveKitAudioByParticipant.get(pid)||[];
-      bucket.push(el);
-      liveKitAudioByParticipant.set(pid,bucket);
-      document.body.appendChild(el);
-      liveKitAudio.push(el);
-      el.play().catch(()=>{});
-    }
-
-    function attachExistingAudioTracks(room){
-      try{
-        for(const participant of room.remoteParticipants.values()){
-          for(const publication of participant.trackPublications.values()){
-            if(String(publication.kind)!=='audio')continue;
-            try{if(typeof publication.setSubscribed==='function' && !publication.isSubscribed)publication.setSubscribed(true);}catch{}
-            if(publication.track)attachAudioElement(publication.track,participant);
-          }
-        }
-      }catch{}
-    }
-
-    function removeParticipantAudio(participantId){
-      const bucket=liveKitAudioByParticipant.get(String(participantId||''))||[];
-      bucket.forEach(el=>{try{el.pause?.();el.remove();}catch{}});
-      liveKitAudioByParticipant.delete(String(participantId||''));
-      liveKitAudio=liveKitAudio.filter(el=>!bucket.includes(el));
-    }
-
-    function toggleParticipantOutput(participantId){
-      const pid=String(participantId||'');
-      const next=!remoteAudioState.get(pid);
-      remoteAudioState.set(pid,next);
-      (liveKitAudioByParticipant.get(pid)||[]).forEach(el=>{el.muted=next;el.volume=next?0:1;});
-      renderVoiceParticipants();
-    }
-
-    async function syncVoicePresence(roomNameOverride=null, delay=0){
-      if(delay)await new Promise(r=>setTimeout(r,delay));
-      const roomName=String(roomNameOverride||voiceRoom?.room_name||'');
-      if(!roomName||voicePresenceSyncBusy)return;
-      voicePresenceSyncBusy=true;
-      try{
-        const cfg=window.RIVO_CALL_CONFIG||{};
-        const session=(await window.__rivoSupabase?.auth.getSession())?.data?.session;
-        if(!cfg.tokenUrl||!session?.access_token)return;
-        const r=await fetch(cfg.tokenUrl,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},body:JSON.stringify({action:'sync_presence',roomName,communityId:Number(id)})});
-        const d=await r.json().catch(()=>({}));
-        if(r.ok&&d?.ended){
-          voiceRoom={active:false};
-          renderVoiceBar();showVoiceInvite();
-          if(liveKitRoom&&liveKitRoom.name===roomName)await stopLiveKit(true);
-        }
-      }catch{}finally{voicePresenceSyncBusy=false;}
-    }
-
-    function startVoicePresenceWatcher(){
-      if(voicePresenceTimer)clearInterval(voicePresenceTimer);
-      voicePresenceTimer=setInterval(()=>syncVoicePresence(),3000);
-    }
-
     async function joinVoice(){
-      if(!voiceRoom?.active){notify('There is no active voice room.','error');return;}
-      if(liveKitRoom){renderVoiceParticipants();await enableVoiceAudio(true);return;}
-      if(voiceJoinBusy)return;
+      if(!voiceRoom?.active)return;
+      if(liveKitRoom)return;
       const LK=window.LivekitClient;
-      if(!LK){notify('Live voice is not loaded. Refresh the page and try again.','error');return;}
-      voiceJoinBusy=true;
+      if(!LK)throw new Error('LiveKit failed to load.');
       try{
-        await primeVoiceAudio();
         const d=await getLiveKitToken(voiceRoom.room_name,me);
-        const room=new LK.Room({adaptiveStream:true,dynacast:true,stopLocalTrackOnUnpublish:true});
-        room.on(LK.RoomEvent.TrackSubscribed,(track,publication,participant)=>{if(track.kind==='audio'){attachAudioElement(track,participant);renderVoiceParticipants();}});
-        room.on(LK.RoomEvent.TrackUnsubscribed,(track,publication,participant)=>{try{track.detach().forEach(x=>x.remove());}catch{} if(participant?.identity)removeParticipantAudio(participant.identity);renderVoiceParticipants();});
-        room.on(LK.RoomEvent.TrackSubscriptionFailed,(trackSid,participant)=>notify(`Could not receive audio from ${participantLabel(participant)}. Reconnecting…`,'error'));
-        room.on(LK.RoomEvent.ParticipantPermissionChanged,()=>renderVoiceParticipants());
-        room.on(LK.RoomEvent.ParticipantConnected,(participant)=>{renderVoiceParticipants();notify(`${participantLabel(participant)} joined voice`,'success');});
-        room.on(LK.RoomEvent.ParticipantDisconnected,(participant)=>{activeSpeakerIds.delete(participant?.identity);removeParticipantAudio(participant?.identity);renderVoiceParticipants();notify(`${participantLabel(participant)} left voice`,'success');});
-        room.on(LK.RoomEvent.ParticipantMetadataChanged,()=>renderVoiceParticipants());
-        room.on(LK.RoomEvent.ParticipantNameChanged,()=>renderVoiceParticipants());
-        room.on(LK.RoomEvent.TrackMuted,()=>renderVoiceParticipants());
-        room.on(LK.RoomEvent.TrackUnmuted,()=>renderVoiceParticipants());
-        room.on(LK.RoomEvent.LocalTrackPublished,()=>renderVoiceParticipants());
-        room.on(LK.RoomEvent.LocalTrackUnpublished,()=>renderVoiceParticipants());
-        room.on(LK.RoomEvent.ActiveSpeakersChanged,(speakers)=>{activeSpeakerIds.clear();(speakers||[]).forEach(p=>activeSpeakerIds.add(p.identity));renderVoiceParticipants();});
-        room.on(LK.RoomEvent.AudioPlaybackStatusChanged,(playing)=>{
-          if(playing){voiceAudioUnlocked=true;renderVoiceBar();renderVoiceParticipants();}
-          else{renderVoiceBar();notify('Tap 🔊 Audio in the voice panel to enable call audio.','error');}
-        });
-        room.on(LK.RoomEvent.Disconnected,()=>{liveKitRoom=null;voiceJoined=false;liveKitAudio.forEach(x=>{try{x.pause?.();x.remove();}catch{}});liveKitAudio=[];liveKitAudioByParticipant.clear();renderVoiceBar();renderVoiceParticipants();showVoiceInvite();setTimeout(()=>syncVoicePresence(voiceRoom?.room_name||'',250),250);});
-        await room.connect(d.server_url,d.participant_token,{autoSubscribe:true,maxRetries:6,peerConnectionTimeout:25000,websocketTimeout:25000});
-        liveKitRoom=room; voiceJoined=true;
-        await enableVoiceAudio(false);
-        attachExistingAudioTracks(room);
-        try{await room.localParticipant.setMicrophoneEnabled(true);}catch(e){notify('Joined voice, but microphone permission was denied. You can still listen.','error');}
-        startVoicePresenceWatcher();
-        renderVoiceParticipants();renderVoiceBar();showVoiceInvite();
+        const room=new LK.Room({adaptiveStream:true,dynacast:true});
+        room.on(LK.RoomEvent.TrackSubscribed,async track=>{if(track.kind==='audio'){const el=track.attach();el.autoplay=true;el.playsInline=true;el.className='community-voice-audio';document.body.appendChild(el);try{await el.play();}catch{}liveKitAudio.push(el);updateVoiceCount();}});
+        room.on(LK.RoomEvent.TrackUnsubscribed,track=>{try{track.detach().forEach(x=>x.remove());}catch{}});
+        room.on(LK.RoomEvent.ParticipantConnected,updateVoiceCount);
+        room.on(LK.RoomEvent.ParticipantDisconnected,updateVoiceCount);
+        room.on(LK.RoomEvent.Disconnected,()=>{liveKitRoom=null;liveKitAudio.forEach(x=>x.remove());liveKitAudio=[];renderVoiceBar();});
+        await room.connect(d.server_url,d.participant_token,{autoSubscribe:true,maxRetries:6,peerConnectionTimeout:20000,websocketTimeout:20000});
+        await room.localParticipant.setMicrophoneEnabled(true);
+        liveKitRoom=room;
+        renderVoiceBar();
         notify('You joined the community voice room','success');
-      }catch(e){await stopLiveKit(true);notify(e.message||'Could not join voice','error');}
-      finally{voiceJoinBusy=false;}
+      }catch(e){notify(e.message||'Could not join voice','error');await stopLiveKit();}
     }
-
-    async function leaveVoice(){
-      const wasJoined=!!liveKitRoom;
-      await stopLiveKit(true);
-      if(wasJoined){notify('You left the community voice room','success');const roomName=voiceRoom?.room_name||'';setTimeout(()=>syncVoicePresence(roomName,1000),1200);setTimeout(()=>syncVoicePresence(roomName,4000),4000);}
-      if(voiceRoom?.active)showVoiceInvite();
+    function updateVoiceCount(){const el=$('#communityVoiceCount');if(el)el.textContent=`${liveKitRoom?(liveKitRoom.remoteParticipants.size+1):0} online`;renderVoiceParticipants();}
+    function renderVoiceParticipants(){
+      const list=$('.community-voice-participants');if(!list)return;
+      if(!liveKitRoom){list.innerHTML='';return;}
+      const people=[liveKitRoom.localParticipant,...liveKitRoom.remoteParticipants.values()];
+      list.innerHTML=people.slice(0,24).map(p=>`<span class="community-voice-participant" title="${esc(p.name||p.identity||'Participant')}">${esc((p.name||p.identity||'U').slice(0,2).toUpperCase())}</span>`).join('');
     }
-
-    async function toggleVoiceMute(){
-      if(!liveKitRoom)return;
-      try{
-        const lp=liveKitRoom.localParticipant;
-        const muted=participantIsMuted(lp);
-        // Personal microphone control is independent from the community's
-        // voice-start policy. Only a server-enforced moderation mute blocks enable.
-        await lp.setMicrophoneEnabled(muted);
-        renderVoiceParticipants();
-      }catch(e){
-        const msg=String(e?.message||'');
-        notify(/permission|publish|not allowed|forbidden|denied/i.test(msg)?'Your microphone is currently blocked by voice permissions or browser permission.':'Could not change microphone','error');
-      }
-    }
-
     async function startVoice(){
       if(!canStartVoice()){notify('You do not have permission to start voice calls in this community.','error');return;}
-      try{
-        primeVoiceAudio();
-        if(voiceRoom?.active){return joinVoice();}
-        voiceRoom=await PF.startCommunityVoice(id);
-        renderVoiceBar();
-        showVoiceInvite();
-        await joinVoice();
-      }catch(e){notify(e.message||'Could not start the voice room','error');}
+      try{voiceRoom=await PF.startCommunityVoice(id);renderVoiceBar();await joinVoice();notify('Voice room started','success');}
+      catch(e){notify(e.message||'Could not start voice room','error');}
     }
-
     async function endVoice(confirmIt=false){
-      if(!canModerate()){notify('Only the owner or a moderator can end the voice room.','error');return;}
       if(confirmIt&&!confirm('End the community voice room for everyone?'))return;
-      try{await PF.endCommunityVoice(id);await stopLiveKit(true);voiceRoom={active:false};renderVoiceBar();showVoiceInvite();notify('Voice room ended','success');}catch(e){notify(e.message||'Could not end voice room','error');}
+      try{await PF.endCommunityVoice(id);await stopLiveKit();voiceRoom={active:false};renderVoiceBar();notify('Voice room ended','success');}catch(e){notify(e.message||'Could not end voice room','error');}
     }
 
     $('#communityCompose').addEventListener('submit',async e=>{
@@ -4366,22 +4047,20 @@ voiceMessageSend?.addEventListener("click",async()=>{
     $('#communityMembersBtn').onclick=()=>$('#communityMembersPanel').classList.add('open');
     $('#communityMembersClose').onclick=()=>$('#communityMembersPanel').classList.remove('open');
     $('#communityMembersPanel').addEventListener('click',e=>{if(e.target===$('#communityMembersPanel'))$('#communityMembersPanel').classList.remove('open');});
-    $('#communityVoiceHeadBtn').onclick=async()=>{primeVoiceAudio();if(liveKitRoom){renderVoiceParticipants();await enableVoiceAudio(true);return;}if(voiceRoom?.active)await joinVoice();else await startVoice();};
 
     const openManage=()=>{
       const modal=$('#communityManageModal');
-      modal.innerHTML=`<div class="modal-card glass community-manage-card"><div class="modal-head"><div><span class="eyebrow">COMMUNITY MANAGEMENT</span><h2>${esc(community.name)}</h2><p class="modal-muted">Owner has full control. Moderators can manage normal members and requests.</p></div><button class="icon-btn" data-close>×</button></div><div class="community-manage-grid">
-        <section class="community-permission-card"><b>Voice permissions</b><label>Who can start voice<select class="field-input" id="manageVoicePolicy"><option value="everyone">Everyone in the community</option><option value="moderators">Owner & moderators</option><option value="owner">Owner only</option></select></label><p>Joining an active room is always available to community members.</p></section>
-        <section class="community-permission-card"><b>Role permissions</b><div class="permission-list"><div><strong>Owner</strong><span>Manage community · assign/remove moderators · remove members · review requests · end voice</span></div><div><strong>Moderator</strong><span>Remove regular members · review requests · end voice when active</span></div><div><strong>Member</strong><span>Chat · join voice · leave voice</span></div></div></section>
-        <button class="btn btn-primary" id="saveCommunityManage">Save changes</button>
+      modal.innerHTML=`<div class="modal-card glass community-manage-card"><div class="modal-head"><div><span class="eyebrow">COMMUNITY MANAGEMENT</span><h2>${esc(community.name)}</h2></div><button class="icon-btn" data-close>×</button></div><div class="community-manage-grid">
+        <label>Who can start voice calls<select class="field-input" id="manageVoicePolicy"><option value="everyone">Everyone in the community</option><option value="moderators">Owner & moderators</option><option value="owner">Owner only</option></select></label>
+        <div class="community-manage-info"><b>Permissions</b><p>Owner can manage moderators, remove members and end calls. Moderators can remove regular members, review join requests and start/end voice calls when allowed.</p></div>
+        <button class="btn btn-primary" id="saveCommunityManage">Save permissions</button>
       </div></div>`;
       modal.classList.add('open');
       $('#manageVoicePolicy',modal).value=community.voice_start_policy||'everyone';
       modal.querySelector('[data-close]').onclick=()=>modal.classList.remove('open');
-      $('#saveCommunityManage',modal).onclick=async()=>{try{await PF.setCommunityVoicePolicy(id,$('#manageVoicePolicy',modal).value);modal.classList.remove('open');await refreshCommunity();notify('Community permissions saved','success');}catch(e){notify(e.message||'Could not save permissions','error');}};
+      $('#saveCommunityManage',modal).onclick=async()=>{try{await PF.setCommunityVoicePolicy(id,$('#manageVoicePolicy',modal).value);modal.classList.remove('open');await refreshCommunity();notify('Community permissions saved','success');}catch(e){notify(e.message,'error');}};
     };
     $('#communityManageBtn')?.addEventListener('click',openManage);
-
 
     await renderMessages();
     await refreshCommunity();
@@ -4391,28 +4070,18 @@ voiceMessageSend?.addEventListener("click",async()=>{
       try{
         const next=await PF.getCommunityVoice(id);
         const becameActive=!lastVoiceActive&&!!next?.active;
-        const becameInactive=lastVoiceActive&&!next?.active;
         voiceRoom=next;
         renderVoiceBar();
         if(becameActive && PF.normalizeUsername(next?.started_by?.username||'')!==PF.normalizeUsername(me)){
           try{navigator.vibrate?.([120,80,120]);}catch{}
-          showVoiceInvite();
-          notify('Voice call is ringing — tap Join to enter.','success');
-          try{if(document.visibilityState==='hidden'&&'Notification'in window&&Notification.permission==='granted')new Notification(`${community.name} · Voice live`,{body:'A member started a voice room. Tap to join.'});}catch{}
+          notify('A community voice room just started — join now.','success');
+          try{if(document.visibilityState==='hidden' && 'Notification' in window && Notification.permission==='granted') new Notification(`${community.name} · Voice room live`,{body:'A community member started a voice room. Tap to join.'});}catch{}
         }
-        if(becameInactive){showVoiceInvite();if(liveKitRoom){await stopLiveKit(true);notify('The community voice room ended.','success');}}
         lastVoiceActive=!!next?.active;
-      }catch(e){console.debug('community voice realtime refresh failed',e);}
-    });
-    renderVoiceBar();showVoiceInvite();
-    window.addEventListener('beforeunload',()=>{
-      try{
-        if(voicePresenceTimer)clearInterval(voicePresenceTimer);
-        chatStop?.();
-        voiceStop?.();
-        liveKitRoom?.disconnect();
       }catch{}
     });
+    renderVoiceBar();
+    window.addEventListener('beforeunload',()=>{try{chatStop?.();voiceStop?.();liveKitRoom?.disconnect();}catch{}});
     const manage=new URLSearchParams(location.search).get('manage');
     if(manage==='1'&&isOwner())openManage();
   }
