@@ -212,3 +212,9 @@ Economy v20: the storefront is intentionally removed from Explore. Cosmetic and 
 - Mobile editor Save bar follows the mobile bottom navigation: it slides down when the nav hides and returns directly above it when the nav reappears. Preview is hidden on mobile to keep only Save.
 - Coin reward videos are loaded from `videos/manifest.json`, selected randomly, and playback is capped at 30 seconds.
 - Add MP4/WebM/OGG files to `videos/` and list their filenames in `videos/manifest.json`.
+
+### Follow / friend update fix
+
+- Fixed the economy ownership-validation trigger so follow/unfollow and friendship updates do not re-validate unrelated paid badges/cosmetics.
+- Validation now targets `NEW.id`, which is correct for `SECURITY DEFINER` social RPCs that update another profile row.
+- Added `supabase_social_economy_trigger_fix.sql` as a standalone migration for an already-running Supabase project.
