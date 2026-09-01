@@ -3665,14 +3665,21 @@ voiceMessageSend?.addEventListener("click",async()=>{
       picker.setAttribute('aria-hidden','false');
       requestAnimationFrame(positionReactionPicker);
     };
-    let pressTimer=null, longPress=false;
+    let pressTimer=null, longPress=false, pressStartX=0, pressStartY=0;
     const clearPress=()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null;}};
-    likeBtn?.addEventListener('pointerdown',()=>{
+    likeBtn?.addEventListener('pointerdown',e=>{
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
       longPress=false;
+      pressStartX=e.clientX;
+      pressStartY=e.clientY;
       clearPress();
-      pressTimer=setTimeout(()=>{pressTimer=null;longPress=true;openPicker();},430);
+      pressTimer=setTimeout(()=>{pressTimer=null;longPress=true;openPicker();},320);
     });
-    ["pointerup","pointercancel","pointerleave"].forEach(type=>likeBtn?.addEventListener(type,clearPress));
+    likeBtn?.addEventListener('pointermove',e=>{
+      if (!pressTimer) return;
+      if (Math.hypot(e.clientX-pressStartX,e.clientY-pressStartY) > 10) clearPress();
+    });
+    ["pointerup","pointercancel"].forEach(type=>likeBtn?.addEventListener(type,clearPress));
     likeBtn?.addEventListener('contextmenu',e=>{e.preventDefault();openPicker();});
     window.addEventListener('resize',()=>{
       if(!picker || !picker.classList.contains('open')) return;
@@ -3693,12 +3700,28 @@ voiceMessageSend?.addEventListener("click",async()=>{
       if(longPress){longPress=false;return;}
       if(!PF.currentUsername()){location.href='login.html';return;}
       closePicker();
-      try{await PF.reactPost(post.id,myReaction||"👍");await refreshPostCard(post.id)}catch(err){notify(err.message,'error')}
+      try{
+        // Read the current server state before toggling. This prevents a stale
+        // card from trying to add a reaction that is already present.
+        const fresh=await PF.getPost(post.id);
+        const currentReaction=fresh?.my_reaction||null;
+        await PF.reactPost(post.id,currentReaction||"👍");
+        await refreshPostCard(post.id);
+      }catch(err){notify(err.message,'error')}
     });
     card.querySelectorAll('[data-post-react]').forEach(btn=>btn.addEventListener('click',async e=>{
       e.stopPropagation();
       if(!PF.currentUsername()){location.href='login.html';return}
-      try{await PF.reactPost(post.id,btn.dataset.postReact);closePicker();await refreshPostCard(post.id)}catch(err){notify(err.message,'error')}
+      try{
+        // Always compare against the latest server-side reaction. Selecting
+        // the same reaction again is a removal, not a duplicate insertion.
+        const selected=btn.dataset.postReact;
+        const fresh=await PF.getPost(post.id);
+        const currentReaction=fresh?.my_reaction||null;
+        await PF.reactPost(post.id,currentReaction===selected?currentReaction:selected);
+        closePicker();
+        await refreshPostCard(post.id);
+      }catch(err){notify(err.message,'error')}
     }));
     document.addEventListener('click',e=>{if(reactionWrap&&!reactionWrap.contains(e.target))closePicker();},{once:false});
     card.querySelector('[data-post-comments]')?.addEventListener('click',async()=>{await renderPostComments(card,post.id)});

@@ -509,12 +509,10 @@
     if (Number.isNaN(parsedBirthDate.getTime())) throw new Error("Enter a valid birth date.");
     if (parsedBirthDate > new Date()) throw new Error("Birth date cannot be in the future.");
     const passwordValue = String(password || "");
-    if (passwordValue.length < 8) throw new Error("Password must be at least 8 characters.");
+    // Keep signup password rules simple: minimum length only.
+    // Supabase Auth must be configured with the same (or lower) minimum.
+    if (passwordValue.length < 6) throw new Error("Password must be at least 6 characters.");
     if (passwordValue.length > 28) throw new Error("Password must be 28 characters or fewer.");
-    const classes = [/[a-z]/.test(passwordValue), /[A-Z]/.test(passwordValue), /\d/.test(passwordValue), /[^A-Za-z0-9]/.test(passwordValue)].filter(Boolean).length;
-    if (classes < 3) throw new Error("Use a stronger password: mix uppercase, lowercase, numbers and/or symbols.");
-    const weak = new Set(["password123", "password123!", "qwerty1234", "1234567890", "letmein123", "welcome123"]);
-    if (weak.has(passwordValue.toLowerCase())) throw new Error("Choose a less predictable password.");
     const { data: existing, error: lookupError } = await sb.rpc("rivo_username_exists", { p_username: u });
     if (lookupError) throw lookupError;
     if (existing) throw new Error("That username is already taken.");
