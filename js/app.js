@@ -2337,7 +2337,7 @@
         ${standaloneMini}
         ${!isMe && !PF.currentUsername() ? `<div class="profile-actions-row"><span class="compact-likes-label">${displayViews(likeCount)} likes</span></div>` : ""}
         <div class="profile-stats">
-          <div><span>متابعين</span><b>${Number.isFinite(Number(p.followersCount)) ? Number(p.followersCount) : (Array.isArray(p.followers) ? p.followers.length : 0)}</b></div>
+          <div><span>متابعين</span><b data-followers-count>${Number.isFinite(Number(p.followersCount)) ? Number(p.followersCount) : (Array.isArray(p.followers) ? p.followers.length : 0)}</b></div>
           <div class="view-stat"><span><span class="eye-mini">◉</span> المشاهدات</span><b>${views}</b></div>
         </div>
         <div class="social-row">${social}</div>
@@ -2547,7 +2547,16 @@ async function initProfile() {
           notify("Friend removed", "success");
         } else if (action === "toggle-follow") {
           const result = await PF.toggleFollow(profile.username);
-          notify(result.following ? "Following" : "Unfollowed", "success");
+          const followingNow = !!result?.following;
+          const followerCount = Math.max(0, Number(result?.followers_count) || 0);
+          button.textContent = followingNow ? "Unfollow" : "Follow";
+          const countEl = $("[data-followers-count]");
+          if (countEl) countEl.textContent = String(followerCount);
+          notify(followingNow ? "Following" : "Unfollowed", "success");
+          // Do not rebuild the whole profile after follow/unfollow. The RPC
+          // already returned the authoritative follower count; updating only
+          // the affected controls avoids interrupting the profile/post UI.
+          return;
         } else {
           return;
         }
@@ -2571,24 +2580,32 @@ async function initProfile() {
         });
       });
     }
-    $("[data-like-profile]")?.addEventListener("click", async () => {
-      try {
-        const result = await PF.toggleLike(profile.username);
-        const fresh = await PF.getProfile(profile.username);
-        const viewer = await PF.currentProfile();
-        const rel = PF.friendshipState(viewer, profile.username);
-        const friends = (fresh?.friends || []);
-        const friendProfiles = await PF.getProfiles(friends);
-        const root = $("#profileRoot");
-        if (root && fresh) {
-          root.innerHTML = renderProfileCard(fresh, { isMe:false, friendProfiles, relationship:rel }) + `<section class="profile-posts-wrap"><div class="section-head profile-posts-head"><div><div class="section-kicker">POSTS</div><h2>المنشورات</h2></div></div><div id="profilePostFeed" class="post-feed"></div></section>`;
-          bindPlayer(root);
-          await renderPostFeed($("#profilePostFeed"), fresh.username, { allowCompose:false });
-          $("[data-friends-open]")?.addEventListener("click", () => openFriendsModal(friendProfiles));
+    const likeButton = $("[data-like-profile]");
+    if (likeButton && likeButton.dataset.bound !== "1") {
+      likeButton.dataset.bound = "1";
+      likeButton.addEventListener("click", async () => {
+        if (likeButton.disabled) return;
+        likeButton.disabled = true;
+        try {
+          const result = await PF.toggleLike(profile.username);
+          // Update only the like control. Never rebuild profileRoot or the post
+          // feed here: a successful Like must not interrupt the rest of the page.
+          const liked = !!result?.liked;
+          const count = Math.max(0, Number(result?.count) || 0);
+          likeButton.classList.toggle("liked", liked);
+          likeButton.setAttribute("aria-label", liked ? "Unlike" : "Like");
+          const heart = likeButton.querySelector(".heart");
+          const countEl = likeButton.querySelector(".like-count");
+          if (heart) heart.textContent = liked ? "♥" : "♡";
+          if (countEl) countEl.textContent = displayViews(count);
+          notify(liked ? "Profile liked" : "Like removed", "success");
+        } catch (err) {
+          notify(err?.message || "Could not update the like.", "error");
+        } finally {
+          likeButton.disabled = false;
         }
-        notify(result.liked ? "Profile liked" : "Like removed", "success");
-      } catch (err) { notify(err.message, "error"); }
-    });
+      });
+    }
   }
 
   function openFriendsModal(profiles) {
@@ -3261,9 +3278,10 @@ voiceMessageSend?.addEventListener("click",async()=>{
         const d = await PF.adminGetUserDetails(username);
         if (!d) { detail.innerHTML = `<div class="empty-state"><h2>User not found</h2></div>`; return; }
         const visitorRows = (d.visitors || []).length ? d.visitors.map(v => `<div class="visitor-row"><span>${esc(v.display_name || v.username)}</span><span>@${esc(v.username)} · ${esc(new Date(v.last_seen).toLocaleDateString())}</span></div>`).join("") : `<div class="empty-state"><p>No identified visitors yet.</p></div>`;
-        detail.innerHTML = `<div class="admin-detail"><div class="admin-detail-head"><div><span class="eyebrow">ACCOUNT</span><h2 style="margin:5px 0 0">${esc(d.displayName || d.username)}</h2><div class="admin-detail-meta">@${esc(d.username)} · joined ${esc(new Date(d.created_at).toLocaleDateString())}</div></div><span class="admin-badge ${d.is_banned?'banned':''}">${d.is_banned?'Banned':'Active'}</span></div><div class="admin-stats"><div class="admin-stat"><span>Profile views</span><b>${esc(d.views)}</b></div><div class="admin-stat"><span>Profile likes</span><b>${esc(d.likes)}</b></div><div class="admin-stat"><span>Friends</span><b>${esc(d.friends)}</b></div></div><section class="admin-edit-section"><div class="section-kicker">ACCOUNT EDIT</div><div class="form-grid"><label class="field"><span>Username</span><input id="adminUsername" class="field-input" value="${esc(d.username)}" maxlength="26"></label><label class="field"><span>Display name</span><input id="adminDisplayName" class="field-input" value="${esc(d.displayName || d.username)}" maxlength="80"></label></div><div class="form-grid"><label class="field"><span>Birth date</span><input id="adminBirthDate" class="field-input" type="date" value="${esc(d.birthDate || "")}" max="${new Date().toISOString().slice(0,10)}"></label><label class="field"><span>New password</span><div class="input-with-action"><input id="adminPassword" class="field-input" type="password" minlength="8" maxlength="28" placeholder="Set a new password"><button type="button" class="icon-btn field-eye" id="adminPasswordToggle" aria-label="Show password" title="Show password">◉</button></div></label></div><button class="btn btn-primary" id="adminSaveAccount">Save account</button><small class="muted">For security, the current password can never be displayed or recovered. Enter a new password to replace it.</small></section><div class="field"><span>Adjust public counters</span><div class="form-grid"><input id="adminViews" class="field-input" type="number" min="0" value="${esc(d.views)}" placeholder="Views"><input id="adminLikes" class="field-input" type="number" min="0" value="${esc(d.likes)}" placeholder="Likes"></div></div><div class="admin-actions"><button class="btn btn-primary" id="adminSaveStats">Save counters</button><button class="btn" id="adminToggleBan">${d.is_banned?'Unban account':'Block account'}</button><a class="btn" href="profile.html?u=${encodeURIComponent(d.username)}" target="_blank" rel="noreferrer">Open profile</a></div><section><div class="section-head"><div><div class="section-kicker">VISITORS</div><h3>Recent profile visitors</h3></div></div><div class="visitor-list">${visitorRows}</div></section><section class="admin-card danger-zone"><div class="section-kicker">DANGER ZONE</div><h3>Delete account permanently</h3><p class="muted">Removes the auth account and cascading profile data. This cannot be undone.</p><button class="btn btn-danger" id="adminDeleteUser">Delete ${esc(d.username)}</button></section></div>`;
+        detail.innerHTML = `<div class="admin-detail"><div class="admin-detail-head"><div><span class="eyebrow">ACCOUNT</span><h2 style="margin:5px 0 0">${esc(d.displayName || d.username)}</h2><div class="admin-detail-meta">@${esc(d.username)} · joined ${esc(new Date(d.created_at).toLocaleDateString())}</div></div><span class="admin-badge ${d.is_banned?'banned':''}">${d.is_banned?'Banned':'Active'}</span></div><div class="admin-stats"><div class="admin-stat"><span>Profile views</span><b>${esc(d.views)}</b></div><div class="admin-stat"><span>Profile likes</span><b>${esc(d.likes)}</b></div><div class="admin-stat"><span>Friends</span><b>${esc(d.friends)}</b></div><div class="admin-stat"><span>Coins</span><b>${esc(d.coins_balance ?? 0)}</b></div></div><section class="admin-edit-section"><div class="section-kicker">ACCOUNT EDIT</div><div class="form-grid"><label class="field"><span>Username</span><input id="adminUsername" class="field-input" value="${esc(d.username)}" maxlength="26"></label><label class="field"><span>Display name</span><input id="adminDisplayName" class="field-input" value="${esc(d.displayName || d.username)}" maxlength="80"></label></div><div class="form-grid"><label class="field"><span>Birth date</span><input id="adminBirthDate" class="field-input" type="date" value="${esc(d.birthDate || "")}" max="${new Date().toISOString().slice(0,10)}"></label><label class="field"><span>New password</span><div class="input-with-action"><input id="adminPassword" class="field-input" type="password" minlength="8" maxlength="28" placeholder="Set a new password"><button type="button" class="icon-btn field-eye" id="adminPasswordToggle" aria-label="Show password" title="Show password">◉</button></div></label></div><button class="btn btn-primary" id="adminSaveAccount">Save account</button><small class="muted">For security, the current password can never be displayed or recovered. Enter a new password to replace it.</small></section><section class="admin-edit-section"><div class="section-kicker">ECONOMY</div><div class="field"><span>Set account coin balance</span><div class="form-grid"><input id="adminCoins" class="field-input" type="text" inputmode="numeric" pattern="[0-9]*" value="${esc(d.coins_balance ?? 0)}" placeholder="0" autocomplete="off"></div><small class="muted">Admin-only. The balance is changed through a protected server RPC.</small></div><button class="btn btn-primary" id="adminSaveCoins">Save coin balance</button></section><div class="field"><span>Adjust public counters</span><div class="form-grid"><input id="adminViews" class="field-input" type="number" min="0" value="${esc(d.views)}" placeholder="Views"><input id="adminLikes" class="field-input" type="number" min="0" value="${esc(d.likes)}" placeholder="Likes"></div></div><div class="admin-actions"><button class="btn btn-primary" id="adminSaveStats">Save counters</button><button class="btn" id="adminToggleBan">${d.is_banned?'Unban account':'Block account'}</button><a class="btn" href="profile.html?u=${encodeURIComponent(d.username)}" target="_blank" rel="noreferrer">Open profile</a></div><section><div class="section-head"><div><div class="section-kicker">VISITORS</div><h3>Recent profile visitors</h3></div></div><div class="visitor-list">${visitorRows}</div></section><section class="admin-card danger-zone"><div class="section-kicker">DANGER ZONE</div><h3>Delete account permanently</h3><p class="muted">Removes the auth account and cascading profile data. This cannot be undone.</p><button class="btn btn-danger" id="adminDeleteUser">Delete ${esc(d.username)}</button></section></div>`;
         $("#adminSaveAccount").onclick = async () => { try { const result = await PF.adminUpdateUser(d.username, $("#adminUsername").value, $("#adminDisplayName").value, $("#adminPassword").value, $("#adminBirthDate")?.value || ""); notify(result?.passwordChanged ? "Account and password updated" : "Account updated", "success"); selected = result?.username || $("#adminUsername").value.trim().toLowerCase(); await loadUsers(""); await selectUser(selected); } catch(e) { notify(e.message || "Could not update account", "error"); } }; $("#adminPasswordToggle")?.addEventListener("click", () => { const i=$("#adminPassword"); if (!i) return; i.type=i.type==="password"?"text":"password"; $("#adminPasswordToggle").setAttribute("aria-label", i.type==="password"?"Show password":"Hide password"); });
         $("#adminSaveStats").onclick = async () => { try { await PF.adminSetStats(d.username, $("#adminViews").value, $("#adminLikes").value); notify("Counters updated", "success"); await selectUser(d.username); } catch(e) { notify(e.message,"error"); } };
+        $("#adminSaveCoins").onclick = async () => { const input = $("#adminCoins"); const value = String(input?.value || "").trim(); if (!/^\d+$/.test(value)) { notify("Enter a valid coin amount", "error"); input?.focus(); return; } try { const result = await PF.adminSetCoins(d.username, value); notify("Coin balance updated", "success"); if (result?.coins_balance != null) { const fresh = $("#adminCoins"); if (fresh) fresh.value = String(result.coins_balance); } await selectUser(d.username); } catch(e) { notify(e.message || "Could not update coin balance", "error"); } };
         $("#adminToggleBan").onclick = async () => { try { await PF.adminSetBanned(d.username, !d.is_banned); notify(d.is_banned?"Account unblocked":"Account blocked", "success"); await selectUser(d.username); } catch(e) { notify(e.message,"error"); } };
         $("#adminDeleteUser").onclick = async () => { if (!confirm(`Delete @${d.username} permanently?`)) return; try { await PF.adminDeleteUser(d.username); notify("Account deleted", "success"); selected=""; users = users.filter(u=>u.username!==d.username); drawUsers(); detail.innerHTML = `<div class="empty-state"><h2>Account deleted</h2></div>`; } catch(e) { notify(e.message,"error"); } };
       };
@@ -3365,6 +3383,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
       finally { const btn = $("#confirmCoinTransfer"); if (btn) { btn.disabled = false; btn.textContent = "تأكيد التحويل"; } }
     });
     let videoRewardState = null;
+    let videoRewardBusy = false;
     const ensureVideoRewardModal = () => {
       if (videoRewardState) return videoRewardState;
       const modal = document.createElement("div");
@@ -3383,15 +3402,17 @@ voiceMessageSend?.addEventListener("click",async()=>{
         </section>`;
       document.body.appendChild(modal);
       const video = modal.querySelector("#coinRewardVideo");
-      videoRewardState = { modal, video, stateEl: modal.querySelector("#coinRewardState"), timerEl: modal.querySelector("#coinRewardTimer"), playBtn: modal.querySelector("#coinRewardPlay") };
+      videoRewardState = { modal, video, stateEl: modal.querySelector("#coinRewardState"), timerEl: modal.querySelector("#coinRewardTimer"), playBtn: modal.querySelector("#coinRewardPlay"), startedAt: 0 };
       videoRewardState.playBtn?.addEventListener("click", async () => {
         try {
           video.muted = false;
           video.volume = 1;
+          videoRewardState.startedAt = Date.now();
           await video.play();
           videoRewardState.playBtn.hidden = true;
           videoRewardState.stateEl.textContent = "جاري المشاهدة • الصوت يعمل";
         } catch {
+          videoRewardState.startedAt = 0;
           videoRewardState.stateEl.textContent = "تعذر تشغيل الفيديو، جرّب مرة أخرى";
         }
       });
@@ -3420,13 +3441,15 @@ voiceMessageSend?.addEventListener("click",async()=>{
     };
     const startVideoReward = async () => {
       const btn = $("#rewardAdCoins");
+      if (videoRewardBusy) return;
+      videoRewardBusy = true;
       const ui = ensureVideoRewardModal();
       let rewarded = false;
       let finished = false;
       let timer = null;
       let startedAt = 0;
       try {
-        if (btn) { btn.disabled = true; }
+        if (btn) { btn.disabled = true; btn.setAttribute("aria-busy", "true"); }
         const videos = await loadRewardVideoList();
         if (!videos.length) throw new Error("لا توجد فيديوهات صالحة داخل مجلد videos.");
         const randomFile = videos[Math.floor(Math.random() * videos.length)];
@@ -3476,40 +3499,26 @@ voiceMessageSend?.addEventListener("click",async()=>{
         video.addEventListener("timeupdate", onTimeUpdate);
         video.addEventListener("ended", onEnded, { once: true });
         video.addEventListener("error", onError, { once: true });
-        let play = null;
-        try {
-          video.muted = false;
-          video.volume = 1;
-          play = await video.play();
-          if (ui.playBtn) ui.playBtn.hidden = true;
-          stateEl.textContent = "الصوت يعمل تلقائيًا";
-        } catch {
-          stateEl.textContent = "اضغط تشغيل لسماع الصوت وبدء الفيديو";
-          video.controls = true;
-        }
-        startedAt = Date.now();
+        // Do not autoplay. The 30s watch window starts only when the user presses Play.
+        video.controls = true;
+        if (ui.playBtn) ui.playBtn.hidden = false;
+        stateEl.textContent = "اضغط تشغيل لبدء الفيديو";
         timer = setInterval(() => {
           if (finished) return;
-          if (video.currentTime >= 30 || (Date.now() - startedAt >= 30000 && !video.paused)) finishReward();
+          const startedAt = Number(ui.startedAt || 0);
+          if (startedAt && (video.currentTime >= 30 || (Date.now() - startedAt >= 30000 && !video.paused))) finishReward();
         }, 250);
-        return play;
       } catch (e) {
         if (!rewarded) closeVideoReward();
         notify(e.message || "تعذر تشغيل فيديو المكافأة", "error");
       } finally {
-        if (btn) { btn.disabled = false; }
+        // Keep the CTA disabled for the entire active reward session; closing the modal releases it.
+        if (!videoRewardState || videoRewardState.modal.hidden) {
+          videoRewardBusy = false;
+          if (btn) { btn.disabled = false; btn.removeAttribute("aria-busy"); }
+        }
       }
     };
-    const rewardPreview = $("#rewardAdPreview");
-    if (rewardPreview) {
-      try {
-        const videos = await loadRewardVideoList();
-        const previewFile = videos[Math.floor(Math.random() * videos.length)];
-        rewardPreview.src = `../videos/${encodeURIComponent(previewFile)}`;
-        rewardPreview.load();
-        rewardPreview.play().catch(() => {});
-      } catch {}
-    }
     $("#rewardAdCoins")?.addEventListener("click", startVideoReward);
     await refreshEconomy();
     if (!window.__rivoEconomyTimer) window.__rivoEconomyTimer = setInterval(() => refreshEconomy(), 15000);

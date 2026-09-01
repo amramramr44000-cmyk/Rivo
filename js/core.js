@@ -133,6 +133,9 @@
     const p = structuredClone(profile || {});
     delete p.password;
     delete p.friendRequests;
+    // The live balance belongs to profiles.coins_balance, never public_data.
+    delete p.coinsBalance;
+    delete p.coins_balance;
     return p;
   }
   function mergeProfile(row, includePrivate = false) {
@@ -205,12 +208,30 @@
     if (refreshInFlight) return refreshInFlight;
     refreshInFlight = (async () => {
       try {
-        const { data, error } = await sb.auth.refreshSession();
+        const request = sb.auth.refreshSession();
+        const { data, error } = await Promise.race([
+          request,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Session refresh timed out.')), 10000))
+        ]);
         if (error) return null;
         return data?.session || null;
       } catch { return null; }
     })();
     try { return await refreshInFlight; } finally { refreshInFlight = null; }
+  }
+
+  async function runWithTimeout(fn, ms = 15000) {
+    let timer = null;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(fn),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(opError('NETWORK_TIMEOUT', 'The request took too long. Check your connection and try again.', { code: 'TIMEOUT' })), ms);
+        })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   function opError(opName, message, meta) {
@@ -235,7 +256,7 @@
     }
     await syncRealtimeAuth(session);
     try {
-      return await fn(session);
+      return await runWithTimeout(() => fn(session));
     } catch (error) {
       if (!isAuthError(error)) {
         console.error("[Rivo]", opName, { auth_uid: session.user.id, target, code: error?.code, message: error?.message });
@@ -249,7 +270,7 @@
       }
       await syncRealtimeAuth(refreshed);
       try {
-        return await fn(refreshed);
+        return await runWithTimeout(() => fn(refreshed));
       } catch (error2) {
         console.error("[Rivo]", opName, { auth_uid: refreshed.user.id, target, code: error2?.code, message: error2?.message, retried: true });
         throw opError(opName, error2?.message || "Something went wrong.", { code: error2?.code });
@@ -264,7 +285,7 @@
   async function withRetryOnAuthError(opName, target, fn) {
     requireClient();
     try {
-      return await fn();
+      return await runWithTimeout(() => fn());
     } catch (error) {
       if (!isAuthError(error)) {
         console.error("[Rivo]", opName, { target, code: error?.code, message: error?.message });
@@ -275,7 +296,7 @@
       const refreshed = await forceRefreshSession();
       if (refreshed?.user?.id) await syncRealtimeAuth(refreshed);
       try {
-        return await fn();
+        return await runWithTimeout(() => fn());
       } catch (error2) {
         console.error("[Rivo]", opName, { auth_uid: refreshed?.user?.id || null, target, code: error2?.code, message: error2?.message, retried: true });
         throw opError(opName, error2?.message || "Something went wrong.", { code: error2?.code });
@@ -550,6 +571,9 @@
       }
       throw error;
     }
+    // The database trigger grants the one-time 1,000-coin welcome bonus.
+    // Keep the returned client profile in sync immediately after signup.
+    base.coinsBalance = 1000;
     cacheUsername(u);
     return base;
   }
@@ -1786,6 +1810,20 @@
     return data;
   }
 
+  async function adminSetCoins(username, coins) {
+    requireClient();
+    const raw = String(coins ?? "").trim().replace(/,/g, "");
+    if (!/^\d+$/.test(raw)) throw new Error("Invalid coin amount");
+    if (raw.length > 19 || BigInt(raw) > 9223372036854775807n) throw new Error("Coin amount is too large");
+    const { data, error } = await sb.rpc("rivo_admin_set_coins", {
+      p_username: normalizeUsername(username),
+      p_coins: raw
+    });
+    if (error) throw error;
+    invalidateProfileCache(username);
+    return data;
+  }
+
   async function adminDeleteUser(username) {
     requireClient();
     const { data, error } = await sb.rpc("rivo_admin_delete_user", { p_username: normalizeUsername(username) });
@@ -1944,7 +1982,7 @@ async function getVoiceUrl(path) {
     removeFriend, cancelFriendRequest, toggleFollow, isFollowing, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
-    subscribeNotifications, subscribeMessageReactions, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
+    subscribeNotifications, subscribeMessageReactions, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminSetCoins, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
     setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
     NAV_I18N, I18N, currentLanguage, translateString, applyI18n, applySavedLanguage
   };
