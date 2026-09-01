@@ -3241,3 +3241,213 @@ body.video-reward-open{overflow:hidden;}
   .video-reward-foot{flex-direction:column;align-items:stretch!important;gap:6px!important;}
   .video-reward-foot small{text-align:right;max-width:none!important;}
 }
+/* Rivo mobile chat — true full-screen conversation mode (WhatsApp-style). */
+@media (max-width:760px){
+  body.rivo-chat-fullscreen{
+    overflow:hidden;
+    padding-bottom:0!important;
+  }
+  body.rivo-chat-fullscreen .topbar,
+  body.rivo-chat-fullscreen .page-head,
+  body.rivo-chat-fullscreen .rivo-mobile-bottom-nav{
+    display:none!important;
+  }
+  body.rivo-chat-fullscreen .messages-shell{
+    width:100%!important;
+    max-width:none!important;
+    padding:0!important;
+    margin:0!important;
+  }
+  body.rivo-chat-fullscreen .messages-layout{
+    position:fixed;
+    inset:0;
+    z-index:500;
+    width:100vw!important;
+    height:100dvh!important;
+    min-height:100dvh!important;
+    max-height:100dvh!important;
+    margin:0!important;
+    border:0!important;
+    border-radius:0!important;
+    background:var(--bg,#080a0f);
+    overflow:hidden!important;
+    box-shadow:none!important;
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  body.rivo-chat-fullscreen .messages-layout .thread-panel{
+    display:grid!important;
+    grid-template-rows:auto minmax(0,1fr) auto;
+    width:100%;
+    min-height:0;
+    height:100%;
+    background:var(--bg,#080a0f);
+  }
+  body.rivo-chat-fullscreen .messages-layout .thread-head{
+    min-height:66px;
+    padding:calc(8px + env(safe-area-inset-top)) 12px 8px;
+    background:rgba(8,11,16,.96);
+    border-bottom:1px solid rgba(255,255,255,.08);
+    backdrop-filter:blur(18px);
+  }
+  body.rivo-chat-fullscreen .message-mobile-back{
+    display:grid;
+    place-items:center;
+    width:42px;
+    height:42px;
+    flex:0 0 42px;
+    border:0;
+    background:transparent;
+    font-size:30px;
+    line-height:1;
+    color:#eef2f8;
+    padding:0;
+  }
+  body.rivo-chat-fullscreen .message-mobile-back:active{
+    background:rgba(255,255,255,.06);
+    border-radius:12px;
+  }
+  body.rivo-chat-fullscreen .thread-head>div[id="messageThreadTitle"]{
+    min-width:0;
+    flex:1;
+  }
+  body.rivo-chat-fullscreen .thread-head b{font-size:14px;}
+  body.rivo-chat-fullscreen .thread-head small{font-size:10px;}
+  body.rivo-chat-fullscreen .thread-user-avatar{
+    width:42px;
+    height:42px;
+    border-radius:13px;
+  }
+  body.rivo-chat-fullscreen .thread-call-actions{
+    display:flex;
+    gap:6px;
+  }
+  body.rivo-chat-fullscreen .thread-call-actions .icon-btn{
+    width:40px;
+    height:40px;
+  }
+  body.rivo-chat-fullscreen .message-thread{
+    min-height:0;
+    height:auto;
+    padding:14px 12px 16px;
+    overflow-x:hidden!important;
+    overflow-y:auto!important;
+    -webkit-overflow-scrolling:touch;
+    overscroll-behavior:contain;
+    scroll-behavior:auto;
+  }
+  body.rivo-chat-fullscreen .message-row{max-width:100%;}
+  body.rivo-chat-fullscreen .message-bubble{
+    max-width:min(84%,520px);
+    padding:10px 12px;
+    border-radius:17px;
+    font-size:14px;
+    line-height:1.5;
+  }
+  body.rivo-chat-fullscreen .message-bubble time{
+    margin-top:5px;
+    font-size:8px;
+  }
+  body.rivo-chat-fullscreen .message-compose{
+    position:relative;
+    z-index:3;
+    grid-template-columns:52px minmax(0,1fr) auto;
+    align-items:end;
+    gap:7px;
+    padding:8px 10px calc(8px + env(safe-area-inset-bottom));
+    background:rgba(8,11,16,.97);
+    border-top:1px solid rgba(255,255,255,.08);
+    backdrop-filter:blur(18px);
+  }
+  body.rivo-chat-fullscreen .voice-record-btn{
+    width:52px;
+    height:52px;
+    border-radius:17px;
+  }
+  body.rivo-chat-fullscreen .message-compose textarea{
+    min-height:52px;
+    max-height:132px;
+    border-radius:20px;
+    padding:14px 15px;
+    font-size:15px;
+    line-height:1.45;
+  }
+  body.rivo-chat-fullscreen .message-send-inside{
+    position:static;
+    min-width:58px;
+    height:52px;
+    min-height:52px;
+    padding:0 14px;
+    border-radius:18px;
+    font-size:12px;
+  }
+  body.rivo-chat-fullscreen .voice-message-bar{
+    margin:0;
+  }
+}
+
+@media (max-width:390px){
+  body.rivo-chat-fullscreen .thread-call-actions .icon-btn{width:36px;height:36px;}
+  body.rivo-chat-fullscreen .message-compose{grid-template-columns:46px minmax(0,1fr) auto;gap:5px;}
+  body.rivo-chat-fullscreen .voice-record-btn{width:46px;height:46px;border-radius:15px;}
+  body.rivo-chat-fullscreen .message-send-inside{min-width:52px;height:46px;min-height:46px;border-radius:16px;padding:0 11px;}
+  body.rivo-chat-fullscreen .message-compose textarea{min-height:46px;border-radius:18px;font-size:14px;padding-block:11px;}
+}
+
+
+
+/* v33: Rivo posts feed hero — minimal branded heading with a soft animated color shimmer. */
+.posts-rivo-head{
+  padding-top:clamp(10px,2.5vw,22px);
+  padding-bottom:clamp(14px,3vw,26px);
+  margin-bottom:0;
+  text-align:start;
+}
+.posts-rivo-head .rivo-shimmer-title{
+  margin:0;
+  display:inline-block;
+  font-size:clamp(44px,8vw,72px);
+  line-height:.95;
+  font-weight:900;
+  letter-spacing:-.055em;
+  background:linear-gradient(115deg,#f8fafc 0%,#aab8ff 18%,#d98cff 34%,#6ce8ff 52%,#9aa8ff 70%,#ffd1ec 86%,#f8fafc 100%);
+  background-size:260% 100%;
+  -webkit-background-clip:text;
+  background-clip:text;
+  color:transparent;
+  -webkit-text-fill-color:transparent;
+  filter:drop-shadow(0 0 18px rgba(136,155,255,.12));
+  animation:rivoTitleShimmer 7s ease-in-out infinite, rivoTitleGlow 3.8s ease-in-out infinite;
+}
+@keyframes rivoTitleShimmer{
+  0%,100%{background-position:0% 50%;}
+  50%{background-position:100% 50%;}
+}
+@keyframes rivoTitleGlow{
+  0%,100%{filter:drop-shadow(0 0 14px rgba(136,155,255,.10));}
+  50%{filter:drop-shadow(0 0 24px rgba(198,118,255,.20));}
+}
+@media(max-width:760px){
+  .posts-rivo-head{padding-top:clamp(8px,2vw,16px);padding-bottom:16px;}
+  .posts-rivo-head .rivo-shimmer-title{font-size:clamp(42px,12vw,62px);}
+}
+@media(prefers-reduced-motion:reduce){
+  .posts-rivo-head .rivo-shimmer-title{animation:none;background-position:50% 50%;}
+}
+
+/* v27: settings reward area — clean video thumbnail and distraction-free viewer. */
+.reward-video-thumb{position:relative;width:100%;padding:0;border:1px solid rgba(255,255,255,.10);border-radius:18px;overflow:hidden;background:#05070b;cursor:pointer;aspect-ratio:16/9;display:block;box-shadow:0 16px 40px rgba(0,0,0,.22);margin-top:10px;}
+.reward-video-thumb:disabled{opacity:.72;cursor:wait;}
+.reward-video-preview{display:block;width:100%;height:100%;object-fit:cover;background:#05070b;}
+.reward-video-shade{position:absolute;inset:0;background:linear-gradient(180deg,transparent 38%,rgba(4,7,12,.68) 100%);pointer-events:none;}
+.reward-video-cta{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);display:inline-flex;align-items:center;gap:5px;padding:8px 13px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:rgba(8,12,20,.78);color:#fff;font-size:12px;font-weight:800;backdrop-filter:blur(10px);box-shadow:0 8px 22px rgba(0,0,0,.22);white-space:nowrap;pointer-events:none;}
+.reward-video-cta b{color:#aeb7ff;font-weight:900;}
+.reward-video-play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:62px;height:62px;border-radius:50%;display:grid;place-items:center;background:rgba(8,11,18,.72);border:1px solid rgba(255,255,255,.24);color:#fff;font-size:22px;box-shadow:0 12px 36px rgba(0,0,0,.36);backdrop-filter:blur(8px);pointer-events:none;}
+.reward-video-thumb:hover .reward-video-play{transform:translate(-50%,-50%) scale(1.05);}
+.reward-video-thumb:active .reward-video-play{transform:translate(-50%,-50%) scale(.96);}
+.video-reward-dialog{position:relative!important;width:min(980px,96vw)!important;max-width:none!important;padding:0!important;border:0!important;background:#000!important;border-radius:22px!important;box-shadow:0 30px 100px rgba(0,0,0,.65)!important;overflow:hidden;}
+.video-reward-stage{width:100%!important;aspect-ratio:16/9!important;min-height:0!important;border:0!important;border-radius:22px!important;background:#000!important;}
+.video-reward-stage video{width:100%!important;height:100%!important;object-fit:contain!important;background:#000!important;border-radius:22px!important;}
+.video-reward-close{position:absolute;top:12px;right:12px;z-index:8;width:38px;height:38px;border-radius:50%;border:1px solid rgba(255,255,255,.2);background:rgba(0,0,0,.55);color:#fff;font-size:24px;line-height:1;display:grid;place-items:center;cursor:pointer;backdrop-filter:blur(8px);}
+.video-reward-close:hover{background:rgba(0,0,0,.72);}
+.video-reward-play{z-index:7;}
+@media(max-width:760px){.reward-video-thumb{border-radius:16px;aspect-ratio:16/10;}.reward-video-play{width:58px;height:58px;font-size:21px;}.video-reward-dialog{width:100vw!important;border-radius:0!important;}.video-reward-stage,.video-reward-stage video{border-radius:0!important;}.video-reward-modal{padding:0!important;}.video-reward-close{top:12px;right:12px;}}
