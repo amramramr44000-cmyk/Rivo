@@ -5,6 +5,7 @@
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const esc = (s) => window.PF?.escapeHtml ? PF.escapeHtml(s) : String(s ?? "");
   const initials = (p) => PF.initials(p);
+  let profilePresenceUnsubscribe = null;
 
   const notify = (msg, type = "") => {
     let stack = $(".toast-stack");
@@ -108,7 +109,12 @@
       const y = window.scrollY;
       const delta = y - lastY;
       if (Math.abs(delta) > 5) {
-        bar.classList.toggle("nav-hidden", delta > 0 && y > 36);
+        const hidden = delta > 0 && y > 36;
+        bar.classList.toggle("nav-hidden", hidden);
+        // On the editor page the Save bar sits directly above this nav.
+        // Move it down together with the nav so it never floats mid-screen.
+        const editorActions = document.querySelector(".editor-page .editor-actions");
+        editorActions?.classList.toggle("editor-actions-nav-hidden", hidden);
         lastY = y;
       }
       ticking = false;
@@ -468,6 +474,29 @@
     }
   }
 
+  function ensureProfileAvatarViewer(){
+    let box=document.querySelector("[data-profile-avatar-viewer]");
+    if(box) return box;
+    box=document.createElement("div");
+    box.className="profile-avatar-viewer";
+    box.setAttribute("data-profile-avatar-viewer","");
+    box.innerHTML=`<div class="profile-avatar-viewer-backdrop" data-profile-avatar-close></div><button type="button" class="profile-avatar-viewer-close" data-profile-avatar-close aria-label="Close image">×</button><div class="profile-avatar-viewer-stage"><img class="profile-avatar-viewer-image" data-profile-avatar-image alt="Profile avatar"></div>`;
+    document.body.appendChild(box);
+    const close=()=>{box.classList.remove("open");const img=box.querySelector("[data-profile-avatar-image]");img.removeAttribute("src");document.body.classList.remove("profile-avatar-viewer-open");};
+    box.querySelectorAll("[data-profile-avatar-close]").forEach(el=>el.addEventListener("click",close));
+    document.addEventListener("keydown",e=>{if(e.key==="Escape"&&box.classList.contains("open"))close();});
+    box._close=close;
+    return box;
+  }
+  function openProfileAvatarViewer(url,name="Profile avatar"){
+    if(!url)return notify("This profile has no avatar image.","error");
+    const box=ensureProfileAvatarViewer(),img=box.querySelector("[data-profile-avatar-image]");
+    img.alt=name||"Profile avatar";
+    img.src=url;
+    box.classList.add("open");
+    document.body.classList.add("profile-avatar-viewer-open");
+  }
+
   function initStorySystem() {
     ensureStoryPicker();
     document.addEventListener("click", e => {
@@ -477,7 +506,14 @@
       if (!username) return;
       const active = trigger.dataset.storyActive === "1";
       const own = trigger.dataset.storyOwn === "1" || username === PF.currentUsername();
-      if (!active && !own) return;
+      if (!active && !own) {
+        e.preventDefault();
+        e.stopPropagation();
+        const img=trigger.querySelector?.("img");
+        if(img?.src) openProfileAvatarViewer(img.src, img.alt || "Profile avatar");
+        else notify("This profile has no avatar image.","error");
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       if (active) openStoryViewer(username);
@@ -1561,6 +1597,7 @@
 
   async function initLogin() {
     const form = $("#loginForm"); if (!form) return;
+    setupPasswordToggles();
     const human = setupHumanCheck(form, "loginHumanCheck", "loginCaptchaMsg");
     form.addEventListener("submit", async e => {
       e.preventDefault();
@@ -1790,6 +1827,119 @@
     state.sections = state.sections.filter(s => !["skills","projects"].includes(s.type));
     state.projects = [];
 
+    // Economy-backed editor unlocks: no separate storefront. Every premium
+    // editor option is locked until its corresponding item is owned.
+    let editorInventory = [];
+    let editorItems = [];
+    const editorOwned = new Set();
+    const editorItemByName = new Map();
+    try {
+      editorInventory = await PF.listMyInventory();
+      editorItems = await PF.listStoreItems();
+      const eb = $("#editorCoinsBalance"); if (eb) eb.textContent = Number(await PF.getCoinBalance()).toLocaleString();
+      editorInventory.forEach(x => editorOwned.add(String(x.item_id)));
+      editorItems.forEach(x => editorItemByName.set(String(x.name || '').toLowerCase(), x));
+    } catch (e) {
+      console.warn('[Rivo Economy] editor unlock catalogue unavailable', e);
+    }
+    const findUnlock = name => editorItemByName.get(String(name).toLowerCase()) || null;
+    const ownsUnlock = name => { const it = findUnlock(name); return !!it && editorOwned.has(String(it.id)); };
+    const priceUnlock = name => Number(findUnlock(name)?.price || 0);
+    const unlockLabel = name => { const p = priceUnlock(name); return p > 0 ? `🔒 ${p} 🪙` : 'مجاني'; };
+
+    let coinPurchaseModal;
+    function ensureCoinPurchaseModal() {
+      if (coinPurchaseModal) return coinPurchaseModal;
+      coinPurchaseModal = document.createElement('div');
+      coinPurchaseModal.className = 'coin-purchase-modal';
+      coinPurchaseModal.hidden = true;
+      coinPurchaseModal.innerHTML = `
+        <div class="coin-purchase-backdrop" data-coin-buy-close></div>
+        <section class="coin-purchase-dialog" role="dialog" aria-modal="true" aria-labelledby="coinPurchaseTitle">
+          <button type="button" class="icon-btn coin-purchase-close" data-coin-buy-close aria-label="Close">×</button>
+          <div class="coin-purchase-icon">🪙</div>
+          <div class="eyebrow">RIVO COINS</div>
+          <h2 id="coinPurchaseTitle">تأكيد فتح العنصر</h2>
+          <p class="coin-purchase-copy" data-coin-buy-copy></p>
+          <div class="coin-purchase-summary"><span>السعر</span><strong data-coin-buy-price>0 🪙</strong></div>
+          <div class="coin-purchase-summary muted"><span>رصيدك</span><strong data-coin-buy-balance>0 🪙</strong></div>
+          <div class="coin-purchase-actions"><button type="button" class="btn btn-ghost" data-coin-buy-close>إلغاء</button><button type="button" class="btn btn-primary" data-coin-buy-confirm>تأكيد الدفع</button></div>
+        </section>`;
+      document.body.appendChild(coinPurchaseModal);
+      return coinPurchaseModal;
+    }
+    async function purchaseUnlock(name) {
+      if (!PF.currentUsername()) { location.href = 'login.html'; return false; }
+      const item = findUnlock(name);
+      if (!item) { notify('العنصر غير متاح حاليًا. شغّل ملف اقتصاد Supabase المحدّث.', 'error'); return false; }
+      if (editorOwned.has(String(item.id))) return true;
+      const price = Math.max(0, Number(item.price || 0));
+      if (price <= 0) {
+        try {
+          const result = await PF.purchaseStoreItem(item.id);
+          editorOwned.add(String(item.id));
+          const eb = $("#editorCoinsBalance"); if (eb) eb.textContent = Number(result?.coins_balance ?? await PF.getCoinBalance()).toLocaleString();
+          notify(`تم فتح ${item.name}`, 'success');
+          return true;
+        } catch (e) { notify(e.message || 'تعذر فتح العنصر', 'error'); return false; }
+      }
+
+      const modal = ensureCoinPurchaseModal();
+      const copy = modal.querySelector('[data-coin-buy-copy]');
+      const priceEl = modal.querySelector('[data-coin-buy-price]');
+      const balanceEl = modal.querySelector('[data-coin-buy-balance]');
+      const confirmBtn = modal.querySelector('[data-coin-buy-confirm]');
+      const balance = Number(await PF.getCoinBalance());
+      copy.textContent = `هل تريد دفع ${price.toLocaleString()} عملة لفتح «${item.name}»؟`;
+      priceEl.textContent = `${price.toLocaleString()} 🪙`;
+      balanceEl.textContent = `${balance.toLocaleString()} 🪙`;
+      modal.hidden = false;
+      document.body.classList.add('coin-purchase-open');
+
+      const approved = await new Promise(resolve => {
+        let done = false;
+        const cleanup = () => {
+          confirmBtn?.removeEventListener('click', onConfirm);
+          modal.querySelectorAll('[data-coin-buy-close]').forEach(x => x.removeEventListener('click', onCancel));
+          document.removeEventListener('keydown', onKey);
+        };
+        const finish = value => { if (done) return; done = true; cleanup(); resolve(value); };
+        const onConfirm = () => finish(true);
+        const onCancel = () => finish(false);
+        const onKey = e => { if (e.key === 'Escape') finish(false); };
+        confirmBtn?.addEventListener('click', onConfirm);
+        modal.querySelectorAll('[data-coin-buy-close]').forEach(x => x.addEventListener('click', onCancel));
+        document.addEventListener('keydown', onKey);
+        requestAnimationFrame(() => confirmBtn?.focus());
+      });
+      modal.hidden = true;
+      document.body.classList.remove('coin-purchase-open');
+      if (!approved) return false;
+
+      try {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'جارٍ الدفع…';
+        const result = await PF.purchaseStoreItem(item.id);
+        editorOwned.add(String(item.id));
+        const eb = $("#editorCoinsBalance"); if (eb) eb.textContent = Number(result?.coins_balance ?? await PF.getCoinBalance()).toLocaleString();
+        notify(`تم فتح ${item.name}`, 'success');
+        return true;
+      } catch (e) {
+        const msg = String(e?.message || 'تعذر إتمام الدفع');
+        notify(/not enough coins|insufficient/i.test(msg) ? 'رصيدك غير كافٍ لشراء هذا العنصر.' : msg, 'error');
+        return false;
+      } finally {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'تأكيد الدفع';
+      }
+    };
+    const openUnlock = async (button, unlockName, apply) => {
+      if (editorOwned.has(String(findUnlock(unlockName)?.id || ''))) { apply?.(); return true; }
+      const ok = await purchaseUnlock(unlockName);
+      if (ok) { apply?.(); applyEditorLocks(); refreshPreview(); }
+      return ok;
+    };
+
     const bind = (id, key, cleaner = x => x) => {
       const el = $("#" + id); if (!el) return;
       el.value = state[key] || "";
@@ -1814,24 +1964,78 @@
       $$('[data-panel-content]').forEach(p => p.classList.toggle("hidden-panel", p.dataset.panelContent !== tab.dataset.panel));
     }));
 
-    $$("#templateGrid .template-choice").forEach(b => b.addEventListener("click", () => {
+    const templateUnlockName = id => `Template · ${templateNames[id] || id}`;
+    const cardStyleUnlockName = id => `Template · Card Style ${id}`;
+    const frameUnlockName = id => id === "none" ? null : `Frame · ${id.charAt(0).toUpperCase()}${id.slice(1)}`;
+
+    function decorateUnlockControl(el, unlockName) {
+      if (!el || !unlockName) return;
+      const owned = ownsUnlock(unlockName);
+      el.classList.toggle("economy-locked", !owned);
+      el.classList.toggle("economy-owned", owned);
+      let badge = el.querySelector(".economy-lock-badge");
+      if (!owned) {
+        if (!badge) { badge = document.createElement("span"); badge.className = "economy-lock-badge"; el.appendChild(badge); }
+        badge.textContent = unlockLabel(unlockName);
+      } else if (badge) badge.remove();
+    }
+
+    async function unlockFromField(name, fieldEl) {
+      const ok = ownsUnlock(name) || await purchaseUnlock(name);
+      if (ok) { applyEditorLocks(); refreshPreview(); }
+      return ok;
+    }
+    function applyEditorLocks() {
+      $$("#templateGrid .template-choice").forEach(b => decorateUnlockControl(b, templateUnlockName(b.dataset.template)));
+      $$("#cardStyleGrid .card-style-choice").forEach(b => decorateUnlockControl(b, cardStyleUnlockName(b.dataset.cardStyle)));
+      $$("#frameGrid .frame-choice").forEach(b => decorateUnlockControl(b, frameUnlockName(b.dataset.frame)));
+      const map = [
+        ["avatarUpload", "Feature · Avatar Upload"], ["bannerUpload", "Feature · Banner Upload"],
+        ["miniUpload", "Feature · Floating Image"], ["musicTitle", "Feature · Profile Music"],
+        ["musicUpload", "Feature · Profile Music"], ["musicCoverUpload", "Feature · Music Cover"],
+        ["accentInput", "Feature · Custom Accent"], ["radiusRange", "Feature · Radius Control"],
+        ["glowRange", "Feature · Glow Control"]
+      ];
+      map.forEach(([id,name]) => {
+        const el = $("#"+id), field = el?.closest(".field"); if (!el || !field) return;
+        const locked = !ownsUnlock(name);
+        el.disabled = locked;
+        field.classList.toggle("economy-field-locked", locked);
+        let buy = field.querySelector(`[data-economy-buy-field="${CSS.escape(name)}"]`);
+        if (locked) {
+          if (!buy) { buy = document.createElement("button"); buy.type = "button"; buy.className = "btn btn-sm economy-field-buy"; buy.dataset.economyBuyField = name; field.appendChild(buy); buy.addEventListener("click", () => unlockFromField(name, field)); }
+          buy.textContent = `🔒 فتح بـ ${priceUnlock(name)} 🪙`;
+          buy.disabled = false;
+        } else if (buy) buy.remove();
+      });
+      $$("#badgeList [data-badge]").forEach(b => { const cat = PF.badgeCatalog.find(x => x.id === b.dataset.badge); if (cat) decorateUnlockControl(b, `Badge · ${cat.name}`); });
+    }
+
+    $$("#templateGrid .template-choice").forEach(b => b.addEventListener("click", async () => {
+      const unlock = templateUnlockName(b.dataset.template);
+      const ok = ownsUnlock(unlock) || await purchaseUnlock(unlock); if (!ok) return;
       state.template = b.dataset.template;
-      state.cardStyle = templates[state.template].card;
+      const templateCardStyle = templates[state.template].card;
+      // A paid template must not silently activate another separately paid card style.
+      if (ownsUnlock(cardStyleUnlockName(templateCardStyle))) state.cardStyle = templateCardStyle;
       state.accent = templates[state.template].accent;
       $$("#templateGrid .template-choice").forEach(x => x.classList.remove("selected")); b.classList.add("selected");
-      refreshPreview();
+      applyEditorLocks(); refreshPreview();
     }));
-    $$("#cardStyleGrid .card-style-choice").forEach(b => b.addEventListener("click", () => {
+    $$("#cardStyleGrid .card-style-choice").forEach(b => b.addEventListener("click", async () => {
+      const unlock = cardStyleUnlockName(b.dataset.cardStyle);
+      const ok = ownsUnlock(unlock) || await purchaseUnlock(unlock); if (!ok) return;
       state.cardStyle = b.dataset.cardStyle;
       $$("#cardStyleGrid .card-style-choice").forEach(x => x.classList.remove("selected")); b.classList.add("selected");
       refreshPreview();
     }));
-    $("#accentInput")?.addEventListener("input", e => { state.accent = e.target.value; refreshPreview(); });
-    $("#radiusRange")?.addEventListener("input", e => { state.cardRadius = Number(e.target.value); refreshPreview(); });
-    $("#glowRange")?.addEventListener("input", e => { state.glow = Number(e.target.value); refreshPreview(); });
+    $("#accentInput")?.addEventListener("input", e => { if (!ownsUnlock("Feature · Custom Accent")) return; state.accent = e.target.value; refreshPreview(); });
+    $("#radiusRange")?.addEventListener("input", e => { if (!ownsUnlock("Feature · Radius Control")) return; state.cardRadius = Number(e.target.value); refreshPreview(); });
+    $("#glowRange")?.addEventListener("input", e => { if (!ownsUnlock("Feature · Glow Control")) return; state.glow = Number(e.target.value); refreshPreview(); });
 
-    const upload = async (id, key, maxW, previewId) => {
+    const upload = async (id, key, maxW, previewId, unlockName) => {
       $("#" + id)?.addEventListener("change", async e => {
+        if (!ownsUnlock(unlockName)) { e.target.value = ""; notify(`افتح ${unlockName} بالعملات أولًا`, "error"); return; }
         try {
           state[key] = await PF.compressImage(e.target.files[0], maxW, .84);
           if (previewId && $("#" + previewId)) { $("#" + previewId).src = state[key]; $("#" + previewId).classList.remove("hidden"); }
@@ -1839,18 +2043,33 @@
         } catch (err) { notify(err.message, "error"); }
       });
     };
-    await upload("avatarUpload", "avatar", 900, "avatarMediaPreviewImg");
-    await upload("bannerUpload", "banner", 1600, "bannerMediaPreviewImg");
-    await upload("miniUpload", "miniImage", 500, "miniPreviewImg");
+    await upload("avatarUpload", "avatar", 900, "avatarMediaPreviewImg", "Feature · Avatar Upload");
+    await upload("bannerUpload", "banner", 1600, "bannerMediaPreviewImg", "Feature · Banner Upload");
+    await upload("miniUpload", "miniImage", 500, "miniPreviewImg", "Feature · Floating Image");
+    [
+      ["avatarUpload","Feature · Avatar Upload"],["bannerUpload","Feature · Banner Upload"],["miniUpload","Feature · Floating Image"],
+      ["musicUpload","Feature · Profile Music"],["musicCoverUpload","Feature · Music Cover"]
+    ].forEach(([id,name]) => {
+      const el = $("#"+id), label = el?.closest("label");
+      label?.addEventListener("click", async e => {
+        if (ownsUnlock(name)) return;
+        e.preventDefault(); e.stopPropagation();
+        await unlockFromField(name, el.closest(".field"));
+        if (ownsUnlock(name)) el.disabled = false;
+      });
+    });
 
-    $$("#frameGrid .frame-choice").forEach(b => b.addEventListener("click", () => {
+    $$("#frameGrid .frame-choice").forEach(b => b.addEventListener("click", async () => {
+      const unlock = frameUnlockName(b.dataset.frame);
+      if (unlock && !(ownsUnlock(unlock) || await purchaseUnlock(unlock))) return;
       state.avatarFrame = b.dataset.frame;
       $$("#frameGrid .frame-choice").forEach(x => x.classList.remove("selected")); b.classList.add("selected");
-      refreshPreview();
+      applyEditorLocks(); refreshPreview();
     }));
 
-    $("#musicTitle") && ($("#musicTitle").value = state.music?.title || "", $("#musicTitle").addEventListener("input", e => { state.music = {...(state.music || {}), title: e.target.value.slice(0, 80), artist: ""}; refreshPreview(); }));
+    $("#musicTitle") && ($("#musicTitle").value = state.music?.title || "", $("#musicTitle").addEventListener("input", e => { if (!ownsUnlock("Feature · Profile Music")) return; state.music = {...(state.music || {}), title: e.target.value.slice(0, 80), artist: ""}; refreshPreview(); }));
     $("#musicUpload")?.addEventListener("change", async e => {
+      if (!ownsUnlock("Feature · Profile Music")) { e.target.value = ""; notify("افتح ميزة Profile Music أولًا", "error"); return; }
       try {
         const m = await PF.readAudio(e.target.files[0]);
         state.music = {...(state.music || {}), audio: m.data, mime: m.mime, size: m.size, artist: ""};
@@ -1860,12 +2079,14 @@
       } catch (err) { notify(err.message, "error"); }
     });
     $("#musicCoverUpload")?.addEventListener("change", async e => {
+      if (!ownsUnlock("Feature · Music Cover")) { e.target.value = ""; notify("افتح Music Cover أولًا", "error"); return; }
       try { state.music = {...(state.music || {}), cover: await PF.compressImage(e.target.files[0], 600, .82)}; refreshPreview(); }
       catch (err) { notify(err.message, "error"); }
     });
 
-    renderSections(state); renderSocials(state); renderBadges(state);
-    $("#addSocial")?.addEventListener("click", () => { state.socials.push({label:"Website", url:""}); renderSocials(state); });
+    renderSections(state); renderSocials(state); renderBadges(state, { ownsUnlock, purchaseUnlock, applyEditorLocks: () => applyEditorLocks(), refreshPreview });
+    applyEditorLocks();
+    $("#addSocial")?.addEventListener("click", async () => { if (!(ownsUnlock("Feature · Social Links") || await purchaseUnlock("Feature · Social Links"))) return; state.socials.push({label:"Website", url:""}); renderSocials(state); });
 
     $("#saveBtn")?.addEventListener("click", async (e) => {
       const btn = e.currentTarget;
@@ -1929,16 +2150,29 @@
 
   function renderProjects() { return; }
 
-  function renderBadges(state) {
+  function renderBadges(state, economy = {}) {
     const box = $("#badgeList"); if (!box) return;
+    const ownsUnlock = economy.ownsUnlock || (() => true);
+    const purchaseUnlock = economy.purchaseUnlock || (async () => false);
+    const rerenderLocks = economy.applyEditorLocks || (() => {});
+    const refreshPreview = economy.refreshPreview || (() => {});
     const special = new Set(["verified", "founder"]);
     const all = PF.badgeCatalog.filter(b => !special.has(b.id));
-    box.innerHTML = all.map(b => `<button type="button" class="badge-choice ${state.badges.includes(b.id) ? "selected" : ""}" data-badge="${b.id}"><span>${esc(b.icon)}</span><b>${esc(b.name)}</b><small>${esc(b.rarity)}</small></button>`).join("");
-    $$('[data-badge]').forEach(btn => btn.onclick = () => {
+    box.innerHTML = all.map(b => `<button type="button" class="badge-choice ${state.badges.includes(b.id) ? "selected" : ""}" data-badge="${esc(b.id)}"><span>${esc(b.icon)}</span><b>${esc(b.name)}</b><small>${esc(b.rarity)}</small></button>`).join("");
+    rerenderLocks();
+    $$('[data-badge]').forEach(btn => btn.onclick = async () => {
       const id = btn.dataset.badge; const has = state.badges.includes(id);
-      if (!has && state.badges.length >= 3) return notify("Choose up to 3 badges.", "error");
-      state.badges = has ? state.badges.filter(x => x !== id) : [...state.badges, id];
-      renderBadges(state);
+      if (has) {
+        state.badges = state.badges.filter(x => x !== id);
+        renderBadges(state, economy); refreshPreview();
+        return;
+      }
+      if (state.badges.length >= 3) return notify("اختر 3 شارات كحد أقصى.", "error");
+      const cat = PF.badgeCatalog.find(x => x.id === id); if (!cat) return;
+      const unlock = `Badge · ${cat.name}`;
+      if (!(ownsUnlock(unlock) || await purchaseUnlock(unlock))) return;
+      state.badges = [...state.badges, id];
+      renderBadges(state, economy); refreshPreview();
     });
   }
 
@@ -1949,6 +2183,16 @@
   function badgePills(p, limit = 3) {
     const list = (p.badges || []).slice(0, limit).map(id => PF.badgeCatalog.find(x => x.id === id)).filter(Boolean);
     return list.map(b => `<span class="badge-pill" title="${esc(b.name)}"><span>${esc(b.icon)}</span>${esc(b.name)}</span>`).join("");
+  }
+
+  function storeBadgePills(p, limit = 4) {
+    const list = (Array.isArray(p?.equippedStoreItems) ? p.equippedStoreItems : []).filter(x => x?.type === "badge").slice(0, limit);
+    return list.map(b => { const icon = b.image_url ? `<img src="${esc(b.image_url)}" alt="">` : `<span>✦</span>`; return `<span class="badge-pill store-badge-pill" title="${esc(b.name || "Store badge")}">${icon}${esc(b.name || "Badge")}</span>`; }).join("");
+  }
+  function storeFrameOverlay(p) {
+    const frame = (Array.isArray(p?.equippedStoreItems) ? p.equippedStoreItems : []).find(x => x?.type === "frame");
+    if (!frame) return "";
+    return frame.image_url ? `<span class="store-frame-overlay" style="background-image:url('${esc(frame.image_url)}')" aria-hidden="true"></span>` : `<span class="store-frame-overlay store-frame-generic" aria-hidden="true"></span>`;
   }
 
   function identityLink(p, inner, extraClass = "") {
@@ -1983,7 +2227,7 @@
     const views = displayViews(p.stats?.views);
     const friends = Array.isArray(p.friends) ? p.friends : [];
     const more = Math.max(0, friends.length - 5);
-    const badges = badgePills(p);
+    const badges = `${badgePills(p)}${storeBadgePills(p)}`;
     const likedBy = p.likes?.users || [];
     const meUsername = PF.currentUsername();
     const liked = !!meUsername && likedBy.includes(meUsername);
@@ -1994,23 +2238,60 @@
       : "";
     const frame = `frame-${p.avatarFrame || "none"}`;
     const social = (p.socials || []).map(s => { const href = safeLink(s.url); return href ? `<a class="social-pill" href="${esc(href)}" target="_blank" rel="noreferrer">${esc(s.label || "Link")}</a>` : ""; }).join("");
-    const sectionHtml = (p.sections || []).filter(s => s.visible !== false && !["skills", "projects"].includes(s.type)).map(s => {
-      if (s.type === "about") return `<section class="section-block about-section"><div class="section-kicker">ABOUT</div><h2>${esc(s.title || "About Me")}</h2><p class="profile-description">${esc(p.description || p.bio || "Tell people something about you.")}</p>${p.location ? `<div class="about-meta"><span>⌖ ${esc(p.location)}</span>${p.website && safeLink(p.website) ? `<a href="${esc(safeLink(p.website))}" target="_blank" rel="noreferrer">Website ↗</a>` : ""}</div>` : ""}</section>`;
-      if (s.type === "friends") return `<section class="section-block"><div class="section-head"><div><div class="section-kicker">FRIENDS</div><h2>Your circle</h2></div>${more ? `<button class="btn btn-sm" data-friends-open>+${more}</button>` : ""}</div><div class="friend-mini-grid">${friendPreviewRows(friendProfiles,5)}</div></section>`;
-      if (s.type === "music") return renderMusic(p);
-      return `<section class="section-block"><div class="section-kicker">CUSTOM</div><h2>${esc(s.title || "Section")}</h2><p class="profile-description">${esc(p.description || "")}</p></section>`;
-    }).join("");
+    const seenSectionTypes = new Set();
+    const sectionHtml = (p.sections || [])
+      .filter(s => s && s.visible !== false && !["skills", "projects", "posts"].includes(s.type))
+      .filter(s => {
+        const titleKey = String(s.title || "").trim().toLowerCase().replace(/\s+/g, " ");
+        // Skip legacy/custom copies of canonical profile sections so only the
+        // dedicated rendered section remains visible.
+        const duplicateCanonicalTitle = [
+          "posts", "post", "المنشورات",
+          "friends", "friend", "your circle",
+          "about me", "about"
+        ].includes(titleKey);
+        if (!s.type && duplicateCanonicalTitle) return false;
+        const key = s.type || `custom:${titleKey}`;
+        if (seenSectionTypes.has(key)) return false;
+        seenSectionTypes.add(key);
+        return true;
+      })
+      .map(s => {
+        if (s.type === "about") return `<section class="section-block about-section"><div class="section-kicker">ABOUT</div><p class="profile-description">${esc(p.description || p.bio || "Tell people something about you.")}</p>${p.location ? `<div class="about-meta"><span>⌖ ${esc(p.location)}</span>${p.website && safeLink(p.website) ? `<a href="${esc(safeLink(p.website))}" target="_blank" rel="noreferrer">Website ↗</a>` : ""}</div>` : ""}</section>`;
+        if (s.type === "friends") return `<section class="section-block"><div class="section-head"><div><div class="section-kicker">FRIENDS</div></div>${more ? `<button class="btn btn-sm" data-friends-open>+${more}</button>` : ""}</div><div class="friend-mini-grid">${friendPreviewRows(friendProfiles,5)}</div></section>`;
+        if (s.type === "music") return renderMusic(p);
+        return `<section class="section-block"><div class="section-kicker">CUSTOM</div><h2>${esc(s.title || "Section")}</h2><p class="profile-description">${esc(p.description || "")}</p></section>`;
+      }).join("");
 
     const banner = p.banner
       ? `<img class="profile-banner-image" src="${esc(p.banner)}" alt="" loading="eager">`
       : `<div class="profile-banner-fallback"></div>`;
     let action = "";
     const canInteract = !preview && !isMe && !!PF.currentUsername();
+    const followState = canInteract ? PF.isFollowing(p.username) : false;
     if (canInteract) {
-      if (relationship === "friends") action = `<span class="relationship-badge friends-state">✓ Friends</span>`;
-      else if (relationship === "outgoing") action = `<span class="relationship-badge request-state">Request sent</span>`;
-      else if (relationship === "incoming") action = `<span class="relationship-badge request-state">Friend request</span>`;
-      else action = `<button class="btn btn-primary" data-add-friend>+ Add Friend</button>`;
+      const primaryLabel = relationship === "friends"
+        ? "Friends"
+        : relationship === "outgoing"
+          ? "Request sent"
+          : relationship === "incoming"
+            ? "Respond"
+            : "+ Add Friend";
+      const friendChoice = relationship === "friends"
+        ? `<button type="button" class="relationship-menu-item danger" data-rel-action="remove-friend">Remove friend</button>`
+        : relationship === "outgoing"
+          ? `<button type="button" class="relationship-menu-item danger" data-rel-action="cancel-request">Cancel request</button>`
+          : relationship === "incoming"
+            ? `<button type="button" class="relationship-menu-item primary" data-rel-action="accept-friend">Accept request</button>`
+            : `<button type="button" class="relationship-menu-item primary" data-rel-action="add-friend">+ Add Friend</button>`;
+      const followLabel = followState ? "Unfollow" : "Follow";
+      action = `<div class="relationship-action-menu" data-relationship-menu>
+        <button type="button" class="btn btn-primary relationship-action-button" data-relationship-toggle aria-expanded="false" aria-haspopup="menu">${primaryLabel}<span class="relationship-action-chevron" aria-hidden="true">⌄</span></button>
+        <div class="relationship-action-popover" data-relationship-popover role="menu" hidden>
+          ${friendChoice}
+          <button type="button" class="relationship-menu-item" data-rel-action="toggle-follow">${followLabel}</button>
+        </div>
+      </div>`;
     }
     const quickLike = canInteract ? `<button class="like-btn ${liked ? "liked" : ""}" data-like-profile aria-label="${liked ? "Unlike" : "Like"}"><span class="heart">${liked ? "♥" : "♡"}</span><span class="like-count">${displayViews(likeCount)}</span></button>` : "";
     const messagesClosed = p.messagePrivacy === "nobody";
@@ -2042,10 +2323,10 @@
       <div class="profile-content">
         <div class="profile-head">
           <div class="profile-avatar-wrap">
-            <button type="button" class="profile-avatar-button ${p.story?.active ? "has-story" : "story-empty"}" data-story-user="${esc(p.username)}" data-story-active="${p.story?.active ? "1" : "0"}" data-story-own="${isMe ? "1" : "0"}" aria-label="${p.story?.active ? "View story" : isMe ? "Add a story" : "Profile avatar"}">${p.story?.active ? `<span class="story-ring-frame" aria-hidden="true"></span>` : ""}<span class="profile-avatar ${frame}">${p.avatar ? `<img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}">` : esc(initials(p))}</span>${isMe && !p.story?.active ? `<b class="story-add-dot profile-story-plus" aria-hidden="true">+</b>` : ""}</button>
+            <button type="button" class="profile-avatar-button ${p.story?.active ? "has-story" : "story-empty"}" data-story-user="${esc(p.username)}" data-story-active="${p.story?.active ? "1" : "0"}" data-story-own="${isMe ? "1" : "0"}" aria-label="${p.story?.active ? "View story" : isMe ? "Add a story" : "Profile avatar"}">${p.story?.active ? `<span class="story-ring-frame" aria-hidden="true"></span>` : ""}<span class="profile-avatar ${frame}">${p.avatar ? `<img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}">` : esc(initials(p))}${storeFrameOverlay(p)}</span>${isMe && !p.story?.active ? `<b class="story-add-dot profile-story-plus" aria-hidden="true">+</b>` : ""}</button>
+            <div class="profile-presence" data-profile-presence="${esc(p.username)}" aria-label="${esc(PF.translateString("Offline"))}" title="${esc(PF.translateString("Offline"))}"><span class="status-dot offline"></span><span>${esc(PF.translateString("Offline"))}</span></div>
           </div>
           <div class="profile-identity">
-            <div class="profile-topline"><span class="status-dot ${p.status === "Offline" ? "offline" : ""}"></span><span>${esc(p.status === "Custom" ? (p.customStatus || "Online") : (p.status || "Online"))}</span>${isMe ? `<span class="you-label">YOUR PROFILE</span>` : ""}</div>
             <h1>${esc(p.displayName || p.username)}</h1>
             <div class="profile-username profile-username-meta"><span>@${esc(p.username)}</span>${p.createdAt ? `<span class="account-since" title="Account age">${esc(formatAccountSince(p.createdAt))}</span>` : ""}</div>
             <p>${esc(p.bio || "")}</p>
@@ -2056,9 +2337,8 @@
         ${standaloneMini}
         ${!isMe && !PF.currentUsername() ? `<div class="profile-actions-row"><span class="compact-likes-label">${displayViews(likeCount)} likes</span></div>` : ""}
         <div class="profile-stats">
-          <div><span>Friends</span><b>${friends.length}</b></div>
-          <div class="online-stat"><span><i class="status-dot"></i> Online</span><b>Active</b></div>
-          <div class="view-stat"><span><span class="eye-mini">◉</span> Views</span><b>${views}</b></div>
+          <div><span>متابعين</span><b>${Array.isArray(p.followers) ? p.followers.length : 0}</b></div>
+          <div class="view-stat"><span><span class="eye-mini">◉</span> المشاهدات</span><b>${views}</b></div>
         </div>
         <div class="social-row">${social}</div>
         <div class="profile-sections">${sectionHtml || `<section class="section-block"><div class="section-kicker">ABOUT</div><p class="profile-description">${esc(p.description || p.bio || "No profile content yet.")}</p></section>`}</div>
@@ -2112,6 +2392,40 @@
     }, 1500);
   }
 
+  async function bindProfilePresence(username) {
+    const target = PF.normalizeUsername(username);
+    if (!target) return;
+    if (profilePresenceUnsubscribe) {
+      try { await profilePresenceUnsubscribe(); } catch {}
+      profilePresenceUnsubscribe = null;
+    }
+    const update = (state) => {
+      const online = !!(state && Object.prototype.hasOwnProperty.call(state, target));
+      const el = document.querySelector(`[data-profile-presence="${CSS.escape(target)}"]`);
+      if (!el) return;
+      el.classList.toggle('offline', !online);
+      el.classList.toggle('online', online);
+      const dot = el.querySelector('.status-dot');
+      const label = el.querySelector(':scope > span:last-child');
+      const sourceLabel = online ? 'Online' : 'Offline';
+      const translatedLabel = PF.translateString(sourceLabel);
+      dot?.classList.toggle('online', online);
+      dot?.classList.toggle('offline', !online);
+      if (label) label.textContent = translatedLabel;
+      el.setAttribute('aria-label', translatedLabel);
+      el.setAttribute('title', translatedLabel);
+    };
+    const viewer = PF.currentUsername();
+    if (!viewer) { update({}); return; }
+    try {
+      const api = await PF.subscribePresence(viewer, evt => update(evt?.state || {}));
+      profilePresenceUnsubscribe = api.unsubscribe;
+      update(api.state || {});
+    } catch {
+      update({});
+    }
+  }
+
 async function initProfile() {
     let username = PF.normalizeUsername(new URLSearchParams(location.search).get("u") || "");
     const root = $("#profileRoot");
@@ -2152,27 +2466,88 @@ async function initProfile() {
     p.likes.count = Number.isFinite(Number(p.likes.count)) ? Math.max(0, Number(p.likes.count)) : p.likes.users.length;
     let isRivoAdminProfile = false;
     try { isRivoAdminProfile = await PF.isAdminProfile(p.username); } catch {}
-    root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship }) + `<section class="profile-posts-wrap"><div class="section-head"><div><div class="section-kicker">POSTS</div><h2>${isMe ? "Your posts" : "Posts"}</h2></div>${isMe ? `<a class="btn btn-sm" href="posts.html">+ New post</a>` : ""}</div><div id="profilePostFeed" class="post-feed"><div class="empty-state glass"><h2>Loading posts…</h2></div></div></section>`;
+    root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship }) + `<section class="profile-posts-wrap"><div class="section-head profile-posts-head"><div><div class="section-kicker">POSTS</div><h2>${isMe ? "المنشورات" : "المنشورات"}</h2></div>${isMe ? `<a class="btn btn-sm" href="posts.html">+ New post</a>` : ""}</div><div id="profilePostFeed" class="post-feed"><div class="empty-state glass"><h2>Loading posts…</h2></div></div></section>`;
     bindPlayer(root);
+    await bindProfilePresence(p.username);
     await renderPostFeed($("#profilePostFeed"), p.username, { allowCompose:false }); showAdminProfileIntro(root, isRivoAdminProfile);
-    $(`[data-add-friend]`)?.addEventListener("click", async () => {
-      try {
-        await PF.sendFriendRequest(p.username);
-        notify("Friend request sent", "success");
-        const updated = await PF.getProfile(p.username);
-        const selfFresh = await PF.currentProfile();
-        const rel = PF.friendshipState(selfFresh, p.username);
-        root.innerHTML = renderProfileCard(updated, { isMe:false, friendProfiles, relationship:rel }) + `<section class="profile-posts-wrap"><div class="section-head"><div><div class="section-kicker">POSTS</div><h2>Posts</h2></div></div><div id="profilePostFeed" class="post-feed"></div></section>`;
-        bindPlayer(root);
-        await renderPostFeed($("#profilePostFeed"), updated.username, { allowCompose:false });
-        bindProfileActions(updated);
-      } catch (err) { notify(err.message, "error"); }
-    });
     bindProfileActions(p);
     $(`[data-friends-open]`)?.addEventListener("click", () => openFriendsModal(friendProfiles));
   }
 
+  async function refreshCurrentProfileView(username) {
+    const root = $("#profileRoot");
+    if (!root) return;
+    const p = await PF.getProfile(username, { force: true });
+    if (!p) return;
+    const viewer = await PF.currentProfile({ force: true });
+    const rel = PF.friendshipState(viewer, p.username);
+    const friendProfiles = await PF.getProfiles(p.friends || []);
+    const isMe = PF.currentUsername() === p.username;
+    root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship: isMe ? "self" : rel }) + `<section class="profile-posts-wrap"><div class="section-head profile-posts-head"><div><div class="section-kicker">POSTS</div><h2>${isMe ? "المنشورات" : "المنشورات"}</h2></div>${isMe ? `<a class="btn btn-sm" href="posts.html">+ New post</a>` : ""}</div><div id="profilePostFeed" class="post-feed"></div></section>`;
+    bindPlayer(root);
+    await bindProfilePresence(p.username);
+    await renderPostFeed($("#profilePostFeed"), p.username, { allowCompose:false });
+    await bindProfileActions(p);
+    $("[data-friends-open]")?.addEventListener("click", () => openFriendsModal(friendProfiles));
+  }
+
   async function bindProfileActions(profile) {
+    const relationshipToggle = $("[data-relationship-toggle]");
+    const relationshipPopover = $("[data-relationship-popover]");
+
+    relationshipToggle?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (!relationshipPopover) return;
+      const open = !relationshipPopover.hidden;
+      relationshipPopover.hidden = open;
+      relationshipToggle.setAttribute("aria-expanded", open ? "false" : "true");
+    });
+
+    relationshipPopover?.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-rel-action]");
+      if (!button) return;
+      event.stopPropagation();
+      const action = button.dataset.relAction;
+      button.disabled = true;
+      try {
+        if (action === "add-friend") {
+          await PF.sendFriendRequest(profile.username);
+          notify("Friend request sent", "success");
+        } else if (action === "cancel-request") {
+          await PF.cancelFriendRequest(profile.username);
+          notify("Friend request cancelled", "success");
+        } else if (action === "accept-friend") {
+          await PF.acceptFriendRequest(profile.username);
+          notify("Friend added", "success");
+        } else if (action === "remove-friend") {
+          await PF.removeFriend(profile.username);
+          notify("Friend removed", "success");
+        } else if (action === "toggle-follow") {
+          const result = await PF.toggleFollow(profile.username);
+          notify(result.following ? "Following" : "Unfollowed", "success");
+        } else {
+          return;
+        }
+        await refreshCurrentProfileView(profile.username);
+      } catch (err) {
+        notify(err.message, "error");
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    if (!window.__rivoRelationshipMenuBound) {
+      window.__rivoRelationshipMenuBound = true;
+      document.addEventListener("click", (event) => {
+        $$('[data-relationship-menu]').forEach(menu => {
+          if (menu.contains(event.target)) return;
+          const popover = $("[data-relationship-popover]", menu);
+          const toggle = $("[data-relationship-toggle]", menu);
+          if (popover) popover.hidden = true;
+          toggle?.setAttribute("aria-expanded", "false");
+        });
+      });
+    }
     $("[data-like-profile]")?.addEventListener("click", async () => {
       try {
         const result = await PF.toggleLike(profile.username);
@@ -2183,7 +2558,7 @@ async function initProfile() {
         const friendProfiles = await PF.getProfiles(friends);
         const root = $("#profileRoot");
         if (root && fresh) {
-          root.innerHTML = renderProfileCard(fresh, { isMe:false, friendProfiles, relationship:rel }) + `<section class="profile-posts-wrap"><div class="section-head"><div><div class="section-kicker">POSTS</div><h2>Posts</h2></div></div><div id="profilePostFeed" class="post-feed"></div></section>`;
+          root.innerHTML = renderProfileCard(fresh, { isMe:false, friendProfiles, relationship:rel }) + `<section class="profile-posts-wrap"><div class="section-head profile-posts-head"><div><div class="section-kicker">POSTS</div><h2>المنشورات</h2></div></div><div id="profilePostFeed" class="post-feed"></div></section>`;
           bindPlayer(root);
           await renderPostFeed($("#profilePostFeed"), fresh.username, { allowCompose:false });
           $("[data-friends-open]")?.addEventListener("click", () => openFriendsModal(friendProfiles));
@@ -2211,36 +2586,47 @@ async function initProfile() {
     renderModalFriends();
   }
 
+  function storeTypeIcon(type) { return ({avatar:"◉", frame:"◇", template:"▦", badge:"✦", feature:"⚙"})[type] || "◈"; }
+  function storeTypeLabel(type) { return ({avatar:"افتار", frame:"إطار", template:"قالب", badge:"شارة"})[type] || type || "عنصر"; }
+  function renderStoreItemCard(item, ownedIds = new Set(), inventory = []) {
+    const owned = ownedIds.has(String(item.id));
+    const inv = inventory.find(x => String(x.item_id) === String(item.id));
+    const price = Number(item.price || 0);
+    const media = item.image_url ? `<img src="${esc(item.image_url)}" alt="" loading="lazy">` : `<span class="store-item-icon">${storeTypeIcon(item.type)}</span>`;
+    const action = owned
+      ? `<div class="store-owned-actions"><button type="button" class="btn btn-sm ${inv?.is_equipped ? "" : "btn-primary"}" data-store-equip="${esc(item.id)}">${inv?.is_equipped ? "إلغاء التجهيز" : "تجهيز"}</button><span class="store-owned">مملوك</span></div>`
+      : `<button type="button" class="btn btn-sm btn-primary" data-store-buy="${esc(item.id)}">${price === 0 ? "مجاني" : `${price} 🪙 شراء`}</button>`;
+    return `<article class="store-item glass" data-store-item="${esc(item.id)}"><div class="store-item-media">${media}</div><div class="store-item-copy"><div class="store-item-top"><span class="store-type">${storeTypeIcon(item.type)} ${esc(storeTypeLabel(item.type))}</span>${price===0?`<span class="store-free">مجاني</span>`:`<span class="store-price">${price} 🪙</span>`}</div><h3>${esc(item.name)}</h3><p>${esc(item.description || "")}</p><div class="store-item-actions">${action}</div></div></article>`;
+  }
   async function initExplore() {
     const form = $("#searchForm"), input = $("#searchInput"), box = $("#results"); if (!box) return;
-    const draw = list => box.innerHTML = list.length ? list.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><p>${esc(p.bio || "No bio yet.")}</p><div class="badges-inline">${badgePills(p, 1)}</div><a class="btn btn-sm btn-primary" href="profile.html?u=${encodeURIComponent(p.username)}">View Profile</a></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1"><h2>No profiles found</h2><p>Search by username or display name.</p></div>`;
+    const draw = list => box.innerHTML = list.length ? list.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><p>${esc(p.bio || "No bio yet.")}</p><div class="badges-inline">${badgePills(p, 1)}${storeBadgePills(p,1)}</div><a class="btn btn-sm btn-primary" href="profile.html?u=${encodeURIComponent(p.username)}">View Profile</a></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1"><h2>No profiles found</h2><p>Search by username or display name.</p></div>`;
     const all = await PF.listProfiles(); draw(all.slice(0, 12));
     form?.addEventListener("submit", async e => { e.preventDefault(); draw(await PF.searchUsers(input.value)); });
     let searchTimer = 0;
-    input?.addEventListener("input", () => {
-      clearTimeout(searchTimer);
-      const q = input.value.trim();
-      searchTimer = setTimeout(async () => {
-        try { draw(q ? await PF.searchUsers(q) : all.slice(0, 12)); } catch (e) { notify(e.message, "error"); }
-      }, 220);
-    });
+    input?.addEventListener("input", () => { clearTimeout(searchTimer); const q = input.value.trim(); searchTimer = setTimeout(async () => { try { draw(q ? await PF.searchUsers(q) : all.slice(0, 12)); } catch (e) { notify(e.message, "error"); } }, 220); });
+
   }
 
   async function initFriends() {
     const me = await PF.currentProfile(); if (!me) { location.href = "login.html"; return; }
-    const requestBox = $("#requestList"), friendBox = $("#friendList"), search = $("#friendSearch");
+    const requestBox = $("#requestList"), sentBox = $("#sentRequestList"), friendBox = $("#friendList"), search = $("#friendSearch");
     const render = async query => {
       const fresh = await PF.currentProfile();
-      const incoming = fresh.friendRequests?.incoming || [], friends = fresh.friends || [];
+      const incoming = fresh.friendRequests?.incoming || [], outgoing = fresh.friendRequests?.outgoing || [], friends = fresh.friends || [];
       const requestProfiles = await PF.getProfiles(incoming);
+      const sentProfiles = await PF.getProfiles(outgoing);
       const requests = requestProfiles.filter(Boolean);
+      const sentRequests = sentProfiles.filter(Boolean);
       let profiles = (await PF.getProfiles(friends)).filter(Boolean);
       const q = String(query || "").trim().toLowerCase().replace(/^@/, "");
       if (q) profiles = profiles.filter(p => p.username.includes(q) || (p.displayName || "").toLowerCase().includes(q));
       requestBox.innerHTML = requests.length ? requests.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><div class="hero-actions"><button class="btn btn-sm btn-primary" data-accept="${esc(p.username)}">Accept</button><button class="btn btn-sm btn-danger" data-reject="${esc(p.username)}">Decline</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No pending requests.</div>`;
+      sentBox.innerHTML = sentRequests.length ? sentRequests.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><div class="hero-actions"><a class="btn btn-sm" href="profile.html?u=${encodeURIComponent(p.username)}">View</a><button class="btn btn-sm btn-danger" data-cancel-sent="${esc(p.username)}">Cancel request</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No sent requests.</div>`;
       friendBox.innerHTML = profiles.length ? profiles.map(p => `<article class="user-card glass"><div class="user-top">${avatarMarkup(p)}<div><strong>${esc(p.displayName)}</strong><span>@${esc(p.username)}</span></div></div><p>${esc(p.bio || "")}</p><div class="hero-actions"><a class="btn btn-sm btn-primary" href="profile.html?u=${encodeURIComponent(p.username)}">View</a><button class="btn btn-sm btn-danger" data-remove="${esc(p.username)}">Remove</button></div></article>`).join("") : `<div class="empty-state glass" style="grid-column:1/-1">No friends found.</div>`;
       $$('[data-accept]').forEach(b => b.onclick = async () => { try { await PF.acceptFriendRequest(b.dataset.accept); notify("Friend added", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
       $$('[data-reject]').forEach(b => b.onclick = async () => { try { await PF.rejectFriendRequest(b.dataset.reject); notify("Request declined", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
+      $$('[data-cancel-sent]').forEach(b => b.onclick = async () => { try { await PF.cancelFriendRequest(b.dataset.cancelSent); notify("Friend request cancelled", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
       $$('[data-remove]').forEach(b => b.onclick = async () => { try { await PF.removeFriend(b.dataset.remove); notify("Friend removed", "success"); render(search?.value); } catch(e) { notify(e.message,"error"); } });
     };
     search?.addEventListener("input", () => render(search.value)); await render("");
@@ -2913,6 +3299,186 @@ voiceMessageSend?.addEventListener("click",async()=>{
       syncNotifUI();
       document.addEventListener("rivo:languagechange", syncNotifUI);
     }
+    // Economy: live balance, transfer modal, ad reward, and owned inventory.
+    const balanceEl = $("#coinsBalance");
+    const transferModal = $("#coinTransferModal");
+    const transferForm = $("#coinTransferForm");
+    const transferUser = $("#coinTransferUsername");
+    const transferAmount = $("#coinTransferAmount");
+    const inventoryBox = $("#settingsInventory");
+    const refreshEconomy = async () => {
+      try {
+        const balance = await PF.getCoinBalance();
+        if (balanceEl) balanceEl.textContent = Number(balance).toLocaleString();
+        if (inventoryBox) {
+          const inv = await PF.listMyInventory();
+          inventoryBox.innerHTML = inv.length
+            ? `<div class="inventory-head"><span>عناصرك المملوكة</span><span class="section-sub">يمكن فتح العناصر من داخل محرر الملف الشخصي</span></div>` + inv.slice(0,10).map(x => `<div class="inventory-row"><div><b>${esc(x.name)}</b><small>${esc(storeTypeLabel(x.type))} · ${x.is_equipped ? "مجهز" : "غير مجهز"}</small></div><button type="button" class="btn btn-sm ${x.is_equipped ? "" : "btn-primary"}" data-inventory-equip="${esc(x.item_id)}">${x.is_equipped ? "إلغاء التجهيز" : "تجهيز"}</button></div>`).join("")
+            : `<div class="inventory-empty">لم تملك عناصر بعد. افتح محرر الملف الشخصي لفتح العناصر بالعملات.</div>`;
+          inventoryBox.querySelectorAll("[data-inventory-equip]").forEach(btn => btn.addEventListener("click", async () => {
+            try { btn.disabled = true; await PF.equipStoreItem(btn.dataset.inventoryEquip); notify("تم تحديث العنصر", "success"); await refreshEconomy(); } catch(e) { notify(e.message || "تعذر تحديث العنصر", "error"); btn.disabled = false; }
+          }));
+        }
+      } catch (e) { if (balanceEl) balanceEl.textContent = "—"; if (inventoryBox) inventoryBox.innerHTML = `<div class="inventory-empty">${esc(e.message || "تعذر تحميل الاقتصاد")}</div>`; }
+    };
+    const openTransfer = () => { if (!transferModal) return; transferModal.classList.add("open"); transferModal.setAttribute("aria-hidden", "false"); transferUser?.focus(); };
+    const closeTransfer = () => { if (!transferModal) return; transferModal.classList.remove("open"); transferModal.setAttribute("aria-hidden", "true"); transferForm?.reset(); };
+    $("#openCoinTransfer")?.addEventListener("click", openTransfer); $("#closeCoinTransfer")?.addEventListener("click", closeTransfer);
+    transferModal?.addEventListener("click", e => { if (e.target === transferModal) closeTransfer(); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && transferModal?.classList.contains("open")) closeTransfer(); });
+    transferForm?.addEventListener("submit", async e => {
+      e.preventDefault();
+      try {
+        const amount = Math.floor(Number(transferAmount?.value || 0));
+        if (!PF.normalizeUsername(transferUser?.value || "")) throw new Error("اكتب اسم المستخدم المستلم");
+        if (amount <= 0) throw new Error("المبلغ يجب أن يكون أكبر من صفر");
+        const btn = $("#confirmCoinTransfer"); if (btn) { btn.disabled = true; btn.textContent = "جارٍ التحويل…"; }
+        const result = await PF.transferCoinsByUsername(transferUser.value, amount);
+        if (balanceEl) balanceEl.textContent = Number(result?.coins_balance ?? await PF.getCoinBalance()).toLocaleString();
+        notify("تم تحويل العملات بنجاح", "success"); closeTransfer(); await refreshEconomy();
+      } catch(e) { notify(e.message || "تعذر التحويل", "error"); }
+      finally { const btn = $("#confirmCoinTransfer"); if (btn) { btn.disabled = false; btn.textContent = "تأكيد التحويل"; } }
+    });
+    let videoRewardState = null;
+    const ensureVideoRewardModal = () => {
+      if (videoRewardState) return videoRewardState;
+      const modal = document.createElement("div");
+      modal.className = "video-reward-modal";
+      modal.hidden = true;
+      modal.innerHTML = `
+        <div class="video-reward-backdrop" data-video-close></div>
+        <section class="video-reward-dialog" role="dialog" aria-modal="true" aria-labelledby="videoRewardTitle">
+          <div class="video-reward-head"><div><div class="eyebrow">RIVO REWARDS</div><h2 id="videoRewardTitle">شاهد فيديو واكسب عملات</h2></div><button type="button" class="icon-btn" data-video-close aria-label="إغلاق">×</button></div>
+          <div class="video-reward-stage">
+            <video id="coinRewardVideo" playsinline controls preload="auto"></video>
+            <button type="button" class="video-reward-play" id="coinRewardPlay" aria-label="تشغيل الفيديو">▶</button>
+            <div id="coinRewardState" class="video-reward-state">جارٍ تجهيز الفيديو…</div>
+          </div>
+          <div class="video-reward-foot"><div class="video-reward-timer"><span id="coinRewardTimer">0:30</span><span class="video-reward-audio">🔊 الصوت مفعّل</span></div><small>شاهد حتى 30 ثانية. يمكنك التحكم في الصوت من مشغل الفيديو.</small></div>
+        </section>`;
+      document.body.appendChild(modal);
+      const video = modal.querySelector("#coinRewardVideo");
+      videoRewardState = { modal, video, stateEl: modal.querySelector("#coinRewardState"), timerEl: modal.querySelector("#coinRewardTimer"), playBtn: modal.querySelector("#coinRewardPlay") };
+      videoRewardState.playBtn?.addEventListener("click", async () => {
+        try {
+          video.muted = false;
+          video.volume = 1;
+          await video.play();
+          videoRewardState.playBtn.hidden = true;
+          videoRewardState.stateEl.textContent = "جاري المشاهدة • الصوت يعمل";
+        } catch {
+          videoRewardState.stateEl.textContent = "تعذر تشغيل الفيديو، جرّب مرة أخرى";
+        }
+      });
+      modal.querySelectorAll("[data-video-close]").forEach(x => x.addEventListener("click", () => closeVideoReward()));
+      document.addEventListener("keydown", e => { if (e.key === "Escape" && !modal.hidden) closeVideoReward(); });
+      return videoRewardState;
+    };
+    const closeVideoReward = () => {
+      if (!videoRewardState) return;
+      const { modal, video } = videoRewardState;
+      video.pause(); video.removeAttribute("src"); video.load(); modal.hidden = true;
+      document.body.classList.remove("video-reward-open");
+    };
+    const loadRewardVideoList = async () => {
+      const fallback = ["a1.mp4", "a2.mp4"];
+      try {
+        const res = await fetch("../videos/manifest.json", { cache: "no-store" });
+        if (!res.ok) throw new Error("manifest unavailable");
+        const list = await res.json();
+        const valid = Array.isArray(list)
+          ? list.filter(x => typeof x === "string" && /\.(mp4|webm|ogg)$/i.test(x) && !x.includes("..") && !x.includes("/"))
+          : [];
+        if (valid.length) return valid;
+      } catch {}
+      return fallback;
+    };
+    const startVideoReward = async () => {
+      const btn = $("#rewardAdCoins");
+      const ui = ensureVideoRewardModal();
+      let rewarded = false;
+      let finished = false;
+      let timer = null;
+      let startedAt = 0;
+      try {
+        if (btn) { btn.disabled = true; btn.textContent = "🎬 جاري تجهيز الفيديو…"; }
+        const videos = await loadRewardVideoList();
+        if (!videos.length) throw new Error("لا توجد فيديوهات صالحة داخل مجلد videos.");
+        const randomFile = videos[Math.floor(Math.random() * videos.length)];
+        const src = `../videos/${encodeURIComponent(randomFile)}`;
+        const { modal, video, stateEl, timerEl, playBtn } = ui;
+        if (playBtn) playBtn.hidden = false;
+        stateEl.textContent = "شاهد الفيديو حتى النهاية";
+        timerEl.textContent = "0:30";
+        modal.hidden = false;
+        document.body.classList.add("video-reward-open");
+        video.src = src;
+        video.muted = false;
+        video.defaultMuted = false;
+        video.volume = 1;
+        video.currentTime = 0;
+        video.addEventListener("loadedmetadata", () => {
+          // Never play beyond 30s even when the source itself is longer.
+          if (Number.isFinite(video.duration) && video.duration <= 30) timerEl.textContent = `0:${String(Math.ceil(video.duration)).padStart(2,"0")}`;
+        }, { once: true });
+        const finishReward = async () => {
+          if (finished) return;
+          finished = true;
+          clearInterval(timer);
+          video.pause();
+          stateEl.textContent = "جاري إضافة المكافأة…";
+          try {
+            const result = await PF.rewardAdCoins(15);
+            rewarded = true;
+            if (balanceEl) balanceEl.textContent = Number(result?.coins_balance ?? await PF.getCoinBalance()).toLocaleString();
+            notify(`+${Number(result?.reward || 15)} عملة`, "success");
+            stateEl.textContent = "تمت إضافة المكافأة";
+            setTimeout(closeVideoReward, 650);
+          } catch (e) {
+            stateEl.textContent = "تعذر إضافة المكافأة";
+            notify(e.message || "تعذر إضافة مكافأة الإعلان", "error");
+            setTimeout(closeVideoReward, 800);
+          }
+        };
+        const onTimeUpdate = () => {
+          const elapsed = Math.min(30, Math.max(0, video.currentTime));
+          const remaining = Math.max(0, Math.ceil(30 - elapsed));
+          timerEl.textContent = `0:${String(remaining).padStart(2,"0")}`;
+          if (video.currentTime >= 30) finishReward();
+        };
+        const onEnded = () => finishReward();
+        const onError = () => { if (!finished) { finished = true; notify("تعذر تشغيل هذا الفيديو.", "error"); closeVideoReward(); } };
+        video.addEventListener("timeupdate", onTimeUpdate);
+        video.addEventListener("ended", onEnded, { once: true });
+        video.addEventListener("error", onError, { once: true });
+        let play = null;
+        try {
+          video.muted = false;
+          video.volume = 1;
+          play = await video.play();
+          if (ui.playBtn) ui.playBtn.hidden = true;
+          stateEl.textContent = "الصوت يعمل تلقائيًا";
+        } catch {
+          stateEl.textContent = "اضغط تشغيل لسماع الصوت وبدء الفيديو";
+          video.controls = true;
+        }
+        startedAt = Date.now();
+        timer = setInterval(() => {
+          if (finished) return;
+          if (video.currentTime >= 30 || (Date.now() - startedAt >= 30000 && !video.paused)) finishReward();
+        }, 250);
+        return play;
+      } catch (e) {
+        if (!rewarded) closeVideoReward();
+        notify(e.message || "تعذر تشغيل فيديو المكافأة", "error");
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "🎬 مشاهدة إعلان لكسب عملات"; }
+      }
+    };
+    $("#rewardAdCoins")?.addEventListener("click", startVideoReward);
+    await refreshEconomy();
+    if (!window.__rivoEconomyTimer) window.__rivoEconomyTimer = setInterval(() => refreshEconomy(), 15000);
+
     try { const isAdmin = await PF.adminStatus(); $$("[data-admin-link]").forEach(a => a.classList.toggle("hidden", !isAdmin)); } catch {}
     if (select) select.value = currentSetting;
     if (hint) hint.textContent = messageHint(currentSetting);
@@ -2954,45 +3520,142 @@ voiceMessageSend?.addEventListener("click",async()=>{
     box=document.createElement("div");
     box.className="post-image-viewer";
     box.setAttribute("data-post-image-viewer","");
-    box.innerHTML=`<button type="button" class="post-image-viewer-close" data-post-image-close aria-label="Close image">×</button><div class="post-image-viewer-backdrop" data-post-image-close></div><img class="post-image-viewer-image" data-post-image-viewer-img alt="Post image">`;
+    box.innerHTML=`<button type="button" class="post-image-viewer-close" data-post-image-close aria-label="Close image">×</button><div class="post-image-viewer-backdrop" data-post-image-close></div><div class="post-image-viewer-stage" data-post-image-stage><img class="post-image-viewer-image" data-post-image-viewer-img alt="Post image"></div><div class="post-image-viewer-controls" role="group" aria-label="Image zoom"><button type="button" data-post-zoom-out aria-label="Zoom out">−</button><button type="button" data-post-zoom-reset aria-label="Reset zoom">1×</button><button type="button" data-post-zoom-in aria-label="Zoom in">+</button></div>`;
     document.body.appendChild(box);
-    const close=()=>{box.classList.remove("open");const img=box.querySelector("[data-post-image-viewer-img]");if(img)img.removeAttribute("src");};
+    const stage=box.querySelector("[data-post-image-stage]"), img=box.querySelector("[data-post-image-viewer-img]");
+    let scale=1,tx=0,ty=0,pinchStartDist=0,pinchStartScale=1,panStartX=0,panStartY=0,startTx=0,startTy=0;
+    const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+    const apply=()=>{img.style.transform=`translate3d(${tx}px,${ty}px,0) scale(${scale})`;box.querySelector('[data-post-zoom-reset]').textContent=`${Number(scale.toFixed(1))}×`;};
+    const reset=()=>{scale=1;tx=0;ty=0;apply();};
+    const setScale=(next,anchorX=0,anchorY=0)=>{const old=scale;scale=clamp(next,1,4);if(scale===1){tx=0;ty=0;}else if(old!==scale){const ratio=scale/old;tx=anchorX-(anchorX-tx)*ratio;ty=anchorY-(anchorY-ty)*ratio;}apply();};
+    const close=()=>{box.classList.remove("open");img.removeAttribute("src");reset();document.body.classList.remove("image-viewer-open");};
     box.querySelectorAll("[data-post-image-close]").forEach(b=>b.addEventListener("click",close));
-    document.addEventListener("keydown",e=>{if(e.key==="Escape" && box.classList.contains("open"))close();});
+    box.querySelector("[data-post-zoom-in]").addEventListener("click",()=>setScale(scale+0.5));
+    box.querySelector("[data-post-zoom-out]").addEventListener("click",()=>setScale(scale-0.5));
+    box.querySelector("[data-post-zoom-reset]").addEventListener("click",reset);
+    stage.addEventListener("wheel",e=>{if(!box.classList.contains("open"))return;e.preventDefault();const r=stage.getBoundingClientRect();setScale(scale+(e.deltaY<0?.25:-.25),e.clientX-r.left-r.width/2,e.clientY-r.top-r.height/2);},{passive:false});
+    stage.addEventListener("dblclick",e=>{const r=stage.getBoundingClientRect();setScale(scale>1?1:2,e.clientX-r.left-r.width/2,e.clientY-r.top-r.height/2);});
+    stage.addEventListener("touchstart",e=>{if(e.touches.length===2){const a=e.touches[0],b=e.touches[1];pinchStartDist=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);pinchStartScale=scale;return;}if(e.touches.length===1&&scale>1){const t=e.touches[0];panStartX=t.clientX;panStartY=t.clientY;startTx=tx;startTy=ty;}},{passive:true});
+    stage.addEventListener("touchmove",e=>{if(e.touches.length===2&&pinchStartDist){e.preventDefault();const a=e.touches[0],b=e.touches[1],d=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);setScale(pinchStartScale*d/pinchStartDist);return;}if(e.touches.length===1&&scale>1){e.preventDefault();const t=e.touches[0];tx=startTx+t.clientX-panStartX;ty=startTy+t.clientY-panStartY;apply();}},{passive:false});
+    stage.addEventListener("touchend",e=>{if(e.touches.length<2)pinchStartDist=0;});
+    document.addEventListener("keydown",e=>{if(e.key==="Escape"&&box.classList.contains("open"))close();});
+    box._resetZoom=reset;
     return box;
   }
-
-  function openPostImageViewer(url){
-    if(!url) return;
-    const box=ensurePostImageViewer();
-    const img=box.querySelector("[data-post-image-viewer-img]");
-    img.src=url;
-    box.classList.add("open");
+  function openPostImageViewer(url){if(!url)return;const box=ensurePostImageViewer(),img=box.querySelector("[data-post-image-viewer-img]");box._resetZoom?.();img.src=url;box.classList.add("open");document.body.classList.add("image-viewer-open");}
+  function ensurePostCommentsModal(){
+    let modal=document.querySelector("[data-post-comments-modal]");
+    if(modal)return modal;
+    modal=document.createElement("div");modal.className="post-comments-modal";modal.setAttribute("data-post-comments-modal","");
+    modal.innerHTML=`<div class="post-comments-modal-backdrop" data-comments-close></div><section class="post-comments-sheet" role="dialog" aria-modal="true" aria-label="Comments"><header class="post-comments-head"><div><b>Comments</b><small data-comments-count>0 comments</small></div><button type="button" class="icon-btn" data-comments-close aria-label="Close comments">×</button></header><div class="post-comments-scroll" data-comments-scroll><div class="message-list-empty">Loading comments…</div></div><form class="post-comments-compose" data-comments-form><input class="field-input" data-comments-input maxlength="2000" placeholder="Write a comment…" autocomplete="off" required><button class="btn btn-sm btn-primary" type="submit">Send</button></form></section>`;
+    document.body.appendChild(modal);
+    const close=()=>{modal.classList.remove("open");document.body.classList.remove("comments-modal-open");modal._postId=null;};
+    modal.querySelectorAll("[data-comments-close]").forEach(el=>el.addEventListener("click",close));
+    modal.querySelector("[data-comments-form]").addEventListener("submit",async e=>{e.preventDefault();const input=modal.querySelector("[data-comments-input]"),postId=modal._postId,value=input.value.trim();if(!value||!postId)return;const send=modal.querySelector("[data-comments-form] button");send.disabled=true;try{await PF.commentPost(postId,value);input.value="";await loadPostCommentsModal(modal,postId,true);}catch(err){notify(err.message||"Could not add comment","error");}finally{send.disabled=false;input.focus();}});
+    document.addEventListener("keydown",e=>{if(e.key==="Escape"&&modal.classList.contains("open"))close();});
+    return modal;
   }
-
+  async function loadPostCommentsModal(modal,postId,keepBottom=false){
+    const scroll=modal.querySelector("[data-comments-scroll]"),count=modal.querySelector("[data-comments-count]");scroll.innerHTML=`<div class="message-list-empty">Loading comments…</div>`;
+    try{const post=await PF.getPost(postId),comments=Array.isArray(post?.comments)?post.comments:[];count.textContent=`${comments.length} ${comments.length===1?"comment":"comments"}`;scroll.innerHTML=comments.length?comments.map(c=>`<div class="comment comment-modal-item">${identityLink(c.author,profileMini(c.author),"comment-avatar-link")}<div class="comment-bubble"><div class="comment-meta-line">${identityLink(c.author,`<b>${esc(c.author?.displayName||c.author?.username||"User")}</b>`)}<span>${formatSocialTime(c.created_at)}</span></div><p>${esc(c.content)}</p></div></div>`).join(""):`<div class="comments-empty"><strong>No comments yet.</strong><span>Start the conversation.</span></div>`;if(keepBottom)scroll.scrollTop=scroll.scrollHeight;}catch(err){scroll.innerHTML=`<div class="message-list-empty">${esc(err.message||"Could not load comments")}</div>`;}
+  }
+  async function openPostCommentsModal(postId){if(!postId)return;const modal=ensurePostCommentsModal();modal._postId=postId;modal.classList.add("open");document.body.classList.add("comments-modal-open");const input=modal.querySelector("[data-comments-input]");await loadPostCommentsModal(modal,postId,false);requestAnimationFrame(()=>input?.focus());}
   function renderPostCard(post){
     const author=post.author||{}; const medias=Array.isArray(post.media)?post.media:[];
     const myReaction=post.my_reaction||null; const reposted=!!post.reposted_by_me;
     const repNames=Array.isArray(post.reposter_names)?post.reposter_names:[];
     const mediaHtml=medias.length?`<div class="post-media count-${Math.min(5,medias.length)}">${medias.slice(0,5).map((m,i)=>`<button type="button" class="post-media-thumb" data-post-image="${esc(m.url)}" aria-label="Open image ${i+1}"><img src="${esc(m.url)}" alt="" loading="lazy"></button>`).join("")}</div>`:"";
     const note=post.profile_reposted?`<div class="repost-note">↻ Reposted to this profile</div>`:repNames.length?`<div class="repost-note">↻ Reposted by <b>${esc(repNames[0].displayName||repNames[0].username)}</b>${repNames.length>1?` and ${repNames.length-1} more`:""}</div>`:"";
-    const reactButtons=POST_REACTIONS.map(r=>`<button type="button" class="reaction-chip ${myReaction===r?'active':''}" data-post-react="${esc(r)}">${r}<span>${Number((post.reactions||{})[r]||0)}</span></button>`).join('');
+    const primaryReaction=myReaction||"👍";
+    const reactionTotal=POST_REACTIONS.reduce((sum,r)=>sum+Number((post.reactions||{})[r]||0),0);
+    const primaryCount=myReaction?Number((post.reactions||{})[myReaction]||0):reactionTotal;
+    const reactionPicker=POST_REACTIONS.map(r=>`<button type="button" class="post-reaction-option ${myReaction===r?'active':''}" data-post-react="${esc(r)}" aria-label="React ${esc(r)}">${r}</button>`).join("");
+    const reactionKinds=POST_REACTIONS.map(r=>({r,n:Number((post.reactions||{})[r]||0)})).filter(x=>x.n>0);
+    const reactionKindsTotal=reactionKinds.reduce((sum,x)=>sum+x.n,0);
+    const reactionSummaryHtml=reactionKindsTotal
+      ? `<div class="post-reaction-summary" aria-label="${reactionKindsTotal} reactions"><span class="post-reaction-emojis">${reactionKinds.slice(0,5).map(x=>`<span>${x.r}</span>`).join("")}</span><b>${reactionKindsTotal}</b></div>`
+      : `<div class="post-reaction-summary empty" aria-hidden="true"></div>`;
+    const iconComment=`<svg class="post-action-icon post-action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H8l-4 2v-4.1A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8 11.5h8M8 15h5"/></svg>`;
+    const iconReport=`<svg class="post-action-icon post-action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 21V4"/><path d="M6 5h11l-2.5 3L17 11H6"/></svg>`;
+    const iconRepost=`<svg class="post-action-icon post-action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h10a3 3 0 0 1 3 3v1"/><path d="m16 4 3 3-3 3"/><path d="M18 17H8a3 3 0 0 1-3-3v-1"/><path d="m8 20-3-3 3-3"/></svg>`;
+    const reactButtons=`<div class="post-reaction-picker-wrap" data-reaction-wrap><button type="button" class="post-like-button ${myReaction?'liked':''}" data-post-like aria-label="${myReaction?'Change or remove reaction':'Like post'}"><span class="post-like-icon">${myReaction||"👍"}</span></button><div class="post-reaction-picker" data-post-reaction-picker aria-hidden="true">${reactionPicker}</div></div>`;
     const isOwner = !!author?.username && PF.normalizeUsername(author.username) === PF.normalizeUsername(PF.currentUsername() || "");
-    const ownerActions = isOwner ? `<button type="button" class="post-action post-delete-action" data-post-delete>🗑 Delete</button>` : "";
-    const reportAction = !isOwner ? `<button type="button" class="post-action post-report-action" data-post-report aria-label="Report post">⚑ Report</button>` : "";
-    return `<article class="post-card glass" data-post-id="${esc(post.id)}"><div class="post-main"><div class="post-author">${identityLink(author, profileMini(author), "post-author-avatar-link")}<div class="post-author-copy">${identityLink(author, `<span><b>${esc(author.displayName||author.username||"User")}</b><small>@${esc(author.username||"")}</small></span>`)}</div><span class="post-author-meta">${formatSocialTime(post.created_at)}</span>${ownerActions}</div>${note}<div class="post-content">${esc(post.content||"")}</div>${mediaHtml}<div class="post-reaction-row">${reactButtons}</div><div class="post-actions"><button class="post-action" data-post-comments>💬 ${Number(post.comments_count||0)} Comment</button><button class="post-action ${reposted?'active':''}" data-post-repost>↻ ${Number(post.reposts_count||0)} Repost</button>${reportAction}<span class="post-action" aria-hidden="true">${reposted?'✓ Reposted':''}</span></div></div><div class="post-comments hidden"></div></article>`;
+    const reportAction = !isOwner ? `<button type="button" class="post-action post-report-action" data-post-report aria-label="Report post">${iconReport}</button>` : ``;
+    const actionCells = `${reactButtons ? `<div class="post-like-slot">${reactButtons}</div>` : ``}<button type="button" class="post-action" data-post-comments aria-label="Comments">${iconComment}</button>${reportAction}<button type="button" class="post-action ${reposted?'active':''}" data-post-repost aria-label="Repost">${iconRepost}</button>`;
+    return `<article class="post-card glass" data-post-id="${esc(post.id)}"><div class="post-main"><div class="post-author">${identityLink(author, profileMini(author), "post-author-avatar-link")}<div class="post-author-copy">${identityLink(author, `<span><b>${esc(author.displayName||author.username||"User")}</b><small>@${esc(author.username||"")}</small></span>`)}</div><span class="post-author-meta">${formatSocialTime(post.created_at)}</span></div>${note}<div class="post-content">${esc(post.content||"")}</div>${mediaHtml}<div class="post-engagement"><div class="post-engagement-summary">${reactionSummaryHtml}<div class="post-engagement-counts"><span>${Number(post.comments_count||0)} comments</span><span>${Number(post.reposts_count||0)} reposts</span></div></div><div class="post-actions">${actionCells}</div></div></div><div class="post-comments hidden"></div></article>`;
   }
 
-  async function renderPostComments(card, postId){
-    const box=card.querySelector('.post-comments'); if(!box) return;
-    box.classList.remove('hidden'); box.innerHTML=`<div class="empty-state"><p>Loading comments…</p></div>`;
-    const post=await PF.getPost(postId); const comments=Array.isArray(post?.comments)?post.comments:[];
-    box.innerHTML=`<div class="comment-list">${comments.length?comments.map(c=>`<div class="comment">${identityLink(c.author, profileMini(c.author), "comment-avatar-link")}<div class="comment-bubble">${identityLink(c.author, `<b>${esc(c.author?.displayName||c.author?.username||"User")}</b>`)}<p>${esc(c.content)}</p></div></div>`).join(""): `<div class="message-list-empty">No comments yet. Start the conversation.</div>`}</div><form class="comment-form"><input class="field-input" maxlength="2000" placeholder="Write a comment…" required><button class="btn btn-sm btn-primary">Send</button></form>`;
-    box.querySelector('form')?.addEventListener('submit',async e=>{e.preventDefault();const input=e.currentTarget.querySelector('input');try{await PF.commentPost(postId,input.value);input.value='';await renderPostComments(card,postId);}catch(err){notify(err.message,'error')}});
-  }
+  async function renderPostComments(card, postId){await openPostCommentsModal(postId);}
   function bindPostCard(card, post){
     card.querySelectorAll('[data-post-image]').forEach(btn=>btn.addEventListener('click',e=>{e.preventDefault();openPostImageViewer(btn.dataset.postImage||"");}));
-    card.querySelectorAll('[data-post-react]').forEach(btn=>btn.addEventListener('click',async()=>{if(!PF.currentUsername()){location.href='login.html';return}try{await PF.reactPost(post.id,btn.dataset.postReact);await refreshPostCard(post.id)}catch(e){notify(e.message,'error')}}));
+    const reactionWrap=card.querySelector('[data-reaction-wrap]');
+    const likeBtn=card.querySelector('[data-post-like]');
+    const picker=card.querySelector('[data-post-reaction-picker]');
+    const closePicker=()=>{if(!picker)return;picker.classList.remove('open');picker.setAttribute('aria-hidden','true');picker.style.position='';picker.style.left='';picker.style.right='';picker.style.top='';picker.style.bottom='';picker.style.transform='';picker.style.transformOrigin='';};
+    const positionReactionPicker=()=>{
+      if(!picker || !picker.classList.contains('open')) return;
+      const trigger=likeBtn?.getBoundingClientRect();
+      if(!trigger) return;
+      picker.style.position='fixed';
+      picker.style.left='0px';
+      picker.style.right='auto';
+      picker.style.bottom='auto';
+      picker.style.transform='none';
+      const pr=picker.getBoundingClientRect();
+      const gap=10;
+      const margin=8;
+      const centerX=trigger.left + trigger.width/2;
+      const left=Math.max(margin, Math.min(centerX-pr.width/2, window.innerWidth-pr.width-margin));
+      const top=Math.max(margin, trigger.top-pr.height-gap);
+      picker.style.setProperty('left', `${Math.round(left)}px`, 'important');
+      picker.style.setProperty('top', `${Math.round(top)}px`, 'important');
+      picker.style.setProperty('right', 'auto', 'important');
+      picker.style.setProperty('bottom', 'auto', 'important');
+      picker.style.setProperty('transform', 'scale(1)', 'important');
+      picker.style.setProperty('transform-origin', 'center bottom', 'important');
+    };
+    const openPicker=()=>{
+      if(!picker)return;
+      picker.classList.add('open');
+      picker.setAttribute('aria-hidden','false');
+      requestAnimationFrame(positionReactionPicker);
+    };
+    let pressTimer=null, longPress=false;
+    const clearPress=()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null;}};
+    likeBtn?.addEventListener('pointerdown',()=>{
+      longPress=false;
+      clearPress();
+      pressTimer=setTimeout(()=>{pressTimer=null;longPress=true;openPicker();},430);
+    });
+    ["pointerup","pointercancel","pointerleave"].forEach(type=>likeBtn?.addEventListener(type,clearPress));
+    likeBtn?.addEventListener('contextmenu',e=>{e.preventDefault();openPicker();});
+    window.addEventListener('resize',()=>{
+      if(!picker || !picker.classList.contains('open')) return;
+      positionReactionPicker();
+    });
+    // Keep the picker fixed in the viewport while scrolling; only dismiss it
+    // once the originating Like button has moved sufficiently far off-screen.
+    window.addEventListener('scroll',()=>{
+      if(!picker || !picker.classList.contains('open')) return;
+      const trigger=likeBtn?.getBoundingClientRect();
+      if(!trigger) return;
+      const offscreenMargin=96;
+      if(trigger.bottom < -offscreenMargin || trigger.top > window.innerHeight + offscreenMargin){
+        closePicker();
+      }
+    }, {passive:true});
+    likeBtn?.addEventListener('click',async e=>{
+      if(longPress){longPress=false;return;}
+      if(!PF.currentUsername()){location.href='login.html';return;}
+      closePicker();
+      try{await PF.reactPost(post.id,myReaction||"👍");await refreshPostCard(post.id)}catch(err){notify(err.message,'error')}
+    });
+    card.querySelectorAll('[data-post-react]').forEach(btn=>btn.addEventListener('click',async e=>{
+      e.stopPropagation();
+      if(!PF.currentUsername()){location.href='login.html';return}
+      try{await PF.reactPost(post.id,btn.dataset.postReact);closePicker();await refreshPostCard(post.id)}catch(err){notify(err.message,'error')}
+    }));
+    document.addEventListener('click',e=>{if(reactionWrap&&!reactionWrap.contains(e.target))closePicker();},{once:false});
     card.querySelector('[data-post-comments]')?.addEventListener('click',async()=>{await renderPostComments(card,post.id)});
     card.querySelector('[data-post-repost]')?.addEventListener('click',async()=>{if(!PF.currentUsername()){location.href='login.html';return}try{await PF.repostPost(post.id);await refreshPostCard(post.id)}catch(e){notify(e.message,'error')}});
     card.querySelector('[data-post-report]')?.addEventListener('click',async()=>{

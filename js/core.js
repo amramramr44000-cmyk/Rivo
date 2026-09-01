@@ -58,6 +58,8 @@
     cardStyle: "glass", glow: 45, background: "aurora", animation: "soft",
     socials: [], skills: [], badges: [], projects: [], friends: [],
     friendRequests: { incoming: [], outgoing: [] },
+    following: [],
+    followers: [],
     sections: [
       { id: crypto.randomUUID ? crypto.randomUUID() : "about", type: "about", title: "About Me", visible: true },
       { id: crypto.randomUUID ? crypto.randomUUID() : "friends", type: "friends", title: "Friends", visible: true }
@@ -137,6 +139,7 @@
     const p = structuredClone(row?.public_data || {});
     p.username = row?.username || p.username || "";
     p.createdAt = row?.created_at || p.createdAt;
+    if (row && row.coins_balance != null) p.coinsBalance = Number(row.coins_balance) || 0;
     p.updatedAt = row?.updated_at || p.updatedAt;
     if (includePrivate) {
       const priv = row?.private_data || {};
@@ -305,7 +308,7 @@
     return withAuthedOp("PROFILE_READ", "self", async (session) => {
       for (let attempt = 0; attempt < 4; attempt++) {
         const { data, error } = await sb.from("profiles")
-          .select("id,username,public_data,private_data,created_at,updated_at")
+          .select("id,username,public_data,private_data,coins_balance,created_at,updated_at")
           .eq("id", session.user.id).maybeSingle();
         if (error) throw error;
         if (data) {
@@ -456,7 +459,7 @@
     return withAuthedOp("PROFILE_UPDATE", row.username, async (session) => {
       const { data, error } = await sb.from("profiles")
         .update(payload).eq("id", session.user.id)
-        .select("username,public_data,private_data,created_at,updated_at").single();
+        .select("id,username,public_data,private_data,coins_balance,created_at,updated_at").single();
       if (error) throw error;
       cacheUsername(data.username);
       invalidateProfileCache(data.username);
@@ -621,6 +624,34 @@
       return result;
     });
   }
+  async function cancelFriendRequest(targetUsername) {
+    const u = normalizeUsername(targetUsername);
+    return withInFlightGuard(`FRIEND_REQUEST_CANCEL:${u}`, async () => {
+      const result = await callRpc("rivo_cancel_friend_request", { p_target_username: u }, "FRIEND_REQUEST_CANCEL");
+      invalidateProfileCache(u);
+      return result;
+    });
+  }
+  function isFollowing(targetUsername) {
+    const u = normalizeUsername(targetUsername);
+    return !!u && currentProfileCachedSnapshot().following.includes(u);
+  }
+  function currentProfileCachedSnapshot() {
+    try {
+      const raw = sessionStorage.getItem(CURRENT_PROFILE_CACHE_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      const p = parsed?.v || {};
+      return { following: Array.isArray(p.following) ? p.following : [] };
+    } catch { return { following: [] }; }
+  }
+  async function toggleFollow(targetUsername) {
+    const u = normalizeUsername(targetUsername);
+    return withInFlightGuard(`FOLLOW_TOGGLE:${u}`, async () => {
+      const result = await callRpc("rivo_toggle_follow", { p_target_username: u }, "FOLLOW_TOGGLE");
+      invalidateProfileCache(u);
+      return result;
+    });
+  }
   async function removeFriend(username) {
     const u = normalizeUsername(username);
     return withInFlightGuard(`FRIENDSHIP_REMOVE:${u}`, async () => {
@@ -693,6 +724,18 @@
   }
   async function getMessages(username, limit = 80) {
     return callRpc("rivo_get_messages", { p_other_username: normalizeUsername(username), p_limit: Math.max(1, Math.min(Number(limit) || 80, 200)) });
+  }
+
+  async function getCoinBalance() { return Number(await callRpc("rivo_get_coin_balance", {}, "COIN_BALANCE_READ")) || 0; }
+  async function listStoreItems(type = null) { return callRpc("rivo_list_store_items", { p_type: type || null }, "STORE_LIST"); }
+  async function listMyInventory() { return callRpc("rivo_list_my_inventory", {}, "INVENTORY_LIST"); }
+  async function purchaseStoreItem(itemId) { return withInFlightGuard(`STORE_PURCHASE:${itemId}`, async () => { const result = await callRpc("purchase_store_item", { target_item_id: itemId }, "STORE_PURCHASE"); invalidateProfileCache(currentUsername()); return result; }); }
+  async function transferCoinsByUsername(username, amount) { return withInFlightGuard(`COIN_TRANSFER:${normalizeUsername(username)}:${Number(amount)}`, async () => { const result = await callRpc("transfer_coins_by_username", { target_username: String(username || ""), transfer_amount: Math.floor(Number(amount) || 0) }, "COIN_TRANSFER"); invalidateProfileCache(currentUsername()); return result; }); }
+  async function rewardAdCoins(amount = 15) { return withInFlightGuard("COIN_AD_REWARD", async () => { const result = await callRpc("reward_ad_coins", { reward_amount: Math.floor(Number(amount) || 15) }, "COIN_AD_REWARD"); invalidateProfileCache(currentUsername()); return result; }); }
+  async function equipStoreItem(itemId) { return withInFlightGuard(`STORE_EQUIP:${itemId}`, async () => { const result = await callRpc("equip_store_item", { target_item_id: itemId }, "STORE_EQUIP"); invalidateProfileCache(currentUsername()); return result; }); }
+  async function getEquippedStoreItems(username) {
+    requireClient();
+    return callRpc("rivo_get_public_profile", { p_username: normalizeUsername(username) }, "EQUIPPED_ITEMS_READ").then(p => Array.isArray(p?.equippedStoreItems) ? p.equippedStoreItems : []);
   }
 
   // Live message delivery. Rebuilt to be self-healing: it keeps the Realtime
@@ -1896,11 +1939,11 @@ async function getVoiceUrl(path) {
     defaults, badgeCatalog, templates, getProfile, listProfiles, putProfile: saveProfile, deleteProfile,
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
     updateProfile, saveProfile, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
-    removeFriend, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
+    removeFriend, cancelFriendRequest, toggleFollow, isFollowing, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
     listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, reportPost, repostPost, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
     NAV_I18N, I18N, currentLanguage, translateString, applyI18n, applySavedLanguage
   };
 })();
