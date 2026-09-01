@@ -2454,24 +2454,47 @@ async function initProfile() {
     p.sections = (p.sections || []).filter(s => !["skills", "projects"].includes(s.type));
     const me = PF.currentUsername();
     const isMe = me === p.username;
-    const viewer = !isMe ? await PF.currentProfile() : p;
+
+    // A public profile must never depend on secondary/private requests before
+    // it is rendered. The economy rollout introduced more RPCs/tables, so a
+    // failure in any optional social/economy path used to leave the whole page
+    // stuck on "Loading profile" even though the public profile RPC succeeded.
+    // Render the public card first, then hydrate optional data defensively.
+    const viewer = isMe ? p : await PF.currentProfile().catch(() => null);
     const relationship = isMe ? "self" : PF.friendshipState(viewer, p.username);
-    const friends = (p.friends || []);
-    const friendProfiles = await PF.getProfiles(friends);
-    if (!isMe) await PF.addView(username);
-    p = !isMe ? await PF.getProfile(username, {force:true}) : await PF.currentProfile({force:true});
-    try { p.story = (await PF.getStory(username, { countView:false })) || p.story || null; } catch {}
+    const friends = Array.isArray(p.friends) ? p.friends : [];
+    const friendProfiles = await PF.getProfiles(friends).catch(() => []);
+    if (!isMe) PF.addView(username).catch(() => {});
+
     p.likes ||= {count:0, users:[]};
     p.likes.users ||= [];
     p.likes.count = Number.isFinite(Number(p.likes.count)) ? Math.max(0, Number(p.likes.count)) : p.likes.users.length;
-    let isRivoAdminProfile = false;
-    try { isRivoAdminProfile = await PF.isAdminProfile(p.username); } catch {}
-    root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship }) + `<section class="profile-posts-wrap"><div class="section-head profile-posts-head"><div><div class="section-kicker">POSTS</div><h2>${isMe ? "المنشورات" : "المنشورات"}</h2></div>${isMe ? `<a class="btn btn-sm" href="posts.html">+ New post</a>` : ""}</div><div id="profilePostFeed" class="post-feed"><div class="empty-state glass"><h2>Loading posts…</h2></div></div></section>`;
+
+    // IMPORTANT: do not put profile rendering behind admin/story/post/counter
+    // requests. Those are enhancements, not prerequisites for opening a page.
+    root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship }) + `<section class="profile-posts-wrap"><div class="section-head profile-posts-head"><div><div class="section-kicker">POSTS</div><h2>المنشورات</h2></div>${isMe ? `<a class="btn btn-sm" href="posts.html">+ New post</a>` : ""}</div><div id="profilePostFeed" class="post-feed"><div class="empty-state glass"><h2>Loading posts…</h2></div></div></section>`;
     bindPlayer(root);
-    await bindProfilePresence(p.username);
-    await renderPostFeed($("#profilePostFeed"), p.username, { allowCompose:false }); showAdminProfileIntro(root, isRivoAdminProfile);
+    await bindProfilePresence(p.username).catch(() => {});
     bindProfileActions(p);
     $(`[data-friends-open]`)?.addEventListener("click", () => openFriendsModal(friendProfiles));
+
+    // Refresh volatile public data after the first paint. Failure here must not
+    // blank or block the profile.
+    try {
+      const fresh = !isMe ? await PF.getProfile(username, {force:true}) : await PF.currentProfile({force:true});
+      if (fresh) {
+        try { fresh.story = (await PF.getStory(username, { countView:false })) || p.story || null; } catch {}
+        fresh.likes ||= p.likes;
+        p = fresh;
+      }
+    } catch {}
+
+    let isRivoAdminProfile = false;
+    try { isRivoAdminProfile = await PF.isAdminProfile(p.username); } catch {}
+    showAdminProfileIntro(root, isRivoAdminProfile);
+
+    // Posts are intentionally isolated from the profile card.
+    await renderPostFeed($("#profilePostFeed"), p.username, { allowCompose:false });
   }
 
   async function refreshCurrentProfileView(username) {
