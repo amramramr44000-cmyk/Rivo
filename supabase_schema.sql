@@ -1847,12 +1847,18 @@ declare
   item public.store_items;
 begin
   if uid is null then raise exception 'Not authenticated'; end if;
-  select ui.*, s.* into inv, item
+  -- PostgreSQL/PLpgSQL cannot assign two composite records from one SELECT
+  -- using `select ui.*, s.* into inv, item`. Fetch and lock each row separately.
+  select ui.* into inv
   from public.user_inventory ui
-  join public.store_items s on s.id = ui.item_id
   where ui.user_id = uid and ui.item_id = target_item_id
   for update;
   if inv.id is null then raise exception 'You do not own this item'; end if;
+
+  select s.* into item
+  from public.store_items s
+  where s.id = target_item_id;
+  if item.id is null then raise exception 'Store item not found'; end if;
 
   if item.type in ('frame','avatar','template') then
     update public.user_inventory ui
