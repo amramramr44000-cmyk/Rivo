@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" dir="ltr" translate="no">
+<head>
+  <meta charset="utf-8">
+  <meta name="google" content="notranslate">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#07090e">
+  <link rel="manifest" href="../manifest.webmanifest">
+  <link rel="stylesheet" href="../css/style.css">
+  <title>Community — Rivo</title>
+</head>
+<body class="social-page community-chat-page">
+  <header class="topbar community-chat-topbar">
+    <a class="brand community-back-brand" href="communities.html" aria-label="Back to communities">Rivo</a>
+    <div class="topbar-right">
+      <a class="community-topbar-back" href="communities.html">Communities</a>
+      <button class="icon-btn menu-button" data-menu-toggle aria-expanded="false">☰</button>
+    </div>
+    <nav class="menu-panel" data-menu-panel>
+      <a href="communities.html">Communities</a>
+      <a href="messages.html">Messages</a>
+      <a href="posts.html">Posts</a>
+      <a href="explore.html">Explore</a>
+      <a href="friends.html" class="auth-required hidden">Friends</a>
+      <a href="profile.html" data-profile-link class="auth-required hidden">Profile</a>
+      <a href="settings.html" class="auth-required hidden">Settings</a>
+      <a href="login.html" class="guest-only">Sign in</a>
+    </nav>
+  </header>
+
+  <main class="community-chat-shell">
+    <section id="communityChatApp" class="community-chat-app glass">
+      <div class="community-chat-loading">Loading community…</div>
+    </section>
+  </main>
+
+  <div class="toast-stack"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="../js/supabase-config.js"></script>
+  <script src="../js/core.js?v=20260901-09"></script>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.22.1/dist/livekit-client.umd.min.js"></script>
+  <script src="../js/app.js?v=20260901-09"></script>
+</body>
+</html>
