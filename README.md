@@ -217,4 +217,5 @@ Economy v20: the storefront is intentionally removed from Explore. Cosmetic and 
 
 - Fixed the economy ownership-validation trigger so follow/unfollow and friendship updates do not re-validate unrelated paid badges/cosmetics.
 - Validation now targets `NEW.id`, which is correct for `SECURITY DEFINER` social RPCs that update another profile row.
-- Added `supabase_social_economy_trigger_fix.sql` as a standalone migration for an already-running Supabase project.
+- Added `supabase_social_economy_trigger_fix.sql
+- `supabase_social_economy_guard_fix_v2.sql` (recommended final social/economy interoperability fix)` as a standalone migration for an already-running Supabase project.

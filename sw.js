@@ -1,4 +1,4 @@
-const CACHE = "rivo-shell-v22";
+const CACHE = "rivo-shell-v24";
 const ASSETS = [
   "./", "./index.html", "./css/style.css", "./js/core.js", "./js/app.js", "./js/supabase-config.js",
   "./pages/login.html", "./pages/signup.html", "./pages/profile.html", "./pages/explore.html", "./pages/friends.html", "./pages/messages.html", "./pages/posts.html", "./pages/communities.html", "./pages/editor.html", "./pages/settings.html", "./pages/admin.html",
@@ -19,13 +19,17 @@ self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
   if (url.origin !== location.origin) return;
+  const isCodeOrPage = /\.(?:js|html)$/i.test(url.pathname);
   event.respondWith(
-    caches.match(event.request).then(cached =>
-      cached || fetch(event.request).then(res => {
-        const copy = res.clone();
-        caches.open(CACHE).then(c => c.put(event.request, copy)).catch(() => {});
-        return res;
-      }).catch(() => caches.match("./index.html"))
-    )
+    (isCodeOrPage ? fetch(event.request, { cache: "no-store" }) : caches.match(event.request))
+      .then(res => {
+        if (res) {
+          const copy = res.clone();
+          caches.open(CACHE).then(c => c.put(event.request, copy)).catch(() => {});
+          return res;
+        }
+        return fetch(event.request);
+      })
+      .catch(() => caches.match(event.request).then(cached => cached || caches.match("./index.html")))
   );
 });
