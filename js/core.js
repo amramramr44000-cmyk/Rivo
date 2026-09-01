@@ -589,11 +589,21 @@
     // public.profiles while signed out. RLS correctly blocks that query for
     // guests, which was the cause of the post-logout "correct password" bug.
     const syntheticEmail = `${u}@users.rivo.app`;
+    // Resolve the account's actual Auth email server-side before signing in.
+    // This keeps login working for older accounts and for usernames changed
+    // after signup, where profiles.username may no longer match auth.users.email.
+    let authEmail = syntheticEmail;
+    try {
+      const { data: resolvedEmail, error: resolveError } = await sb.rpc("rivo_get_login_email", { p_username: u });
+      if (!resolveError && typeof resolvedEmail === "string" && resolvedEmail.trim()) {
+        authEmail = resolvedEmail.trim();
+      }
+    } catch {}
     const signInOptions = {};
     cacheDelete(CURRENT_PROFILE_CACHE_KEY);
     cacheUsername("");
     const { data, error } = await sb.auth.signInWithPassword({
-      email: syntheticEmail,
+      email: authEmail,
       password: passwordValue,
       options: signInOptions
     });
