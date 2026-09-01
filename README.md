@@ -224,3 +224,49 @@ Economy v20: the storefront is intentionally removed from Explore. Cosmetic and 
 ## Final social/economy desktop fix
 
 After applying `supabase_schema.sql` and `supabase_economy.sql`, run `supabase_desktop_social_economy_final_fix.sql` once in Supabase SQL Editor. This final migration replaces the friend-request RPCs with transaction-local trusted writes so the legacy profile guard cannot return a false `Access denied` for legitimate friend actions.
+
+## Communities V2 — creation fee, moderation and voice rooms
+
+The Communities V2 update keeps the existing community/chat APIs compatible while adding a server-side **10,000 coin creation fee**, community roles (`owner`, `moderator`, `member`), owner-controlled voice-start permissions (`everyone`, `moderators`, `owner`), and persistent LiveKit-backed community voice rooms.
+
+Run `supabase_communities_v2.sql` after the current schema/economy setup (the same migration is also appended to the end of `supabase_schema.sql`). Deploy `supabase/functions/rivo-livekit-token/index.ts` so community room tokens are checked server-side against active membership.
+
+The community list now opens a dedicated `pages/community.html` full-screen chat page. On phones the chat uses the full viewport with a members drawer; the old inline room remains only as a compatibility shell and is no longer used by the new list flow.
+
+## Communities V3 voice polish
+- Compact voice icon in the community header with live/connected state.
+- Discord-style ringing prompt when a community voice room starts.
+- In-chat mini voice panel showing participants, mute state, active speaker, join/leave events, and leave/mute controls.
+- LiveKit audio playback handling and clearer connection/permission errors.
+- Explicit owner/moderator/member permission presentation; server-side moderator/kick/voice eligibility remains enforced.
+
+## Communities V4 update
+
+The current ZIP includes the Communities V4 patch:
+- Community capacity is enforced server-side at 50 members.
+- Community voice rooms are capped server-side at 5 participants through LiveKit room configuration.
+- Owner/moderator member actions are available from the member row: role management, voice mute/unmute, and removal.
+- Voice mute state is persisted in Supabase and enforced again when a muted member tries to rejoin.
+- Voice moderation is performed by the `rivo-livekit-token` Edge Function; LiveKit API secrets remain server-side.
+- The community voice UI is compact on desktop and mobile, with a call/ringing icon in the community header, a join panel, per-person speaker mute and microphone status, and clear join/leave notifications.
+
+Run `supabase_communities_v4_voice_moderation_limits.sql` after the previous community migrations. The same V4 SQL is appended to `supabase_schema.sql` for complete installs.
+
+After deployment, redeploy the Edge Function:
+
+`supabase functions deploy rivo-livekit-token`
+
+The function requires the existing `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` secrets.
+
+
+## Communities V5 voice reliability
+- Added automatic empty-room cleanup after the LiveKit room reaches zero participants.
+- Fixed moderator unmute so published audio tracks are actually unmuted.
+- Added an in-call compact community chat composer.
+- Improved remote audio subscription/attachment and local microphone controls.
+- Run `supabase_communities_v5_voice_reliability.sql` after the V4 community migration.
+- Redeploy `supabase/functions/rivo-livekit-token`.
+
+
+## Communities Voice V6
+Run `supabase_communities_v6_mobile_voice_security.sql` after the Communities V5 migration (or use the updated complete `supabase_schema.sql`). It hardens join-request/member visibility, makes empty-room cleanup server-only, and supports the mobile Voice audio unlock flow in the frontend.
