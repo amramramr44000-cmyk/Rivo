@@ -2083,9 +2083,11 @@ begin
   if (new_data ? 'accent') and coalesce(new_data->>'accent','#7488ff') <> coalesce(old_data->>'accent','#7488ff')
      and coalesce(new_data->>'accent','#7488ff') <> '#7488ff'
      and not public.rivo_inventory_owned_by_name(uid,'Feature · Custom Accent') then raise exception 'Custom accent feature is not owned'; end if;
-  if (new_data ? 'cardRadius') and coalesce((new_data->>'cardRadius')::numeric,22) <> coalesce((old_data->>'cardRadius')::numeric,22)
+  if TG_OP = 'UPDATE' and new_data ? 'cardRadius'
+     and coalesce((new_data->>'cardRadius')::numeric,24) <> coalesce((old_data->>'cardRadius')::numeric,24)
      and not public.rivo_inventory_owned_by_name(uid,'Feature · Radius Control') then raise exception 'Radius control feature is not owned'; end if;
-  if (new_data ? 'glow') and coalesce((new_data->>'glow')::numeric,40) <> coalesce((old_data->>'glow')::numeric,40)
+  if TG_OP = 'UPDATE' and new_data ? 'glow'
+     and coalesce((new_data->>'glow')::numeric,45) <> coalesce((old_data->>'glow')::numeric,45)
      and not public.rivo_inventory_owned_by_name(uid,'Feature · Glow Control') then raise exception 'Glow control feature is not owned'; end if;
   if jsonb_array_length(coalesce(new_data->'socials','[]'::jsonb)) > 0
      and jsonb_array_length(coalesce(old_data->'socials','[]'::jsonb)) = 0

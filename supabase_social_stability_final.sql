@@ -287,3 +287,48 @@ revoke all on function public.rivo_get_public_profile(text) from public;
 grant execute on function public.rivo_get_public_profile(text) to anon, authenticated;
 
 select 'Rivo social stability final migration installed' as status;
+
+
+-- ---------------------------------------------------------------------------
+-- FINAL FOLLOWER CONSISTENCY RECONCILIATION
+-- ---------------------------------------------------------------------------
+-- Rebuild each profile's cached followers array from the canonical following graph.
+-- Run once after installing this migration; safe to repeat.
+create or replace function public.rivo_reconcile_follower_caches()
+returns integer
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  changed integer := 0;
+  r public.profiles;
+  names jsonb;
+begin
+  if auth.uid() is null then raise exception 'Not signed in'; end if;
+  if not public.rivo_is_admin(auth.uid()) then
+    raise exception 'Access denied';
+  end if;
+
+  for r in select * from public.profiles loop
+    select coalesce(jsonb_agg(p.username order by p.username),'[]'::jsonb)
+      into names
+    from public.profiles p
+    where coalesce(p.public_data->'following','[]'::jsonb) ? r.username;
+
+    if coalesce(r.public_data->'followers','[]'::jsonb) is distinct from names then
+      perform set_config('rivo.internal_profile_save','on',true);
+      update public.profiles
+      set public_data=jsonb_set(coalesce(public_data,'{}'::jsonb),'{followers}',names,true),
+          updated_at=now()
+      where id=r.id;
+      changed := changed + 1;
+    end if;
+  end loop;
+  return changed;
+end;
+$$;
+revoke all on function public.rivo_reconcile_follower_caches() from public;
+grant execute on function public.rivo_reconcile_follower_caches() to authenticated;
+
+select 'Rivo final signup radius + follower consistency fixes installed' as status;
