@@ -3120,6 +3120,13 @@ body.profile-avatar-viewer-open{overflow:hidden!important}
   .profile-stats > div > span{line-height:1.05;}
 }
 
+/* v22: explicit reward-video CTA; the actual video opens in the modal after click. */
+.reward-video-button{min-height:54px;display:flex;align-items:center;justify-content:center;gap:10px;position:relative;overflow:hidden;cursor:pointer}
+.reward-video-button:disabled{opacity:.68;cursor:wait}
+.reward-video-icon{font-size:15px;line-height:1}
+.reward-video-button .reward-video-cta{position:static;font-size:11px;letter-spacing:.01em}
+.reward-video-button .reward-video-cta b{font-weight:850}
+
 /* Rivo economy UI */
 .economy-card h2{margin-bottom:10px}
 .coin-balance-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px;margin:10px 0;border:1px solid var(--border);border-radius:16px;background:linear-gradient(135deg,rgba(255,255,255,.045),rgba(255,255,255,.015))}
