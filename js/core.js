@@ -1101,6 +1101,7 @@
     "Home":"الرئيسية","Posts":"المنشورات","Communities":"المجتمعات","Explore":"استكشاف","Search":"بحث",
     "Messages":"الرسائل","Friends":"الأصدقاء","Profile":"الملف الشخصي","Editor":"المحرر","Edit profile":"تعديل الملف الشخصي",
     "Settings":"الإعدادات","Sign in":"تسجيل الدخول","Sign out":"تسجيل الخروج","Create profile":"إنشاء حساب",
+    "Contact support":"تواصل مع الدعم","Rivo Support":"دعم Rivo","Get help from the Rivo support team.":"احصل على المساعدة من فريق دعم Rivo.","Open support website":"فتح موقع الدعم",
     "Create your profile":"أنشئ ملفك الشخصي","Create my profile":"إنشاء ملفي الشخصي","Already have a profile?":"لديك ملف شخصي بالفعل؟",
     "New here?":"جديد هنا؟","Verify":"تحقق","Verified":"تم التحقق","Save":"حفظ","Send":"إرسال","Cancel":"إلغاء",
     "Upload":"رفع","Edit":"تعديل","Delete":"حذف","Remove":"إزالة","Accept":"قبول","Decline":"رفض","View":"عرض",
