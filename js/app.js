@@ -2181,14 +2181,23 @@
     return `linear-gradient(115deg, color-mix(in srgb, var(--accent) 38%, #090b10), #0a0d13 72%)`;
   }
 
-  function badgePills(p, limit = 3) {
+  function badgePills(p, limit = 3, compact = false) {
     const list = (p.badges || []).slice(0, limit).map(id => PF.badgeCatalog.find(x => x.id === id)).filter(Boolean);
-    return list.map(b => `<span class="badge-pill" title="${esc(b.name)}"><span>${esc(b.icon)}</span>${esc(b.name)}</span>`).join("");
+    return list.map(b => compact
+      ? `<button type="button" class="badge-pill badge-compact-toggle" data-badge-label="${esc(b.name)}" title="${esc(b.name)}" aria-label="${esc(b.name)}"><span>${esc(b.icon)}</span><span class="badge-pop-label" aria-hidden="true">${esc(b.name)}</span></button>`
+      : `<span class="badge-pill" title="${esc(b.name)}"><span>${esc(b.icon)}</span>${esc(b.name)}</span>`
+    ).join("");
   }
 
-  function storeBadgePills(p, limit = 4) {
+  function storeBadgePills(p, limit = 4, compact = false) {
     const list = (Array.isArray(p?.equippedStoreItems) ? p.equippedStoreItems : []).filter(x => x?.type === "badge").slice(0, limit);
-    return list.map(b => { const icon = b.image_url ? `<img src="${esc(b.image_url)}" alt="">` : `<span>✦</span>`; return `<span class="badge-pill store-badge-pill" title="${esc(b.name || "Store badge")}">${icon}${esc(b.name || "Badge")}</span>`; }).join("");
+    return list.map(b => {
+      const label = b.name || "Store badge";
+      const icon = b.image_url ? `<img src="${esc(b.image_url)}" alt="">` : `<span>✦</span>`;
+      return compact
+        ? `<button type="button" class="badge-pill store-badge-pill badge-compact-toggle" data-badge-label="${esc(label)}" title="${esc(label)}" aria-label="${esc(label)}">${icon}<span class="badge-pop-label" aria-hidden="true">${esc(label)}</span></button>`
+        : `<span class="badge-pill store-badge-pill" title="${esc(label)}">${icon}${esc(label)}</span>`;
+    }).join("");
   }
   function storeFrameOverlay(p) {
     const frame = (Array.isArray(p?.equippedStoreItems) ? p.equippedStoreItems : []).find(x => x?.type === "frame");
@@ -2228,7 +2237,7 @@
     const views = displayViews(p.stats?.views);
     const friends = Array.isArray(p.friends) ? p.friends : [];
     const more = Math.max(0, friends.length - 5);
-    const badges = `${badgePills(p)}${storeBadgePills(p)}`;
+    const badges = `${badgePills(p, 3, true)}${storeBadgePills(p, 4, true)}`;
     const likedBy = p.likes?.users || [];
     const meUsername = PF.currentUsername();
     const liked = !!meUsername && likedBy.includes(meUsername);
@@ -2319,19 +2328,29 @@
         ? `<div class="profile-mini-standalone profile-owner-likes-only">${ownerLikesBadge}</div>`
         : "";
 
-    return `<article class="profile-card template-card">
+    return `<article class="profile-card template-card${isMe ? "" : " profile-card-other"}">
       <div class="profile-banner">${banner}</div>
       <div class="profile-content">
         <div class="profile-head">
           <div class="profile-avatar-wrap">
-            <button type="button" class="profile-avatar-button ${p.story?.active ? "has-story" : "story-empty"}" data-story-user="${esc(p.username)}" data-story-active="${p.story?.active ? "1" : "0"}" data-story-own="${isMe ? "1" : "0"}" aria-label="${p.story?.active ? "View story" : isMe ? "Add a story" : "Profile avatar"}">${p.story?.active ? `<span class="story-ring-frame" aria-hidden="true"></span>` : ""}<span class="profile-avatar ${frame}">${p.avatar ? `<img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}">` : esc(initials(p))}${storeFrameOverlay(p)}</span>${isMe && !p.story?.active ? `<b class="story-add-dot profile-story-plus" aria-hidden="true">+</b>` : ""}</button>
-            <div class="profile-presence" data-profile-presence="${esc(p.username)}" aria-label="${esc(PF.translateString("Offline"))}" title="${esc(PF.translateString("Offline"))}"><span class="status-dot offline"></span><span>${esc(PF.translateString("Offline"))}</span></div>
+            <button type="button" class="profile-avatar-button ${p.story?.active ? "has-story" : "story-empty"}" data-story-user="${esc(p.username)}" data-story-active="${p.story?.active ? "1" : "0"}" data-story-own="${isMe ? "1" : "0"}" aria-label="${p.story?.active ? "View story" : isMe ? "Add a story" : "Profile avatar"}">${p.story?.active ? `<span class="story-ring-frame" aria-hidden="true"></span>` : ""}<span class="profile-avatar ${frame}">${p.avatar ? `<img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}">` : esc(initials(p))}${storeFrameOverlay(p)}</span></button>
+            ${isMe
+              ? `<button type="button" class="profile-status-add" data-profile-status-add aria-label="إضافة حالة" title="إضافة حالة"><span aria-hidden="true">+</span><span class="profile-status-add-label">إضافة حالة</span></button>`
+              : `<div class="profile-presence profile-presence-dot" data-profile-presence="${esc(p.username)}" aria-label="${esc(PF.translateString("Offline"))}" title="${esc(PF.translateString("Offline"))}" role="img"><span class="status-dot offline" aria-hidden="true"></span></div>`}
           </div>
           <div class="profile-identity">
-            <h1>${esc(p.displayName || p.username)}</h1>
-            <div class="profile-username profile-username-meta"><span>@${esc(p.username)}</span>${p.createdAt ? `<span class="account-since" title="Account age">${esc(formatAccountSince(p.createdAt))}</span>` : ""}</div>
+            <div class="profile-identity-top">
+              <h1>${esc(p.displayName || p.username)}</h1>
+              <div class="profile-username profile-username-meta"><span>@${esc(p.username)}</span>${p.createdAt ? `<span class="account-since" title="تاريخ الدخول">${esc(formatLoginDate(p.createdAt))}</span>` : ""}</div>
+            </div>
+            <div class="profile-meta-compact">
+              <div class="profile-coin-balance" aria-label="${Number.isFinite(Number(p.coinsBalance)) ? Number(p.coinsBalance).toLocaleString() : "0"} coins" title="${Number.isFinite(Number(p.coinsBalance)) ? Number(p.coinsBalance).toLocaleString() : "0"}">
+                <span class="profile-coin-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="12" r="8.5"></circle><path d="M9 9.1c.7-1 1.8-1.5 3.1-1.5 1.7 0 2.9.8 2.9 2 0 1.4-1.4 1.9-3 2.1-1.7.2-3 1-3 2.3 0 1.2 1.2 2 3 2 1.3 0 2.5-.5 3.2-1.5"/><path d="M12 5.4v13.2"/></svg></span>
+                <b>${Number.isFinite(Number(p.coinsBalance)) ? Number(p.coinsBalance).toLocaleString() : "0"}</b>
+              </div>
+              <div class="badges-inline profile-badges-compact">${badges}</div>
+            </div>
             <p>${esc(p.bio || "")}</p>
-            <div class="badges-inline">${badges}</div>
           </div>
           ${friendActionWrap}
         </div>
@@ -2347,23 +2366,13 @@
     </article>`;
   }
 
-  function formatAccountSince(value) {
+  function formatLoginDate(value) {
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return "";
-    const now = new Date();
-    let years = now.getFullYear() - d.getFullYear();
-    let months = years * 12 + (now.getMonth() - d.getMonth());
-    if (now.getDate() < d.getDate()) months -= 1;
-    months = Math.max(0, months);
-    if (months >= 12) {
-      const y = Math.floor(months / 12);
-      return y === 1 ? "منذ سنة" : `منذ ${y} سنوات`;
-    }
-    if (months >= 1) {
-      return months === 1 ? "منذ شهر" : `منذ ${months} أشهر`;
-    }
-    const days = Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
-    return days <= 1 ? "منذ يوم" : `منذ ${days} يوم`;
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const year = d.getFullYear();
+    return `تاريخ الدخول ${day}/${month}/${year}`;
   }
 
   function showAdminProfileIntro(root, enabled) {
@@ -2407,12 +2416,10 @@
       el.classList.toggle('offline', !online);
       el.classList.toggle('online', online);
       const dot = el.querySelector('.status-dot');
-      const label = el.querySelector(':scope > span:last-child');
       const sourceLabel = online ? 'Online' : 'Offline';
       const translatedLabel = PF.translateString(sourceLabel);
       dot?.classList.toggle('online', online);
       dot?.classList.toggle('offline', !online);
-      if (label) label.textContent = translatedLabel;
       el.setAttribute('aria-label', translatedLabel);
       el.setAttribute('title', translatedLabel);
     };
@@ -2475,7 +2482,7 @@ async function initProfile() {
     // requests. Those are enhancements, not prerequisites for opening a page.
     root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship }) + `<section class="profile-posts-wrap"><div class="section-head profile-posts-head"><div><div class="section-kicker">POSTS</div><h2>المنشورات</h2></div>${isMe ? `<a class="btn btn-sm" href="posts.html">+ New post</a>` : ""}</div><div id="profilePostFeed" class="post-feed"><div class="empty-state glass"><h2>Loading posts…</h2></div></div></section>`;
     bindPlayer(root);
-    await bindProfilePresence(p.username).catch(() => {});
+    if (!isMe) await bindProfilePresence(p.username).catch(() => {});
     bindProfileActions(p);
     $(`[data-friends-open]`)?.addEventListener("click", () => openFriendsModal(friendProfiles));
 
@@ -2509,13 +2516,53 @@ async function initProfile() {
     const isMe = PF.currentUsername() === p.username;
     root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship: isMe ? "self" : rel }) + `<section class="profile-posts-wrap"><div class="section-head profile-posts-head"><div><div class="section-kicker">POSTS</div><h2>${isMe ? "المنشورات" : "المنشورات"}</h2></div>${isMe ? `<a class="btn btn-sm" href="posts.html">+ New post</a>` : ""}</div><div id="profilePostFeed" class="post-feed"></div></section>`;
     bindPlayer(root);
-    await bindProfilePresence(p.username);
-    await renderPostFeed($("#profilePostFeed"), p.username, { allowCompose:false });
+    if (!isMe) await bindProfilePresence(p.username);
     await bindProfileActions(p);
+    await renderPostFeed($("#profilePostFeed"), p.username, { allowCompose:false });
     $("[data-friends-open]")?.addEventListener("click", () => openFriendsModal(friendProfiles));
   }
 
   async function bindProfileActions(profile) {
+    // Compact badge interaction: tap/click an icon to reveal its name below it,
+    // then hide it automatically so the profile stays space-efficient.
+    $$(".profile-badges-compact .badge-compact-toggle").forEach(button => {
+      if (button.dataset.bound === "1") return;
+      button.dataset.bound = "1";
+      let timer = null;
+      const reveal = () => {
+        $$(".profile-badges-compact .badge-compact-toggle.is-revealed").forEach(other => {
+          if (other !== button) other.classList.remove("is-revealed");
+        });
+        button.classList.add("is-revealed");
+        clearTimeout(timer);
+        timer = setTimeout(() => button.classList.remove("is-revealed"), 2200);
+      };
+      button.addEventListener("click", reveal);
+      button.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); reveal(); } });
+    });
+
+    const statusAdd = $("[data-profile-status-add]");
+    if (statusAdd && statusAdd.dataset.bound !== "1") {
+      statusAdd.dataset.bound = "1";
+      statusAdd.addEventListener("click", async () => {
+        const current = String(profile.customStatus || "").trim();
+        const value = window.prompt("اكتب حالتك الحالية", current);
+        if (value === null) return;
+        const next = value.trim().slice(0, 80);
+        try {
+          statusAdd.disabled = true;
+          await PF.updateProfile({ customStatus: next });
+          profile.customStatus = next;
+          notify(next ? "تم تحديث الحالة" : "تمت إزالة الحالة", "success");
+          statusAdd.title = next || "إضافة حالة";
+        } catch (err) {
+          notify(err?.message || "تعذر تحديث الحالة", "error");
+        } finally {
+          statusAdd.disabled = false;
+        }
+      });
+    }
+
     const relationshipToggle = $("[data-relationship-toggle]");
     const relationshipPopover = $("[data-relationship-popover]");
 
