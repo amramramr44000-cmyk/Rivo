@@ -2772,6 +2772,32 @@ body,main,.container,.messages-shell,.messages-layout{max-width:100%;overflow-x:
   .editor-page .editor-actions .btn{flex:1;max-width:220px;min-height:44px!important;height:44px!important;font-size:12px!important}
 }
 @media(min-width:761px){.rivo-mobile-bottom-nav{display:none!important}}
+/* Desktop topbar: use one overflow menu instead of repeating destinations. */
+@media(min-width:761px){
+  .desktop-nav{display:none!important;}
+  .menu-button{display:grid!important;place-items:center;width:40px;height:40px;}
+  .menu-panel{
+    top:66px;
+    inset-inline-start:auto;
+    inset-inline-end:8px;
+    width:min(260px,calc(100vw - 32px));
+    max-height:min(70vh,520px);
+    overflow:auto;
+  }
+  .topbar{
+    transition:transform .28s cubic-bezier(.22,.61,.36,1),opacity .22s ease,filter .22s ease;
+    will-change:transform,opacity;
+  }
+  .topbar.desktop-nav-hidden{
+    transform:translateY(calc(-100% - 18px));
+    opacity:0;
+    pointer-events:none;
+  }
+  .topbar.topbar-overlay.desktop-nav-hidden{
+    transform:translate(-50%,calc(-100% - 18px));
+  }
+}
+
 
 
 /* Rivo Arabic UI: translate text without mirroring the visual layout. */
@@ -4398,4 +4424,853 @@ body.video-reward-open{overflow:hidden;}
   .profile-card .profile-identity-top{
     transform:translateX(-52px)!important;
   }
+}
+
+/* FINAL DESKTOP PROFILE IDENTITY STABILITY FIX
+   Keep name / username / account date in the identity column beside the avatar.
+   Do not pull the identity into the avatar area; handle long account data safely. */
+@media (min-width:761px){
+  .profile-card .profile-identity-top{
+    grid-column:2!important;
+    grid-row:1!important;
+    min-width:0!important;
+    max-width:100%!important;
+    width:100%!important;
+    align-self:start!important;
+    transform:none!important;
+  }
+
+  .profile-card .profile-identity-top h1{
+    min-width:0!important;
+    max-width:100%!important;
+    overflow:hidden!important;
+    text-overflow:ellipsis!important;
+    white-space:nowrap!important;
+  }
+
+  .profile-card .profile-identity-top .profile-username-meta{
+    min-width:0!important;
+    max-width:100%!important;
+    overflow:hidden!important;
+    flex-wrap:nowrap!important;
+  }
+
+  .profile-card .profile-identity-top .profile-username-meta > span:first-child{
+    min-width:0!important;
+    overflow:hidden!important;
+    text-overflow:ellipsis!important;
+    white-space:nowrap!important;
+  }
+
+  .profile-card .profile-identity-top .profile-username-meta .account-since{
+    flex:0 0 auto!important;
+    white-space:nowrap!important;
+  }
+}
+
+/* Rivo desktop profile identity lock — keep avatar and identity physically docked.
+   This is a desktop-only stabilization layer; mobile layout is untouched. */
+@media (min-width:761px){
+  .profile-card .profile-head{
+    position:relative!important;
+    display:grid!important;
+    grid-template-columns:108px minmax(0,1fr) auto!important;
+    grid-template-rows:auto auto auto!important;
+    column-gap:18px!important;
+    row-gap:0!important;
+    align-items:start!important;
+  }
+
+  /* Fixed avatar track: every desktop profile starts from the same physical point. */
+  .profile-card .profile-avatar-wrap{
+    grid-column:1!important;
+    grid-row:1!important;
+    width:108px!important;
+    min-width:108px!important;
+    max-width:108px!important;
+    height:108px!important;
+    min-height:108px!important;
+    max-height:108px!important;
+    margin-top:-54px!important;
+    justify-self:start!important;
+  }
+
+  /* Undo the old display:contents trick. The identity itself owns column 2,
+     so profile data can never be auto-placed differently between accounts. */
+  .profile-card .profile-identity{
+    display:block!important;
+    grid-column:2!important;
+    grid-row:1!important;
+    min-width:0!important;
+    width:100%!important;
+    max-width:100%!important;
+    padding-top:2px!important;
+    align-self:start!important;
+  }
+
+  .profile-card .profile-identity-top{
+    display:block!important;
+    position:static!important;
+    width:100%!important;
+    min-width:0!important;
+    max-width:100%!important;
+    margin:0!important;
+    padding:0!important;
+    transform:none!important;
+  }
+
+  .profile-card .profile-identity-top h1{
+    display:block!important;
+    width:100%!important;
+    max-width:100%!important;
+    min-width:0!important;
+    margin:0!important;
+    padding:0!important;
+    overflow:hidden!important;
+    text-overflow:ellipsis!important;
+    white-space:nowrap!important;
+  }
+
+  .profile-card .profile-identity-top .profile-username-meta{
+    width:100%!important;
+    max-width:100%!important;
+    min-width:0!important;
+    margin-top:3px!important;
+    position:static!important;
+  }
+
+  .profile-card .profile-identity-top .profile-username-meta > span:first-child{
+    min-width:0!important;
+    max-width:100%!important;
+    overflow:hidden!important;
+    text-overflow:ellipsis!important;
+    white-space:nowrap!important;
+  }
+
+  .profile-card .profile-identity-top .profile-username-meta .account-since{
+    flex:0 0 auto!important;
+    white-space:nowrap!important;
+    position:static!important;
+    top:auto!important;
+  }
+
+  /* Keep coins/badges in their existing desktop location directly beneath the avatar. */
+  .profile-card .profile-identity .profile-meta-compact{
+    display:flex!important;
+    grid-column:1!important;
+    grid-row:2!important;
+    margin:10px 0 0!important;
+    width:max-content!important;
+    max-width:108px!important;
+    min-width:0!important;
+    position:absolute!important;
+    inset-inline-start:0!important;
+    top:calc(108px - 54px + 10px)!important;
+    transform:none!important;
+    flex-wrap:nowrap!important;
+    align-items:center!important;
+    gap:7px!important;
+    overflow:visible!important;
+    z-index:20!important;
+  }
+
+  /* The bio stays below the header and never influences identity positioning. */
+  .profile-card .profile-identity > p{
+    grid-column:1 / -1!important;
+    grid-row:3!important;
+    width:min(100%,620px)!important;
+    max-width:100%!important;
+    margin:118px 0 0!important;
+    position:relative!important;
+    inset-inline-start:auto!important;
+    transform:none!important;
+  }
+
+  .profile-card .profile-head-actions{
+    grid-column:3!important;
+    grid-row:1!important;
+    align-self:start!important;
+    justify-self:end!important;
+    min-width:0!important;
+  }
+}
+
+/* FINAL PROFILE DOCKING FIX v2
+   Desktop: avatar / identity / actions use fixed grid tracks.
+   Mobile: identity remains beside avatar exactly as before.
+   The coin row and bio keep their existing content and styling. */
+@media (min-width:761px){
+  .profile-card .profile-head{
+    display:grid!important;
+    grid-template-columns:108px minmax(0,1fr) auto!important;
+    grid-template-rows:auto auto auto!important;
+    column-gap:18px!important;
+    row-gap:0!important;
+    align-items:start!important;
+    position:relative!important;
+  }
+  .profile-card .profile-avatar-wrap{
+    grid-column:1!important;
+    grid-row:1!important;
+    margin-top:-54px!important;
+    width:108px!important;
+    min-width:108px!important;
+    max-width:108px!important;
+    height:108px!important;
+    min-height:108px!important;
+    max-height:108px!important;
+    justify-self:start!important;
+  }
+  .profile-card .profile-identity{
+    display:block!important;
+    grid-column:2!important;
+    grid-row:1!important;
+    min-width:0!important;
+    width:100%!important;
+    max-width:100%!important;
+    padding:2px 0 0!important;
+    margin:0!important;
+    position:static!important;
+    z-index:auto!important;
+  }
+  .profile-card .profile-identity-top{
+    display:block!important;
+    width:100%!important;
+    min-width:0!important;
+    max-width:100%!important;
+    margin:0!important;
+    padding:0!important;
+    position:static!important;
+    transform:none!important;
+  }
+  .profile-card .profile-identity-top h1{
+    width:100%!important;
+    min-width:0!important;
+    max-width:100%!important;
+    margin:0!important;
+    overflow:hidden!important;
+    text-overflow:ellipsis!important;
+    white-space:nowrap!important;
+  }
+  .profile-card .profile-identity-top .profile-username-meta{
+    width:100%!important;
+    min-width:0!important;
+    max-width:100%!important;
+    margin-top:3px!important;
+    overflow:hidden!important;
+    flex-wrap:nowrap!important;
+    position:static!important;
+  }
+  .profile-card .profile-identity-top .profile-username-meta > span:first-child{
+    min-width:0!important;
+    overflow:hidden!important;
+    text-overflow:ellipsis!important;
+    white-space:nowrap!important;
+  }
+  .profile-card .profile-identity-top .profile-username-meta .account-since{
+    flex:0 0 auto!important;
+    position:static!important;
+    top:auto!important;
+    white-space:nowrap!important;
+  }
+  .profile-card .profile-meta-compact{
+    grid-column:1!important;
+    grid-row:2!important;
+    justify-self:start!important;
+    align-self:start!important;
+    display:flex!important;
+    align-items:center!important;
+    flex-wrap:nowrap!important;
+    gap:9px!important;
+    width:max-content!important;
+    max-width:108px!important;
+    min-width:0!important;
+    margin:10px 0 0!important;
+    padding:0!important;
+    position:static!important;
+    transform:none!important;
+    overflow:visible!important;
+  }
+  .profile-card .profile-meta-compact .profile-coin-balance{
+    flex:0 0 auto!important;
+  }
+  .profile-card .profile-meta-compact .profile-badges-compact{
+    flex:0 0 auto!important;
+  }
+  .profile-card .profile-bio-main{
+    grid-column:1 / -1!important;
+    grid-row:3!important;
+    justify-self:start!important;
+    width:min(100%,620px)!important;
+    max-width:100%!important;
+    margin:9px 0 0!important;
+    position:static!important;
+    transform:none!important;
+  }
+  .profile-card .profile-head-actions{
+    grid-column:3!important;
+    grid-row:1!important;
+    align-self:start!important;
+    justify-self:end!important;
+    min-width:0!important;
+  }
+}
+
+@media (max-width:760px){
+  /* Keep the exact mobile proportions; only make the now-direct siblings
+     participate in the same two-column profile header. */
+  .profile-card .profile-head{
+    grid-template-columns:78px minmax(0,1fr)!important;
+    grid-template-rows:auto auto auto auto!important;
+    column-gap:9px!important;
+    row-gap:0!important;
+    align-items:start!important;
+  }
+  .profile-card .profile-avatar-wrap{
+    grid-column:1!important;
+    grid-row:1!important;
+  }
+  .profile-card .profile-identity{
+    grid-column:2!important;
+    grid-row:1!important;
+    display:block!important;
+    min-width:0!important;
+    width:100%!important;
+    max-width:100%!important;
+    padding:0!important;
+    margin:0!important;
+  }
+  .profile-card .profile-identity-top{
+    width:100%!important;
+    min-width:0!important;
+    max-width:100%!important;
+    margin:0!important;
+    padding:0!important;
+    transform:none!important;
+  }
+  .profile-card .profile-meta-compact{
+    grid-column:2!important;
+    grid-row:2!important;
+    min-width:0!important;
+    max-width:100%!important;
+    width:auto!important;
+    justify-self:start!important;
+    margin-top:9px!important;
+    position:static!important;
+    transform:translateY(11px)!important;
+    display:flex!important;
+    flex-wrap:wrap!important;
+    gap:6px!important;
+  }
+  .profile-card .profile-bio-main{
+    grid-column:2!important;
+    grid-row:3!important;
+    min-width:0!important;
+    max-width:100%!important;
+    width:100%!important;
+    margin-top:10px!important;
+    position:static!important;
+    transform:translateY(11px)!important;
+  }
+  .profile-card .profile-head-actions{
+    grid-column:1 / -1!important;
+    grid-row:4!important;
+    width:100%!important;
+  }
+}
+
+/* Keep the editor's small live-preview card independent from the full desktop profile dock. */
+@media (min-width:761px){
+  .preview-frame .profile-head{
+    grid-template-columns:72px minmax(0,1fr)!important;
+    grid-template-rows:auto auto auto!important;
+    column-gap:10px!important;
+  }
+  .preview-frame .profile-avatar-wrap{
+    width:72px!important; min-width:72px!important; max-width:72px!important;
+    height:72px!important; min-height:72px!important; max-height:72px!important;
+    margin-top:-36px!important;
+  }
+  .preview-frame .profile-identity{
+    grid-column:2!important; grid-row:1!important;
+  }
+  .preview-frame .profile-meta-compact{
+    grid-column:1!important; grid-row:2!important;
+    max-width:72px!important; gap:5px!important; margin-top:7px!important;
+  }
+  .preview-frame .profile-bio-main{
+    grid-column:1/-1!important; grid-row:3!important;
+    margin-top:7px!important;
+  }
+  .preview-frame .profile-head-actions{grid-column:2!important;grid-row:1!important;}
+}
+
+/* Rivo targeted mobile fix — ONLY the coin + badges row.
+   Keep every other mobile profile element untouched.
+   The row is a direct child of .profile-head, so dock it to the
+   avatar column instead of using negative offsets that can vary by account. */
+@media (max-width:760px){
+  .profile-card .profile-head > .profile-meta-compact{
+    grid-column:1!important;
+    grid-row:2!important;
+    justify-self:start!important;
+    align-self:start!important;
+    position:static!important;
+    left:auto!important;
+    inset-inline-start:auto!important;
+    top:auto!important;
+    width:max-content!important;
+    max-width:78px!important;
+    min-width:0!important;
+    margin:7px 0 0!important;
+    padding:0!important;
+    transform:none!important;
+    display:flex!important;
+    flex-wrap:nowrap!important;
+    align-items:center!important;
+    gap:6px!important;
+    overflow:visible!important;
+    z-index:20!important;
+  }
+
+  .profile-card .profile-head > .profile-meta-compact .profile-coin-balance{
+    flex:0 0 auto!important;
+  }
+
+  .profile-card .profile-head > .profile-meta-compact .profile-badges-compact{
+    flex:0 0 auto!important;
+  }
+}
+
+/* FINAL MOBILE COIN/BADGE ALIGNMENT — only this row is adjusted.
+   Keep the existing mobile profile layout untouched: place the coin + badges
+   on the same left edge as the bio and a little lower, without changing
+   the name, username, date, avatar, bio, stats, or desktop layout. */
+@media (max-width:760px){
+  .profile-card .profile-head > .profile-meta-compact{
+    grid-column:2!important;
+    grid-row:2!important;
+    justify-self:start!important;
+    align-self:start!important;
+    position:static!important;
+    left:auto!important;
+    inset-inline-start:auto!important;
+    top:auto!important;
+    width:100%!important;
+    max-width:none!important;
+    min-width:0!important;
+    margin:15px 0 0!important;
+    padding:0!important;
+    transform:none!important;
+    display:flex!important;
+    flex-wrap:nowrap!important;
+    align-items:center!important;
+    justify-content:flex-start!important;
+    gap:6px!important;
+    overflow:visible!important;
+    z-index:20!important;
+  }
+
+  .profile-card .profile-head > .profile-meta-compact .profile-coin-balance,
+  .profile-card .profile-head > .profile-meta-compact .profile-badges-compact{
+    flex:0 0 auto!important;
+  }
+}
+
+@media (max-width:430px){
+  .profile-card .profile-head > .profile-meta-compact{
+    margin-top:15px!important;
+  }
+}
+
+/* FINAL MOBILE-ONLY MICRO FIX v7
+   Only the coin + badge row and the main bio text are adjusted.
+   Everything else remains unchanged. */
+@media (max-width:760px){
+  .profile-card .profile-head > .profile-meta-compact{
+    grid-column:1 / -1!important;
+    grid-row:2!important;
+    justify-self:start!important;
+    align-self:start!important;
+    width:max-content!important;
+    max-width:100%!important;
+    min-width:0!important;
+    margin:15px 0 0!important;
+    padding:0!important;
+    position:static!important;
+    inset:auto!important;
+    transform:none!important;
+    display:flex!important;
+    flex-wrap:nowrap!important;
+    flex-direction:row!important;
+    justify-content:flex-start!important;
+    align-items:center!important;
+    gap:6px!important;
+    overflow:visible!important;
+    direction:ltr!important;
+  }
+
+  .profile-card .profile-bio-main{
+    font-size:11px!important;
+    line-height:1.6!important;
+  }
+}
+
+/* FINAL MOBILE MICRO FIX v8 — bio only.
+   Keep the working v7 coin/badge row untouched. Align the bio's left edge
+   exactly with that row, and slightly reduce its text size. */
+@media (max-width:760px){
+  .profile-card .profile-bio-main{
+    grid-column:1 / -1!important;
+    grid-row:3!important;
+    justify-self:start!important;
+    align-self:start!important;
+    width:100%!important;
+    max-width:100%!important;
+    min-width:0!important;
+    margin:15px 0 0!important;
+    padding:0!important;
+    position:static!important;
+    inset:auto!important;
+    transform:none!important;
+    font-size:10px!important;
+    line-height:1.6!important;
+    text-align:left!important;
+  }
+}
+
+
+/* FINAL MICRO SPACING — keep every existing profile position intact;
+   only add a tiny 10px breathing space before the mobile action row. */
+@media (max-width:760px){
+  .profile-card .profile-head-actions{
+    margin-top:10px!important;
+  }
+}
+
+/* v14 desktop navigation: primary destinations stay visible; menu is secondary-only. */
+@media (min-width: 761px){
+  .desktop-nav{display:flex;align-items:center;gap:4px;flex-wrap:nowrap;min-width:0}
+  .desktop-nav a{white-space:nowrap}
+  .menu-button{display:grid;place-items:center;flex:0 0 auto}
+}
+
+@media (min-width: 761px){
+  .community-topbar-back-only-mobile{display:none!important}
+}
+
+/* Rivo v17: long-press actions for messages/comments — isolated from existing layout. */
+.reaction-delete-action{width:34px!important;height:34px!important;border:0!important;border-radius:50%!important;background:rgba(255,70,70,.10)!important;color:#ff7777!important;font-size:16px!important;display:grid!important;place-items:center!important;flex:0 0 34px!important}
+.reaction-delete-action:hover{background:rgba(255,70,70,.18)!important;transform:scale(1.06)}
+.reaction-delete-action:disabled{opacity:.45;transform:none!important}
+.comment-actions-disabled{border:0;background:transparent;color:var(--muted);font-size:11px;padding:8px 10px;white-space:nowrap}
+.comment-action-popover{min-width:48px}
+
+/* FINAL DESKTOP NAV VISIBILITY — restore the primary destinations in the
+   top bar. The mobile layout is intentionally untouched. Keep Home out of
+   the overflow menu on desktop so there is no duplicate destination. */
+@media (min-width:761px){
+  .desktop-nav{
+    display:flex!important;
+    align-items:center!important;
+    gap:4px!important;
+    flex-wrap:nowrap!important;
+    min-width:0!important;
+    visibility:visible!important;
+    opacity:1!important;
+  }
+  .desktop-nav a{
+    display:inline-flex!important;
+    align-items:center!important;
+    white-space:nowrap!important;
+    padding:9px 10px!important;
+    font-size:11px!important;
+  }
+  .menu-button{
+    display:grid!important;
+    place-items:center!important;
+    flex:0 0 40px!important;
+    width:40px!important;
+    height:40px!important;
+  }
+  .menu-panel [data-menu-home]{display:none!important;}
+}
+
+
+/* Rivo v23 cleanup: keep Home out of the desktop topbar only.
+   The menu/home route remains available elsewhere; mobile navigation is untouched. */
+@media (min-width:761px){
+  .desktop-nav a[href*="posts.html"]{display:none!important;}
+}
+
+/* Rivo v18: global light/dark control + calm light UI palette. The profile
+   card itself remains user-designed and keeps its own template appearance. */
+.theme-toggle-btn{position:relative;flex:0 0 38px;width:38px;height:38px;font-size:16px;line-height:1}
+.theme-toggle-btn span{display:block;transform:translateY(-.5px);transition:transform .2s ease}
+.theme-toggle-btn:hover span{transform:translateY(-.5px) rotate(12deg)}
+html[data-color-scheme="light"] .theme-toggle-btn{background:rgba(16,24,40,.045);color:#344054;border-color:rgba(16,24,40,.12)}
+html[data-color-scheme="light"] body{color:var(--text)}
+html[data-color-scheme="light"] .page-head p,
+html[data-color-scheme="light"] .muted,
+html[data-color-scheme="light"] .section-sub,
+html[data-color-scheme="light"] .composer-hint,
+html[data-color-scheme="light"] .community-meta,
+html[data-color-scheme="light"] .thread-head small,
+html[data-color-scheme="light"] .thread-placeholder,
+html[data-color-scheme="light"] .thread-status{color:#667085}
+html[data-color-scheme="light"] .post-textarea,
+html[data-color-scheme="light"] .message-compose textarea,
+html[data-color-scheme="light"] .room-compose input,
+html[data-color-scheme="light"] .post-comments,
+html[data-color-scheme="light"] .comment-bubble,
+html[data-color-scheme="light"] .reaction-popover,
+html[data-color-scheme="light"] .message-emoji-tray,
+html[data-color-scheme="light"] .voice-message-bubble,
+html[data-color-scheme="light"] .room-bubble,
+html[data-color-scheme="light"] .community-icon,
+html[data-color-scheme="light"] .friend-mini,
+html[data-color-scheme="light"] .social-pill,
+html[data-color-scheme="light"] .project-card,
+html[data-color-scheme="light"] .post-owner-tools,
+html[data-color-scheme="light"] .admin-user-row,
+html[data-color-scheme="light"] .visitor-row,
+html[data-color-scheme="light"] .community-image-preview,
+html[data-color-scheme="light"] .settings-row{background-color:rgba(16,24,40,.035);color:#182230;border-color:rgba(16,24,40,.10)}
+html[data-color-scheme="light"] .post-action,
+html[data-color-scheme="light"] .post-author-meta,
+html[data-color-scheme="light"] .post-author-copy span,
+html[data-color-scheme="light"] .comment-author,
+html[data-color-scheme="light"] .comment-meta,
+html[data-color-scheme="light"] .notification-item small,
+html[data-color-scheme="light"] .notification-item time,
+html[data-color-scheme="light"] .admin-user-row small,
+html[data-color-scheme="light"] .visitor-row small{color:#667085}
+html[data-color-scheme="light"] .post-action:hover,
+html[data-color-scheme="light"] .post-action.active,
+html[data-color-scheme="light"] .message-emoji-tray button:hover,
+html[data-color-scheme="light"] .reaction-popover button:hover,
+html[data-color-scheme="light"] .social-side-link:hover,
+html[data-color-scheme="light"] .social-side-link.active{background:rgba(16,24,40,.055);color:#101828}
+html[data-color-scheme="light"] .post-comments{border-top-color:rgba(16,24,40,.08)}
+html[data-color-scheme="light"] .comment-bubble{background:#f1f4f8}
+html[data-color-scheme="light"] .reaction-popover,
+html[data-color-scheme="light"] .message-emoji-tray{background:#fff;border-color:rgba(16,24,40,.12);box-shadow:0 16px 42px rgba(16,24,40,.14)}
+html[data-color-scheme="light"] .reaction-delete-action{background:rgba(214,63,77,.08)!important;color:#d33f4e!important}
+html[data-color-scheme="light"] .story-viewer{background:#fff;color:#101828}
+html[data-color-scheme="light"] .story-media-wrap img{background:#f2f4f7}
+html[data-color-scheme="light"] .call-control{background:rgba(16,24,40,.06);color:#182230}
+html[data-color-scheme="light"] .call-quality{background:rgba(16,24,40,.035)}
+html[data-color-scheme="light"] .menu-panel{background:rgba(255,255,255,.98);border-color:rgba(16,24,40,.12);box-shadow:0 25px 70px rgba(16,24,40,.14)}
+html[data-color-scheme="light"] .notification-popover{background:#fff;border-color:rgba(16,24,40,.12);box-shadow:0 18px 48px rgba(16,24,40,.14)}
+html[data-color-scheme="light"] .notification-item:hover{background:rgba(16,24,40,.045)}
+html[data-color-scheme="light"] .modal-card{background:#fff;border-color:rgba(16,24,40,.12);box-shadow:0 24px 70px rgba(16,24,40,.18)}
+html[data-color-scheme="light"] .date-picker-grid select{background:#fff;color:#101828}
+html[data-color-scheme="light"] .human-check-box:hover{background:rgba(16,24,40,.045)}
+
+/* Rivo v21 — Light mode profile/chrome correction.
+   Keep all profile geometry, templates and accent colors intact; only swap
+   dark chrome/surface/text colors so the profile and header stay readable in
+   the light site theme. */
+html[data-color-scheme="light"] .topbar,
+html[data-color-scheme="light"] .topbar.topbar-overlay{
+  background:rgba(248,249,251,.96)!important;
+  color:#101828!important;
+  border-color:rgba(16,24,40,.10)!important;
+  box-shadow:0 10px 30px rgba(16,24,40,.08)!important;
+}
+html[data-color-scheme="light"] .topbar .brand,
+html[data-color-scheme="light"] .topbar .brand span,
+html[data-color-scheme="light"] .desktop-nav a,
+html[data-color-scheme="light"] .menu-button{
+  color:#101828!important;
+}
+html[data-color-scheme="light"] .desktop-nav a:hover{
+  background:rgba(16,24,40,.055)!important;
+  color:#101828!important;
+}
+html[data-color-scheme="light"] .profile-page{
+  background:linear-gradient(180deg,#f7f9fc 0%,#eef2f7 100%)!important;
+}
+html[data-color-scheme="light"] .profile-card{
+  color:#101828!important;
+  background:linear-gradient(180deg,#f8f9fb 0%,#f1f3f6 100%)!important;
+  border-color:rgba(16,24,40,.10)!important;
+  box-shadow:0 22px 60px rgba(16,24,40,.09),0 0 0 1px rgba(16,24,40,.02) inset!important;
+}
+html[data-color-scheme="light"] .profile-card::before{
+  opacity:.35!important;
+}
+html[data-color-scheme="light"] .profile-banner::after{
+  background:linear-gradient(180deg,transparent 46%,rgba(255,255,255,.26) 100%)!important;
+}
+html[data-color-scheme="light"] .profile-content{
+  background:transparent!important;
+  color:#101828!important;
+}
+html[data-color-scheme="light"] .profile-identity h1,
+html[data-color-scheme="light"] .profile-identity .profile-username,
+html[data-color-scheme="light"] .profile-identity .profile-username-meta,
+html[data-color-scheme="light"] .profile-identity > p,
+html[data-color-scheme="light"] .profile-description,
+html[data-color-scheme="light"] .section-block h2,
+html[data-color-scheme="light"] .section-kicker,
+html[data-color-scheme="light"] .profile-stats > div > b,
+html[data-color-scheme="light"] .profile-stats > div > span{
+  color:#101828!important;
+}
+html[data-color-scheme="light"] .profile-identity .profile-username-meta > span:first-child,
+html[data-color-scheme="light"] .profile-identity .account-since,
+html[data-color-scheme="light"] .profile-presence,
+html[data-color-scheme="light"] .profile-description + .about-meta,
+html[data-color-scheme="light"] .about-meta span,
+html[data-color-scheme="light"] .about-meta a{
+  color:#667085!important;
+}
+html[data-color-scheme="light"] .profile-avatar{
+  border-color:#ffffff!important;
+}
+html[data-color-scheme="light"] .profile-avatar-presence{
+  border-color:#ffffff!important;
+}
+html[data-color-scheme="light"] .profile-mini-float,
+html[data-color-scheme="light"] .profile-owner-likes{
+  background:#f7f8fa!important;
+  color:#101828!important;
+  border-color:rgba(16,24,40,.10)!important;
+  box-shadow:0 12px 28px rgba(16,24,40,.09)!important;
+}
+html[data-color-scheme="light"] .profile-stats > div,
+html[data-color-scheme="light"] .section-block,
+html[data-color-scheme="light"] .social-pill,
+html[data-color-scheme="light"] .profile-head-actions .btn,
+html[data-color-scheme="light"] .relationship-badge,
+html[data-color-scheme="light"] .profile-social-actions .btn,
+html[data-color-scheme="light"] .profile-call-btn{
+  background:rgba(245,247,249,.92)!important;
+  color:#182230!important;
+  border-color:rgba(16,24,40,.10)!important;
+  box-shadow:0 8px 24px rgba(16,24,40,.045)!important;
+}
+html[data-color-scheme="light"] .profile-stats > div:hover,
+html[data-color-scheme="light"] .social-pill:hover,
+html[data-color-scheme="light"] .profile-head-actions .btn:hover,
+html[data-color-scheme="light"] .relationship-badge:hover,
+html[data-color-scheme="light"] .profile-call-btn:hover{
+  background:#fafbfc!important;
+  color:#101828!important;
+}
+html[data-color-scheme="light"] .section-block{border-color:rgba(16,24,40,.10)!important;}
+html[data-color-scheme="light"] .section-kicker{color:color-mix(in srgb,var(--accent) 78%,#101828)!important;}
+html[data-color-scheme="light"] .profile-bio-main{color:#182230!important;}
+html[data-color-scheme="light"] .friend-mini,
+html[data-color-scheme="light"] .project-card,
+html[data-color-scheme="light"] .pf-player,
+html[data-color-scheme="light"] .pf-player .player-title,
+html[data-color-scheme="light"] .pf-player .player-meta{
+  color:#182230!important;
+}
+html[data-color-scheme="light"] .pf-player,
+html[data-color-scheme="light"] .project-card,
+html[data-color-scheme="light"] .friend-mini{
+  background:rgba(16,24,40,.035)!important;
+  border-color:rgba(16,24,40,.09)!important;
+}
+html[data-color-scheme="light"] .player-title,
+html[data-color-scheme="light"] .player-main,
+html[data-color-scheme="light"] .friend-mini b,
+html[data-color-scheme="light"] .friend-mini span{
+  color:#182230!important;
+}
+html[data-color-scheme="light"] .player-progress{background:rgba(16,24,40,.10)!important;}
+html[data-color-scheme="light"] .player-time{color:#667085!important;}
+html[data-color-scheme="light"] .profile-card .badge-pill,
+html[data-color-scheme="light"] .profile-card .social-pill,
+html[data-color-scheme="light"] .profile-card .relationship-badge{
+  filter:saturate(.84);
+}
+html[data-color-scheme="light"] .profile-posts-wrap{color:#101828!important;}
+
+/* Rivo v27 — restrained Light mode for landing/chrome only.
+   Keep authored profile cards/templates intact; make the public landing page
+   and navigation readable without the white colors becoming overpowering. */
+html[data-color-scheme="light"] body:not(.profile-page){
+  --bg:#f4f6f9;
+  --surface:#ffffff;
+  --surface2:#eef1f5;
+  --text:#1b2430;
+  --muted:#6b7280;
+  --border:rgba(27,36,48,.10);
+  --shadow:0 16px 42px rgba(27,36,48,.08);
+  background:linear-gradient(180deg,#f7f8fa 0%,#eef1f5 100%);
+  color:var(--text);
+}
+html[data-color-scheme="light"] .hero h1 span{
+  background:linear-gradient(100deg,#263247 0%,#59657b 55%,#7b72d8 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+html[data-color-scheme="light"] .hero p{color:#667085}
+html[data-color-scheme="light"] .hero-stage{
+  background:radial-gradient(circle at 50% 32%,rgba(116,136,255,.13),transparent 34%),
+             radial-gradient(circle at 82% 82%,rgba(94,231,255,.08),transparent 25%),#e8edf3;
+  border-color:rgba(27,36,48,.09);
+  box-shadow:0 18px 46px rgba(27,36,48,.08);
+}
+html[data-color-scheme="light"] .hero-stage:before{
+  background-image:linear-gradient(rgba(27,36,48,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(27,36,48,.045) 1px,transparent 1px);
+}
+html[data-color-scheme="light"] .landing-profile{
+  box-shadow:0 30px 70px rgba(27,36,48,.18);
+}
+html[data-color-scheme="light"] .feature-card,
+html[data-color-scheme="light"] .about-item{
+  background:linear-gradient(180deg,rgba(255,255,255,.90),rgba(247,249,251,.96));
+  border-color:rgba(27,36,48,.09);
+  box-shadow:0 10px 28px rgba(27,36,48,.06);
+}
+html[data-color-scheme="light"] .feature-card h3,
+html[data-color-scheme="light"] .about-section h2,
+html[data-color-scheme="light"] .about-item b{color:#1f2937}
+html[data-color-scheme="light"] .feature-card p,
+html[data-color-scheme="light"] .about-section p,
+html[data-color-scheme="light"] .about-item span{color:#667085}
+html[data-color-scheme="light"] .footer{color:#7a8494}
+html[data-color-scheme="light"] .topbar{
+  background:rgba(255,255,255,.94)!important;
+  border-color:rgba(27,36,48,.10)!important;
+  color:#1b2430!important;
+}
+html[data-color-scheme="light"] .icon-btn{
+  background:rgba(27,36,48,.04)!important;
+  color:#344054!important;
+  border-color:rgba(27,36,48,.10)!important;
+}
+@media(max-width:760px){
+  html[data-color-scheme="light"] .rivo-mobile-bottom-nav{
+    background:linear-gradient(180deg,rgba(255,255,255,.97),rgba(247,249,252,.99));
+    border-top-color:rgba(27,36,48,.10);
+    box-shadow:0 -8px 26px rgba(27,36,48,.10),0 -1px 0 rgba(27,36,48,.035) inset;
+  }
+  html[data-color-scheme="light"] .rivo-mobile-nav-item{color:#667085}
+  html[data-color-scheme="light"] .rivo-mobile-nav-item.is-active{color:#1f2937}
+  html[data-color-scheme="light"] .rivo-mobile-nav-item:hover,
+  html[data-color-scheme="light"] .rivo-mobile-nav-item:focus-visible{color:#111827;background:rgba(27,36,48,.045)}
+}
+
+/* Rivo v27.1 — subtle light-profile refinement only. Keep layout/functions intact. */
+html[data-color-scheme="light"] .profile-card{
+  width:calc(100% - 8px);
+  margin-inline:auto;
+  transform:translateY(-4px);
+  box-shadow:0 26px 72px rgba(15,23,42,.14),0 0 0 1px rgba(255,255,255,.75) inset;
+}
+html[data-color-scheme="light"] .profile-card .like-btn.liked .heart,
+html[data-color-scheme="light"] .profile-card .profile-owner-likes .heart-mini{
+  color:#e95b73;
+}
+html[data-color-scheme="light"] [data-template="white-atelier"] .profile-card,
+html[data-color-scheme="light"] [data-template="white-signal"] .profile-card{
+  border-color:rgba(30,41,59,.18);
+}
+@media(max-width:760px){
+  html[data-color-scheme="light"] .profile-card{width:calc(100% - 6px);transform:translateY(-3px);}
 }
