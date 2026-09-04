@@ -47,8 +47,8 @@
     // On phones the bottom bar owns the primary destinations. Keep the menu
     // compact by removing those same destinations and retaining Home + tools.
     if (window.innerWidth <= 760) {
-      // The bottom bar is the primary phone navigation. Do not repeat its
-      // destinations in the overflow menu; the menu keeps only secondary tools.
+      // Keep only the true bottom-bar destinations out of the overflow menu.
+      // Secondary authenticated destinations remain available from the phone menu.
       const duplicateHrefs = ["index.html", "posts.html", "explore.html", "messages.html", "profile.html"];
       panel.querySelectorAll("a").forEach(a => {
         const href = (a.getAttribute("href") || "").split("?")[0];
@@ -56,7 +56,64 @@
           a.remove();
         }
       });
+
+      const pageBase = location.pathname.includes("/pages/") ? "" : "pages/";
+      const secondary = [
+        ["communities.html", "Communities"],
+        ["friends.html", "Friends"],
+        ["editor.html", "Editor"]
+      ];
+      secondary.forEach(([file, label]) => {
+        const exists = [...panel.querySelectorAll("a")].some(a => {
+          const href = (a.getAttribute("href") || "").split("?")[0];
+          return href === file || href.endsWith("/" + file);
+        });
+        if (exists) return;
+        const a = document.createElement("a");
+        a.href = `${pageBase}${file}`;
+        a.textContent = label;
+        a.className = "mobile-menu-secondary auth-required";
+        a.setAttribute("data-mobile-secondary", file.replace(".html", ""));
+        a.classList.toggle("hidden", !PF.currentUsername());
+        panel.insertBefore(a, panel.querySelector("a[href*='settings.html']") || null);
+      });
     }
+  }
+
+  function initDesktopTopbarScroll() {
+    if (window.innerWidth <= 760) return;
+    const bar = $(".topbar");
+    if (!bar) return;
+
+    let lastY = window.scrollY;
+    let ticking = false;
+
+    const update = () => {
+      const y = window.scrollY;
+      const delta = y - lastY;
+      if (Math.abs(delta) > 6) {
+        const hidden = delta > 0 && y > 72;
+        bar.classList.toggle("desktop-nav-hidden", hidden);
+        const panel = $("[data-menu-panel]");
+        if (hidden && panel?.classList.contains("open")) {
+          panel.classList.remove("open");
+          $("[data-menu-toggle]")?.setAttribute("aria-expanded", "false");
+        }
+        lastY = y;
+      }
+      ticking = false;
+    };
+
+    window.addEventListener("scroll", () => {
+      if (!ticking) {
+        ticking = true;
+        requestAnimationFrame(update);
+      }
+    }, { passive: true });
+
+    window.addEventListener("resize", () => {
+      if (window.innerWidth <= 760) bar.classList.remove("desktop-nav-hidden");
+    }, { passive: true });
   }
 
   function initMobileBottomNav() {
@@ -1349,7 +1406,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", async () => {
-    nav(); initMenu(); initMobileBottomNav(); applyNavLanguage(); initOverlayNavVisibility(); initStorySystem(); initCallSystem();
+    nav(); initMenu(); initDesktopTopbarScroll(); initMobileBottomNav(); applyNavLanguage(); initOverlayNavVisibility(); initStorySystem(); initCallSystem();
     $$('[data-profile-link]').forEach(a => { const me = PF.currentUsername(); if (me) a.href = `profile.html?u=${encodeURIComponent(me)}`; });
     setTimeout(() => {
       const me = PF.currentUsername();
@@ -1946,7 +2003,14 @@
       el.value = state[key] || "";
       el.addEventListener("input", () => { state[key] = cleaner(el.value); refreshPreview(); });
     };
-    bind("usernameInput", "username", PF.normalizeUsername);
+    const usernameInput = $("#usernameInput");
+    if (usernameInput) {
+      usernameInput.value = me.username || state.username || "";
+      usernameInput.readOnly = true;
+      usernameInput.setAttribute("aria-readonly", "true");
+      usernameInput.title = "Username is permanent and cannot be changed.";
+    }
+    state.username = me.username || state.username || "";
     bind("displayNameInput", "displayName", v => v.slice(0, 60));
     bind("bioInput", "bio", v => v.slice(0, 220));
     bind("descriptionInput", "description", v => v.slice(0, 1000));
@@ -2096,10 +2160,10 @@
       try {
         btn.disabled = true;
         btn.textContent = "Saving…";
-        const oldUsername = me.username;
-        const u = PF.normalizeUsername(state.username);
-        if (!PF.validUsername(u)) throw new Error("Invalid username format.");
-        if (u !== oldUsername && await PF.getProfile(u)) throw new Error("Username already taken.");
+        // Username is permanent after account creation. Ignore any client-side
+        // mutation and always save the canonical username from the signed-in profile.
+        const u = PF.normalizeUsername(me.username);
+        if (!PF.validUsername(u)) throw new Error("Invalid account username.");
         state.username = u;
         state.password ||= me.password;
         state.projects = [];
@@ -2343,15 +2407,15 @@
               <h1>${esc(p.displayName || p.username)}</h1>
               <div class="profile-username profile-username-meta"><span>@${esc(p.username)}</span>${p.createdAt ? `<span class="account-since" title="تاريخ الدخول">${esc(formatLoginDate(p.createdAt))}</span>` : ""}</div>
             </div>
-            <div class="profile-meta-compact">
-              <div class="profile-coin-balance" aria-label="${Number.isFinite(Number(p.coinsBalance)) ? Number(p.coinsBalance).toLocaleString() : "0"} coins" title="${Number.isFinite(Number(p.coinsBalance)) ? Number(p.coinsBalance).toLocaleString() : "0"}">
-                <span class="profile-coin-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="12" r="8.5"></circle><path d="M9 9.1c.7-1 1.8-1.5 3.1-1.5 1.7 0 2.9.8 2.9 2 0 1.4-1.4 1.9-3 2.1-1.7.2-3 1-3 2.3 0 1.2 1.2 2 3 2 1.3 0 2.5-.5 3.2-1.5"/><path d="M12 5.4v13.2"/></svg></span>
-                <b>${Number.isFinite(Number(p.coinsBalance)) ? Number(p.coinsBalance).toLocaleString() : "0"}</b>
-              </div>
-              <div class="badges-inline profile-badges-compact">${badges}</div>
-            </div>
-            <p>${esc(p.bio || "")}</p>
           </div>
+          <div class="profile-meta-compact">
+            <div class="profile-coin-balance" aria-label="${Number.isFinite(Number(p.coinsBalance)) ? Number(p.coinsBalance).toLocaleString() : "0"} coins" title="${Number.isFinite(Number(p.coinsBalance)) ? Number(p.coinsBalance).toLocaleString() : "0"}">
+              <span class="profile-coin-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="12" r="8.5"></circle><path d="M9 9.1c.7-1 1.8-1.5 3.1-1.5 1.7 0 2.9.8 2.9 2 0 1.4-1.4 1.9-3 2.1-1.7.2-3 1-3 2.3 0 1.2 1.2 2 3 2 1.3 0 2.5-.5 3.2-1.5"/><path d="M12 5.4v13.2"/></svg></span>
+              <b>${Number.isFinite(Number(p.coinsBalance)) ? Number(p.coinsBalance).toLocaleString() : "0"}</b>
+            </div>
+            <div class="badges-inline profile-badges-compact">${badges}</div>
+          </div>
+          <p class="profile-bio-main">${esc(p.bio || "")}</p>
           ${friendActionWrap}
         </div>
         ${standaloneMini}
@@ -2372,7 +2436,7 @@
     const day = String(d.getDate()).padStart(2, "0");
     const month = String(d.getMonth() + 1).padStart(2, "0");
     const year = d.getFullYear();
-    return `تاريخ الدخول ${day}/${month}/${year}`;
+    return `منذ ${day}/${month}/${year}`;
   }
 
   function showAdminProfileIntro(root, enabled) {
@@ -2871,7 +2935,7 @@ async function initProfile() {
           clearHold();
           holdTimer = setTimeout(() => {
             holdTriggered = true;
-            openReactionMenu(bubble, m.id, ev.clientX, ev.clientY);
+            openReactionMenu(bubble, m.id, ev.clientX, ev.clientY, { allowDelete: m.sender_username === me.username });
           }, 520);
         }, { passive: true });
         bubble.addEventListener("pointerup", clearHold, { passive: true });
@@ -2892,11 +2956,11 @@ async function initProfile() {
       if (keepBottom) scrollThread();
     };
 
-    function openReactionMenu(anchorEl, messageId, clientX = null, clientY = null) {
+    function openReactionMenu(anchorEl, messageId, clientX = null, clientY = null, options = {}) {
       document.querySelectorAll(".reaction-popover").forEach(x => x.remove());
       const pop = document.createElement("div");
       pop.className = "reaction-popover glass";
-      pop.innerHTML = PF.REACTION_SET.map(r => `<button type="button" data-quick-reaction="${esc(r)}">${esc(r)}</button>`).join("");
+      pop.innerHTML = PF.REACTION_SET.map(r => `<button type="button" data-quick-reaction="${esc(r)}">${esc(r)}</button>`).join("") + (options.allowDelete ? `<button type="button" class="reaction-delete-action" data-delete-message="${esc(messageId)}" aria-label="Delete message">🗑️</button>` : "");
       document.body.appendChild(pop);
       const rect = anchorEl.getBoundingClientRect();
       const x = Number.isFinite(clientX) ? clientX : rect.left + rect.width / 2;
@@ -2905,6 +2969,22 @@ async function initProfile() {
       pop.style.top = `${Math.max(8, y - 58)}px`;
       $$('[data-quick-reaction]', pop).forEach(btn => btn.onclick = async () => {
         try { await PF.toggleMessageReaction(messageId, btn.dataset.quickReaction); await refreshOpenThread(); } catch (e) { notify(e.message, "error"); } finally { pop.remove(); }
+      });
+      pop.querySelector('[data-delete-message]')?.addEventListener('click', async ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const btn = ev.currentTarget;
+        btn.disabled = true;
+        try {
+          await PF.deleteMessage(messageId);
+          await refreshOpenThread();
+          try { conversations = await PF.listConversations(); renderConversations(); } catch {}
+        } catch (e) {
+          notify(e.message || "Could not delete message", "error");
+          btn.disabled = false;
+          return;
+        }
+        pop.remove();
       });
       setTimeout(() => document.addEventListener("click", () => pop.remove(), {once:true}), 0);
     }
@@ -3361,7 +3441,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
     const currentCallSetting = me.callSettings?.whoCanCall === "friends" ? "friends"
       : me.callSettings?.whoCanCall === "nobody" ? "nobody" : "everyone";
     const callHintText = v => v === "nobody" ? "Nobody can start a voice or video call with you." : v === "friends" ? "Only your accepted friends can start a call with you." : "Anyone with a Rivo account can start a call with you.";
-    const mode = localStorage.getItem("rivo_color_scheme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    const mode = localStorage.getItem("rivo_color_scheme") || "dark";
     $("#themeDark") && ($("#themeDark").checked = mode === "dark");
     $("#themeLight") && ($("#themeLight").checked = mode === "light");
     $$('input[name="themeMode"]').forEach(r => r.addEventListener("change", () => { localStorage.setItem("rivo_color_scheme", r.value); document.documentElement.dataset.colorScheme = r.value; }));
@@ -3649,7 +3729,59 @@ voiceMessageSend?.addEventListener("click",async()=>{
   }
   async function loadPostCommentsModal(modal,postId,keepBottom=false){
     const scroll=modal.querySelector("[data-comments-scroll]"),count=modal.querySelector("[data-comments-count]");scroll.innerHTML=`<div class="message-list-empty">Loading comments…</div>`;
-    try{const post=await PF.getPost(postId),comments=Array.isArray(post?.comments)?post.comments:[];count.textContent=`${comments.length} ${comments.length===1?"comment":"comments"}`;scroll.innerHTML=comments.length?comments.map(c=>`<div class="comment comment-modal-item">${identityLink(c.author,profileMini(c.author),"comment-avatar-link")}<div class="comment-bubble"><div class="comment-meta-line">${identityLink(c.author,`<b>${esc(c.author?.displayName||c.author?.username||"User")}</b>`)}<span>${formatSocialTime(c.created_at)}</span></div><p>${esc(c.content)}</p></div></div>`).join(""):`<div class="comments-empty"><strong>No comments yet.</strong><span>Start the conversation.</span></div>`;if(keepBottom)scroll.scrollTop=scroll.scrollHeight;}catch(err){scroll.innerHTML=`<div class="message-list-empty">${esc(err.message||"Could not load comments")}</div>`;}
+    try{
+      const post=await PF.getPost(postId),comments=Array.isArray(post?.comments)?post.comments:[];
+      count.textContent=`${comments.length} ${comments.length===1?"comment":"comments"}`;
+      scroll.innerHTML=comments.length?comments.map(c=>`<div class="comment comment-modal-item" data-comment-id="${esc(c.id)}">${identityLink(c.author,profileMini(c.author),"comment-avatar-link")}<div class="comment-bubble"><div class="comment-meta-line">${identityLink(c.author,`<b>${esc(c.author?.displayName||c.author?.username||"User")}</b>`)}<span>${formatSocialTime(c.created_at)}</span></div><p>${esc(c.content)}</p></div></div>`).join(""):`<div class="comments-empty"><strong>No comments yet.</strong><span>Start the conversation.</span></div>`;
+      bindPostCommentLongPress(modal, postId);
+      if(keepBottom)scroll.scrollTop=scroll.scrollHeight;
+    }catch(err){scroll.innerHTML=`<div class="message-list-empty">${esc(err.message||"Could not load comments")}</div>`;}
+  }
+
+  function bindPostCommentLongPress(modal, postId){
+    const scroll=modal.querySelector("[data-comments-scroll]");
+    scroll.querySelectorAll("[data-comment-id]").forEach(item=>{
+      let timer=null, triggered=false, sx=0, sy=0;
+      const clear=()=>{if(timer){clearTimeout(timer);timer=null;}};
+      item.addEventListener("pointerdown",ev=>{
+        if(ev.target.closest("button,a,input,textarea,select")) return;
+        sx=ev.clientX; sy=ev.clientY; triggered=false; clear();
+        timer=setTimeout(()=>{
+          timer=null; triggered=true;
+          const commentId=item.dataset.commentId;
+          const comment=item;
+          const authorUsername=comment.querySelector("[data-profile-open]")?.dataset.profileOpen || "";
+          openCommentActionMenu(comment, commentId, ev.clientX, ev.clientY, authorUsername === me.username, postId);
+        },520);
+      },{passive:true});
+      ["pointerup","pointercancel","pointerleave"].forEach(type=>item.addEventListener(type,clear,{passive:true}));
+      item.addEventListener("click",ev=>{if(triggered){ev.preventDefault();ev.stopPropagation();triggered=false;}});
+      item.addEventListener("contextmenu",ev=>{
+        ev.preventDefault();
+        const authorUsername=item.querySelector("[data-profile-open]")?.dataset.profileOpen || "";
+        openCommentActionMenu(item,item.dataset.commentId,ev.clientX,ev.clientY,authorUsername===me.username,postId);
+      });
+    });
+  }
+
+  function openCommentActionMenu(anchorEl, commentId, clientX, clientY, allowDelete, postId){
+    document.querySelectorAll(".reaction-popover").forEach(x=>x.remove());
+    const pop=document.createElement("div"); pop.className="reaction-popover glass comment-action-popover";
+    if(!allowDelete) return;
+    pop.innerHTML=`<button type="button" class="reaction-delete-action" data-delete-comment="${esc(commentId)}">🗑️</button>`;
+    document.body.appendChild(pop);
+    const rect=anchorEl.getBoundingClientRect();
+    pop.style.left=`${Math.max(8,Math.min(window.innerWidth-220,(Number.isFinite(clientX)?clientX:rect.left+rect.width/2)-40))}px`;
+    pop.style.top=`${Math.max(8,(Number.isFinite(clientY)?clientY:rect.top)-58)}px`;
+    pop.querySelector('[data-delete-comment]')?.addEventListener('click',async ev=>{
+      ev.preventDefault(); ev.stopPropagation();
+      try{
+        await PF.deletePostComment(commentId);
+        await loadPostCommentsModal(document.querySelector("[data-post-comments-modal]"),postId,false);
+      }catch(e){notify(e.message||"Could not delete comment","error");return;}
+      pop.remove();
+    });
+    setTimeout(()=>document.addEventListener("click",()=>pop.remove(),{once:true}),0);
   }
   async function openPostCommentsModal(postId){if(!postId)return;const modal=ensurePostCommentsModal();modal._postId=postId;modal.classList.add("open");document.body.classList.add("comments-modal-open");const input=modal.querySelector("[data-comments-input]");await loadPostCommentsModal(modal,postId,false);requestAnimationFrame(()=>input?.focus());}
   function renderPostCard(post){
@@ -4228,6 +4360,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
       try{r=await fetch(cfg.tokenUrl,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},body:JSON.stringify({roomName,participantName})});}
       catch(e){throw new Error('Could not reach the voice service. Check your connection and try again.');}
       const d=await r.json().catch(()=>({}));
+      voicePresenceAccessToken=session.access_token;
       if(!r.ok)throw new Error(d.error||`Voice authorization failed (${r.status}).`);
       if(!d.server_url||!d.participant_token)throw new Error('Voice service returned an invalid room token.');
       return d;
@@ -4325,6 +4458,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
       renderVoiceParticipants();
     }
 
+    let voicePresenceAccessToken='';
     async function syncVoicePresence(roomNameOverride=null, delay=0){
       if(delay)await new Promise(r=>setTimeout(r,delay));
       const roomName=String(roomNameOverride||voiceRoom?.room_name||'');
@@ -4333,16 +4467,27 @@ voiceMessageSend?.addEventListener("click",async()=>{
       try{
         const cfg=window.RIVO_CALL_CONFIG||{};
         const session=(await window.__rivoSupabase?.auth.getSession())?.data?.session;
-        if(!cfg.tokenUrl||!session?.access_token)return;
-        const r=await fetch(cfg.tokenUrl,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},body:JSON.stringify({action:'sync_presence',roomName,communityId:Number(id)})});
+        if(session?.access_token)voicePresenceAccessToken=session.access_token;
+        if(!cfg.tokenUrl||!voicePresenceAccessToken)return;
+        const r=await fetch(cfg.tokenUrl,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${voicePresenceAccessToken}`},body:JSON.stringify({action:'sync_presence',roomName,communityId:Number(id)})});
         const d=await r.json().catch(()=>({}));
         if(r.ok&&d?.ended){
           voiceRoom={active:false};
+          if(voicePresenceTimer){clearInterval(voicePresenceTimer);voicePresenceTimer=null;}
           renderVoiceBar();showVoiceInvite();
           if(liveKitRoom&&liveKitRoom.name===roomName)await stopLiveKit(true);
         }
       }catch{}finally{voicePresenceSyncBusy=false;}
     }
+
+    const cleanupCommunityVoiceOnPageExit=()=>{
+      try{
+        const cfg=window.RIVO_CALL_CONFIG||{};
+        const roomName=String(voiceRoom?.room_name||'');
+        if(!cfg.tokenUrl||!roomName||!voicePresenceAccessToken)return;
+        fetch(cfg.tokenUrl,{method:'POST',keepalive:true,headers:{'Content-Type':'application/json','Authorization':`Bearer ${voicePresenceAccessToken}`},body:JSON.stringify({action:'sync_presence',roomName,communityId:Number(id)})}).catch(()=>{});
+      }catch{}
+    };
 
     function startVoicePresenceWatcher(){
       if(voicePresenceTimer)clearInterval(voicePresenceTimer);
@@ -4377,7 +4522,12 @@ voiceMessageSend?.addEventListener("click",async()=>{
           if(playing){voiceAudioUnlocked=true;renderVoiceBar();renderVoiceParticipants();}
           else{renderVoiceBar();notify('Tap 🔊 Audio in the voice panel to enable call audio.','error');}
         });
-        room.on(LK.RoomEvent.Disconnected,()=>{liveKitRoom=null;voiceJoined=false;liveKitAudio.forEach(x=>{try{x.pause?.();x.remove();}catch{}});liveKitAudio=[];liveKitAudioByParticipant.clear();renderVoiceBar();renderVoiceParticipants();showVoiceInvite();setTimeout(()=>syncVoicePresence(voiceRoom?.room_name||'',250),250);});
+        room.on(LK.RoomEvent.Disconnected,()=>{
+          const disconnectedRoomName=room.name||voiceRoom?.room_name||'';
+          liveKitRoom=null;voiceJoined=false;liveKitAudio.forEach(x=>{try{x.pause?.();x.remove();}catch{}});liveKitAudio=[];liveKitAudioByParticipant.clear();renderVoiceBar();renderVoiceParticipants();showVoiceInvite();
+          syncVoicePresence(disconnectedRoomName,0);
+          setTimeout(()=>syncVoicePresence(disconnectedRoomName,0),350);
+        });
         await room.connect(d.server_url,d.participant_token,{autoSubscribe:true,maxRetries:6,peerConnectionTimeout:25000,websocketTimeout:25000});
         liveKitRoom=room; voiceJoined=true;
         await enableVoiceAudio(false);
@@ -4393,7 +4543,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
     async function leaveVoice(){
       const wasJoined=!!liveKitRoom;
       await stopLiveKit(true);
-      if(wasJoined){notify('You left the community voice room','success');const roomName=voiceRoom?.room_name||'';setTimeout(()=>syncVoicePresence(roomName,1000),1200);setTimeout(()=>syncVoicePresence(roomName,4000),4000);}
+      if(wasJoined){notify('You left the community voice room','success');const roomName=voiceRoom?.room_name||'';syncVoicePresence(roomName);setTimeout(()=>syncVoicePresence(roomName),350);setTimeout(()=>syncVoicePresence(roomName),1200);}
       if(voiceRoom?.active)showVoiceInvite();
     }
 
@@ -4478,8 +4628,10 @@ voiceMessageSend?.addEventListener("click",async()=>{
       }catch(e){console.debug('community voice realtime refresh failed',e);}
     });
     renderVoiceBar();showVoiceInvite();
+    window.addEventListener('pagehide',cleanupCommunityVoiceOnPageExit);
     window.addEventListener('beforeunload',()=>{
       try{
+        cleanupCommunityVoiceOnPageExit();
         if(voicePresenceTimer)clearInterval(voicePresenceTimer);
         chatStop?.();
         voiceStop?.();

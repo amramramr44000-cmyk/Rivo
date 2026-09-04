@@ -470,7 +470,9 @@
     const me = await currentProfile();
     if (!me) throw new Error("No signed-in profile.");
     const row = await persistMedia(profile);
-    row.username = normalizeUsername(row.username);
+    // Usernames are immutable for account owners. Always persist the
+    // canonical username from the currently signed-in profile.
+    row.username = normalizeUsername(me.username);
     row.friendRequests = undefined;
     const payload = {
       username: row.username,
@@ -758,6 +760,11 @@
   }
   async function getMessages(username, limit = 80) {
     return callRpc("rivo_get_messages", { p_other_username: normalizeUsername(username), p_limit: Math.max(1, Math.min(Number(limit) || 80, 200)) });
+  }
+  async function deleteMessage(messageId) {
+    const id = Number(messageId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid message");
+    return callRpc("rivo_delete_message", { p_message_id: id }, "MESSAGE_DELETE");
   }
 
   async function getCoinBalance() { return Number(await callRpc("rivo_get_coin_balance", {}, "COIN_BALANCE_READ")) || 0; }
@@ -1078,21 +1085,43 @@
 
   function applySavedColorScheme() {
     const saved = localStorage.getItem("rivo_color_scheme");
-    const mode = saved === "light" || saved === "dark" ? saved : (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    const mode = saved === "light" || saved === "dark" ? saved : "dark";
     document.documentElement.dataset.colorScheme = mode;
   }
   applySavedColorScheme();
+
+  // Global light/dark toggle. Kept in core.js so every Rivo page shares the
+  // same preference without duplicating inline page scripts.
+  function setRivoColorScheme(mode) {
+    const next = mode === "light" ? "light" : "dark";
+    localStorage.setItem("rivo_color_scheme", next);
+    document.documentElement.dataset.colorScheme = next;
+    document.querySelectorAll("[data-theme-toggle]").forEach(btn => {
+      btn.setAttribute("aria-pressed", next === "light" ? "true" : "false");
+      btn.setAttribute("title", next === "light" ? "Switch to dark mode" : "Switch to light mode");
+      btn.setAttribute("aria-label", next === "light" ? "Switch to dark mode" : "Switch to light mode");
+      const icon = btn.querySelector("[data-theme-icon]");
+      if (icon) icon.textContent = next === "light" ? "☀" : "☾";
+    });
+  }
+  // Theme switching is kept inside Settings; do not inject a separate toggle
+  // into the top navigation bar. This keeps the bar clean on both desktop and mobile.
+  function installGlobalThemeToggle() {
+    setRivoColorScheme(document.documentElement.dataset.colorScheme || "dark");
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", installGlobalThemeToggle, { once:true });
+  else installGlobalThemeToggle();
 
   // Rivo full interface language layer.
   // Arabic translates the app chrome/UI only and deliberately keeps the document LTR.
   // User-created names, usernames, bios, posts and messages are never translated.
   const NAV_I18N = {
     en: { menu:"Menu", search:"Search", profile:"Profile", messages:"Messages", home:"Home",
-      posts:"Posts", communities:"Communities", explore:"Explore", friends:"Friends",
+      posts:"Home", communities:"Communities", explore:"Search", friends:"Friends",
       editor:"Editor", settings:"Settings", signin:"Sign in", signout:"Sign out", createprofile:"Create profile",
       notifications:"Notifications" },
     ar: { menu:"القائمة", search:"بحث", profile:"الملف الشخصي", messages:"الرسائل", home:"الرئيسية",
-      posts:"المنشورات", communities:"المجتمعات", explore:"استكشاف", friends:"الأصدقاء",
+      posts:"الرئيسية", communities:"المجتمعات", explore:"بحث", friends:"الأصدقاء",
       editor:"المحرر", settings:"الإعدادات", signin:"تسجيل الدخول", signout:"تسجيل الخروج", createprofile:"إنشاء حساب",
       notifications:"الإشعارات" }
   };
@@ -1939,6 +1968,11 @@ async function getVoiceUrl(path) {
     return withInFlightGuard(`POST_REACTION_TOGGLE:${id}`, () => callRpc("rivo_toggle_post_reaction", { p_post_id:Number(id), p_reaction:reaction }, "POST_REACTION_TOGGLE"));
   }
   async function commentPost(id, content) { return callRpc("rivo_add_post_comment", { p_post_id:Number(id), p_content:String(content||"") }, "POST_COMMENT_ADD"); }
+  async function deletePostComment(commentId) {
+    const id = Number(commentId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid comment");
+    return callRpc("rivo_delete_post_comment", { p_comment_id: id }, "POST_COMMENT_DELETE");
+  }
   async function reportPost(id) { return callRpc("rivo_report_post", { p_post_id:Number(id) }, "POST_REPORT"); }
   async function repostPost(id) {
     return withInFlightGuard(`POST_REPOST_TOGGLE:${id}`, () => callRpc("rivo_toggle_post_repost", { p_post_id:Number(id) }, "POST_REPOST_TOGGLE"));
@@ -2026,10 +2060,10 @@ async function getVoiceUrl(path) {
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
     updateProfile, saveProfile, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
     removeFriend, cancelFriendRequest, toggleFollow, isFollowing, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
-    listConversations, getMessages, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
+    listConversations, getMessages, deleteMessage, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminSetCoins, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCommunityVoice, startCommunityVoice, endCommunityVoice, setCommunityVoicePolicy, setCommunityModerator, setCommunityVoiceMute, moderateCommunityVoice, subscribeCommunityVoice, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, deletePostComment, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCommunityVoice, startCommunityVoice, endCommunityVoice, setCommunityVoicePolicy, setCommunityModerator, setCommunityVoiceMute, moderateCommunityVoice, subscribeCommunityVoice, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
     NAV_I18N, I18N, currentLanguage, translateString, applyI18n, applySavedLanguage
   };
 })();
