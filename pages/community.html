@@ -1,44 +1,34 @@
-<!doctype html>
-<html lang="en" dir="ltr" translate="no">
+<!DOCTYPE html>
+
+<html dir="ltr" lang="en" translate="no">
 <head>
-  <meta charset="utf-8">
-  <meta name="google" content="notranslate">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#07090e">
-  <link rel="manifest" href="../manifest.webmanifest">
-  <link rel="stylesheet" href="../css/style.css">
-  <title>Community — Rivo</title>
+<meta charset="utf-8"/>
+<meta content="notranslate" name="google"/>
+<meta content="width=device-width,initial-scale=1,viewport-fit=cover" name="viewport"/>
+<meta content="#07090e" name="theme-color"/>
+<link href="../manifest.webmanifest" rel="manifest"/>
+<link href="../css/style.css" rel="stylesheet"/>
+<title>Community — Rivo</title>
 </head>
 <body class="social-page community-chat-page">
-  <header class="topbar community-chat-topbar">
-    <a class="brand community-back-brand" href="communities.html" aria-label="Back to communities">Rivo</a>
-    <div class="topbar-right">
-      <a class="community-topbar-back" href="communities.html">Communities</a>
-      <button class="icon-btn menu-button" data-menu-toggle aria-expanded="false">☰</button>
-    </div>
-    <nav class="menu-panel" data-menu-panel>
-      <a href="communities.html">Communities</a>
-      <a href="messages.html">Messages</a>
-      <a href="posts.html">Posts</a>
-      <a href="explore.html">Explore</a>
-      <a href="friends.html" class="auth-required hidden">Friends</a>
-      <a href="profile.html" data-profile-link class="auth-required hidden">Profile</a>
-      <a href="settings.html" class="auth-required hidden">Settings</a>
-      <a href="login.html" class="guest-only">Sign in</a>
-    </nav>
-  </header>
-
-  <main class="community-chat-shell">
-    <section id="communityChatApp" class="community-chat-app glass">
-      <div class="community-chat-loading">Loading community…</div>
-    </section>
-  </main>
-
-  <div class="toast-stack"></div>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="../js/supabase-config.js"></script>
-  <script src="../js/core.js?v=20260901-11"></script>
-  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.22.1/dist/livekit-client.umd.min.js"></script>
-  <script src="../js/app.js?v=20260901-11"></script>
+<header class="topbar community-chat-topbar">
+<a aria-label="Back to communities" class="brand community-back-brand" href="communities.html">Rivo</a>
+<div class="topbar-right"><div class="desktop-nav"><a href="posts.html">Home</a><a class="active" href="communities.html">Communities</a><a href="explore.html">Search</a><a href="messages.html">Messages</a><a class="auth-required hidden" href="friends.html">Friends</a><a class="auth-required hidden" data-profile-link="" href="profile.html">Profile</a><a class="auth-required hidden" href="editor.html">Editor</a></div>
+<a class="community-topbar-back community-topbar-back-only-mobile" href="communities.html">Communities</a>
+<button aria-expanded="false" class="icon-btn menu-button" data-menu-toggle="">☰</button>
+</div>
+<nav class="menu-panel" data-menu-panel=""><a data-menu-home="" href="../index.html">Home</a><a class="auth-required hidden" href="settings.html">Account settings</a><a class="guest-only" href="login.html">Sign in</a><a class="guest-only btn btn-primary" href="signup.html">Create profile</a></nav>
+</header>
+<main class="community-chat-shell">
+<section class="community-chat-app glass" id="communityChatApp">
+<div class="community-chat-loading">Loading community…</div>
+</section>
+</main>
+<div class="toast-stack"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../js/supabase-config.js"></script>
+<script src="../js/core.js?v=20260901-11"></script>
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.22.1/dist/livekit-client.umd.min.js"></script>
+<script src="../js/app.js?v=20260901-11"></script>
 </body>
 </html>
