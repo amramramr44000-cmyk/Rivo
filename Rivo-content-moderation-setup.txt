@@ -1,0 +1,24 @@
+Rivo — Single Star + Content Safety
+
+What changed
+- Posts and message reactions now support one reaction only: ⭐
+- Tapping ⭐ adds it; tapping again removes it.
+- Existing ❤️ 😂 👍 😮 😢 reaction rows are migrated to ⭐.
+- Post text, comments, direct messages, and community chat text are checked before they can be saved.
+- Images uploaded by the Rivo app are checked before they are stored in the Rivo media bucket.
+- The API key is never placed in browser JavaScript.
+
+Supabase setup (required)
+1) Open Supabase -> SQL Editor.
+2) Run: supabase_content_safety_star_reactions.sql
+3) Open Supabase -> Edge Functions and deploy: rivo-content-moderate
+4) Open Project Settings -> Edge Functions -> Secrets.
+5) Add this secret exactly:
+   OPENAI_API_KEY
+   Paste your OpenAI API key as the value.
+6) Do not put OPENAI_API_KEY in js/supabase-config.js or any public file.
+
+Important
+- The moderation gate fails closed: if the moderation service is unavailable, new moderated content is not published/uploaded.
+- The current client project already calls the new moderation function; no old reaction picker remains for posts.
+- The full schema was also updated so a fresh schema install keeps the ⭐-only reaction rules and includes the safety migration.
