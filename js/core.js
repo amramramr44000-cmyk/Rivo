@@ -424,9 +424,38 @@
     return new Blob([bytes], { type: mime });
   }
 
+  async function blobToDataUrl(blob) {
+    if (!(blob instanceof Blob)) throw new Error("Invalid media data.");
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("Could not read image."));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function uploadModeratedImage(blob, path, mime) {
+    requireClient();
+    if (!(blob instanceof Blob) || !(blob.type || mime || "").startsWith("image/")) throw new Error("Invalid image data.");
+    const dataUrl = await blobToDataUrl(blob);
+    const { data, error } = await sb.functions.invoke("rivo-content-moderate", {
+      body: { action: "moderate_image_upload", dataUrl, path, mime: blob.type || mime || "image/webp" }
+    });
+    if (error) {
+      throw new Error("Image moderation is unavailable. Please try again.");
+    }
+    if (data?.approved !== true || !data?.url || !data?.path || !data?.moderationId) {
+      throw new Error("This image is not allowed on Rivo.");
+    }
+    return { url: data.url, path: data.path, type: data.type || "image/webp", moderation_id: data.moderationId };
+  }
+
   async function uploadBlob(blob, path, mime) {
     requireClient();
     if (!(blob instanceof Blob)) throw new Error("Invalid media data.");
+    if ((blob.type || mime || "").startsWith("image/")) {
+      return (await uploadModeratedImage(blob, path, mime)).url;
+    }
     const { error } = await sb.storage.from(MEDIA_BUCKET).upload(path, blob, {
       contentType: blob.type || mime || "application/octet-stream",
       cacheControl: "3600",
@@ -438,6 +467,20 @@
 
   async function uploadDataUrl(dataUrl, path, mime) {
     return uploadBlob(dataUrlToBlob(dataUrl), path, mime);
+  }
+
+  async function moderateTextContent(kind, value) {
+    requireClient();
+    const text = String(value || "").trim().normalize("NFC");
+    if (!text) return null;
+    const allowed = new Set(["post_text", "comment_text", "message_text", "community_message_text"]);
+    if (!allowed.has(kind)) throw new Error("Invalid moderation request.");
+    const { data, error } = await sb.functions.invoke("rivo-content-moderate", {
+      body: { action: "moderate_text", kind, content: text }
+    });
+    if (error) throw new Error("Content moderation is unavailable. Please try again.");
+    if (data?.approved !== true || !data?.moderationId) throw new Error("This content is not allowed on Rivo.");
+    return String(data.moderationId);
   }
 
   async function persistMedia(profile) {
@@ -753,7 +796,8 @@
     const text = String(content || "").trim().normalize("NFC");
     if (!u || !text) throw new Error("Message and recipient are required.");
     if (text.length > 2000) throw new Error("Message is too long (max 2000 characters).");
-    return callRpc("rivo_send_message", { p_receiver_username: u, p_content: text });
+    const moderationId = await moderateTextContent("message_text", text);
+    return callRpc("rivo_send_message", { p_receiver_username: u, p_content: text, p_moderation_id: moderationId });
   }
   async function listConversations() {
     return callRpc("rivo_list_conversations");
@@ -1005,7 +1049,8 @@
     const blob = dataUrlToBlob(dataUrl);
     const mime = "image/webp";
     const storagePath = `${uid}/stories/${stamp}.webp`;
-    const publicUrl = await uploadBlob(blob, storagePath, mime);
+    const moderatedImage = await uploadModeratedImage(blob, storagePath, mime);
+    const publicUrl = moderatedImage.url;
     try {
       const { data, error } = await sb.rpc("rivo_create_story", {
         p_media_url: publicUrl,
@@ -1716,7 +1761,7 @@
   }
 
 
-  const REACTION_SET = ["❤️","😂","👍","😮","😢"];
+  const REACTION_SET = ["⭐"];
 
   function normalizeMessageText(value) {
     return String(value ?? "").replace(/\r\n?/g, "\n").normalize("NFC").trim();
@@ -1734,8 +1779,7 @@
 
   async function toggleMessageReaction(messageId, reaction) {
     requireClient();
-    const r = String(reaction || "");
-    if (!REACTION_SET.includes(r)) throw new Error("Unsupported reaction");
+    const r = "⭐";
     const { data, error } = await sb.rpc("rivo_toggle_message_reaction", { p_message_id: Number(messageId), p_reaction: r });
     if (error) throw error;
     return data;
@@ -1957,17 +2001,25 @@ async function getVoiceUrl(path) {
     const dataUrl = await compressImage(file, 1800, .86);
     const blob = dataUrlToBlob(dataUrl);
     const path = `${me.id}/posts/${Date.now()}-${crypto.randomUUID()}.webp`;
-    const url = await uploadBlob(blob, path, "image/webp");
-    return { url, path, type: "image/webp" };
+    return await uploadModeratedImage(blob, path, "image/webp");
   }
   async function listPosts(username=null, limit=30, offset=0) { return callRpc("rivo_list_posts", { p_username: username || null, p_limit: limit, p_offset: offset }); }
   async function getPost(id) { return callRpc("rivo_get_post", { p_post_id: Number(id) }); }
-  async function createPost(content, media=[]) { return callRpc("rivo_create_post", { p_content: String(content||""), p_media: media.slice(0,5) }); }
+  async function createPost(content, media=[]) {
+    const text = String(content || "").trim().normalize("NFC");
+    const list = media.slice(0,5);
+    const moderationId = text ? await moderateTextContent("post_text", text) : null;
+    return callRpc("rivo_create_post", { p_content: text, p_media: list, p_moderation_id: moderationId });
+  }
   async function deletePost(id) { return callRpc("rivo_delete_post", { p_post_id:Number(id) }); }
   async function reactPost(id, reaction) {
-    return withInFlightGuard(`POST_REACTION_TOGGLE:${id}`, () => callRpc("rivo_toggle_post_reaction", { p_post_id:Number(id), p_reaction:reaction }, "POST_REACTION_TOGGLE"));
+    return withInFlightGuard(`POST_REACTION_TOGGLE:${id}`, () => callRpc("rivo_toggle_post_reaction", { p_post_id:Number(id), p_reaction:"⭐" }, "POST_REACTION_TOGGLE"));
   }
-  async function commentPost(id, content) { return callRpc("rivo_add_post_comment", { p_post_id:Number(id), p_content:String(content||"") }, "POST_COMMENT_ADD"); }
+  async function commentPost(id, content) {
+    const text = String(content || "").trim().normalize("NFC");
+    const moderationId = await moderateTextContent("comment_text", text);
+    return callRpc("rivo_add_post_comment", { p_post_id:Number(id), p_content:text, p_moderation_id:moderationId }, "POST_COMMENT_ADD");
+  }
   async function deletePostComment(commentId) {
     const id = Number(commentId);
     if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid comment");
@@ -2007,7 +2059,11 @@ async function getVoiceUrl(path) {
   async function respondCommunityRequest(id, username, accept) { return callRpc("rivo_respond_community_request", { p_id:Number(id), p_username:username, p_accept:!!accept }); }
   async function kickCommunityMember(id, username) { return callRpc("rivo_kick_community_member", { p_id:Number(id), p_username:username }); }
   async function getCommunityMessages(id) { return callRpc("rivo_get_community_messages", { p_id:Number(id), p_limit:160 }); }
-  async function sendCommunityMessage(id, content) { return callRpc("rivo_send_community_message", { p_id:Number(id), p_content:String(content||"") }); }
+  async function sendCommunityMessage(id, content) {
+    const text = String(content || "").trim().normalize("NFC");
+    const moderationId = await moderateTextContent("community_message_text", text);
+    return callRpc("rivo_send_community_message", { p_id:Number(id), p_content:text, p_moderation_id:moderationId });
+  }
   async function subscribeCommunityMessages(communityId, callback) {
     requireClient();
     const session=(await sb.auth.getSession()).data?.session;
