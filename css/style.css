@@ -4997,6 +4997,12 @@ body.video-reward-open{overflow:hidden;}
 }
 
 
+/* Rivo v23 cleanup: keep Home out of the desktop topbar only.
+   The menu/home route remains available elsewhere; mobile navigation is untouched. */
+@media (min-width:761px){
+  .desktop-nav a[href*="posts.html"]{display:none!important;}
+}
+
 /* Rivo v18: global light/dark control + calm light UI palette. The profile
    card itself remains user-designed and keeps its own template appearance. */
 .theme-toggle-btn{position:relative;flex:0 0 38px;width:38px;height:38px;font-size:16px;line-height:1}
@@ -5268,43 +5274,3 @@ html[data-color-scheme="light"] [data-template="white-signal"] .profile-card{
 @media(max-width:760px){
   html[data-color-scheme="light"] .profile-card{width:calc(100% - 6px);transform:translateY(-3px);}
 }
-
-/* Rivo desktop navigation final correction.
-   Desktop: keep the primary navigation visible, including Home.
-   Mobile rules are intentionally untouched. */
-@media (min-width:761px){
-  .topbar .topbar-right{
-    display:flex;
-    align-items:center;
-    gap:8px;
-    min-width:0;
-  }
-
-  .topbar .desktop-nav{
-    display:flex!important;
-    align-items:center!important;
-    gap:4px!important;
-    flex:0 1 auto;
-    min-width:0;
-    visibility:visible!important;
-    opacity:1!important;
-  }
-
-  .topbar .desktop-nav a{
-    display:inline-flex!important;
-    align-items:center!important;
-    justify-content:center;
-    white-space:nowrap!important;
-  }
-
-  .topbar .desktop-nav a[href*="posts.html"]{
-    display:inline-flex!important;
-  }
-
-  .topbar .menu-button{
-    display:grid!important;
-    place-items:center!important;
-    flex:0 0 40px!important;
-  }
-}
-
