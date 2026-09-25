@@ -1964,8 +1964,8 @@ async function getVoiceUrl(path) {
   async function getPost(id) { return callRpc("rivo_get_post", { p_post_id: Number(id) }); }
   async function createPost(content, media=[]) { return callRpc("rivo_create_post", { p_content: String(content||""), p_media: media.slice(0,5) }); }
   async function deletePost(id) { return callRpc("rivo_delete_post", { p_post_id:Number(id) }); }
-  async function reactPost(id, reaction) {
-    return withInFlightGuard(`POST_REACTION_TOGGLE:${id}`, () => callRpc("rivo_toggle_post_reaction", { p_post_id:Number(id), p_reaction:reaction }, "POST_REACTION_TOGGLE"));
+  async function reactPost(id, reaction="⭐") {
+    return withInFlightGuard(`POST_REACTION_TOGGLE:${id}`, () => callRpc("rivo_toggle_post_reaction", { p_post_id:Number(id), p_reaction:"⭐" }, "POST_REACTION_TOGGLE"));
   }
   async function commentPost(id, content) { return callRpc("rivo_add_post_comment", { p_post_id:Number(id), p_content:String(content||"") }, "POST_COMMENT_ADD"); }
   async function deletePostComment(commentId) {

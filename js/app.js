@@ -3678,7 +3678,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
       finally { callSave.disabled=false; callSave.textContent="Save call privacy"; }
     });
   }
-  const POST_REACTIONS = ["❤️","😂","👍","😮","😢"];
+  const POST_REACTION = "⭐";
   function formatSocialTime(value){
     const d=new Date(value); if(Number.isNaN(d.getTime())) return "";
     const diff=Math.max(0,Date.now()-d.getTime()), mins=Math.floor(diff/60000), hrs=Math.floor(mins/60), days=Math.floor(hrs/24);
@@ -3688,8 +3688,10 @@ voiceMessageSend?.addEventListener("click",async()=>{
     return author?.avatar ? `<img class="avatar-sm" src="${esc(author.avatar)}" alt="">` : `<span class="avatar-sm avatar-fallback">${esc((author?.displayName||author?.username||"U").slice(0,2).toUpperCase())}</span>`;
   }
   function reactionSummary(post){
-    const r=post.reactions||{};
-    return POST_REACTIONS.map(x=>({x,n:Number(r[x]||0)})).filter(x=>x.n>0).map(x=>`<span class="reaction-chip">${x.x} ${x.n}</span>`).join("");
+    const count=Number((post?.reactions||{})[POST_REACTION]||0);
+    return count>0
+      ? `<div class="post-reaction-summary" aria-label="${count} star reactions"><span class="post-reaction-star-mini" aria-hidden="true">★</span><b>${count}</b></div>`
+      : `<div class="post-reaction-summary empty" aria-hidden="true"></div>`;
   }
   function ensurePostImageViewer(){
     let box=document.querySelector("[data-post-image-viewer]");
@@ -3795,20 +3797,14 @@ voiceMessageSend?.addEventListener("click",async()=>{
     const repNames=Array.isArray(post.reposter_names)?post.reposter_names:[];
     const mediaHtml=medias.length?`<div class="post-media count-${Math.min(5,medias.length)}">${medias.slice(0,5).map((m,i)=>`<button type="button" class="post-media-thumb" data-post-image="${esc(m.url)}" aria-label="Open image ${i+1}"><img src="${esc(m.url)}" alt="" loading="lazy"></button>`).join("")}</div>`:"";
     const note=post.profile_reposted?`<div class="repost-note">↻ Reposted to this profile</div>`:repNames.length?`<div class="repost-note">↻ Reposted by <b>${esc(repNames[0].displayName||repNames[0].username)}</b>${repNames.length>1?` and ${repNames.length-1} more`:""}</div>`:"";
-    const primaryReaction=myReaction||"👍";
-    const reactionTotal=POST_REACTIONS.reduce((sum,r)=>sum+Number((post.reactions||{})[r]||0),0);
-    const primaryCount=myReaction?Number((post.reactions||{})[myReaction]||0):reactionTotal;
-    const reactionPicker=POST_REACTIONS.map(r=>`<button type="button" class="post-reaction-option ${myReaction===r?'active':''}" data-post-react="${esc(r)}" aria-label="React ${esc(r)}">${r}</button>`).join("");
-    const reactionKinds=POST_REACTIONS.map(r=>({r,n:Number((post.reactions||{})[r]||0)})).filter(x=>x.n>0);
-    const reactionKindsTotal=reactionKinds.reduce((sum,x)=>sum+x.n,0);
-    const reactionSummaryHtml=reactionKindsTotal
-      ? `<div class="post-reaction-summary" aria-label="${reactionKindsTotal} reactions"><span class="post-reaction-emojis">${reactionKinds.slice(0,5).map(x=>`<span>${x.r}</span>`).join("")}</span><b>${reactionKindsTotal}</b></div>`
-      : `<div class="post-reaction-summary empty" aria-hidden="true"></div>`;
+    const starActive=myReaction===POST_REACTION;
+    const starIcon=`<svg class="post-star-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.7 2.55 5.16 5.7.83-4.13 4.02.98 5.68L12 16.7l-5.1 2.69.97-5.68-4.12-4.02 5.69-.83L12 3.7Z"/></svg>`;
+    const reactionSummaryHtml=reactionSummary(post);
     const iconComment=`<svg class="post-action-icon post-action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H8l-4 2v-4.1A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8 11.5h8M8 15h5"/></svg>`;
     const iconReport=`<svg class="post-action-icon post-action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 21V4"/><path d="M6 5h11l-2.5 3L17 11H6"/></svg>`;
     const iconDelete=`<svg class="post-action-icon post-action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14"/><path d="M9 7V4h6v3"/><path d="M8 10v7"/><path d="M12 10v7"/><path d="M16 10v7"/><path d="M7 7l1 14h8l1-14"/></svg>`;
     const iconRepost=`<svg class="post-action-icon post-action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h10a3 3 0 0 1 3 3v1"/><path d="m16 4 3 3-3 3"/><path d="M18 17H8a3 3 0 0 1-3-3v-1"/><path d="m8 20-3-3 3-3"/></svg>`;
-    const reactButtons=`<div class="post-reaction-picker-wrap" data-reaction-wrap><button type="button" class="post-like-button ${myReaction?'liked':''}" data-post-like aria-label="${myReaction?'Change or remove reaction':'Like post'}"><span class="post-like-icon">${myReaction||"👍"}</span></button><div class="post-reaction-picker" data-post-reaction-picker aria-hidden="true">${reactionPicker}</div></div>`;
+    const reactButtons=`<div class="post-like-slot"><button type="button" class="post-like-button post-star-button ${starActive?'liked':''}" data-post-like aria-label="${starActive?'Remove star':'Star post'}" title="${starActive?'Remove star':'Star post'}">${starIcon}</button></div>`;
     const isOwner = !!author?.username && PF.normalizeUsername(author.username) === PF.normalizeUsername(PF.currentUsername() || "");
     const moderationAction = isOwner
       ? `<button type="button" class="post-action post-delete-action" data-post-delete aria-label="Delete post" title="Delete post">${iconDelete}</button>`
@@ -3820,97 +3816,23 @@ voiceMessageSend?.addEventListener("click",async()=>{
   async function renderPostComments(card, postId){await openPostCommentsModal(postId);}
   function bindPostCard(card, post){
     card.querySelectorAll('[data-post-image]').forEach(btn=>btn.addEventListener('click',e=>{e.preventDefault();openPostImageViewer(btn.dataset.postImage||"");}));
-    const reactionWrap=card.querySelector('[data-reaction-wrap]');
     const likeBtn=card.querySelector('[data-post-like]');
-    const picker=card.querySelector('[data-post-reaction-picker]');
-    const closePicker=()=>{if(!picker)return;picker.classList.remove('open');picker.setAttribute('aria-hidden','true');picker.style.position='';picker.style.left='';picker.style.right='';picker.style.top='';picker.style.bottom='';picker.style.transform='';picker.style.transformOrigin='';};
-    const positionReactionPicker=()=>{
-      if(!picker || !picker.classList.contains('open')) return;
-      const trigger=likeBtn?.getBoundingClientRect();
-      if(!trigger) return;
-      picker.style.position='fixed';
-      picker.style.left='0px';
-      picker.style.right='auto';
-      picker.style.bottom='auto';
-      picker.style.transform='none';
-      const pr=picker.getBoundingClientRect();
-      const gap=10;
-      const margin=8;
-      const centerX=trigger.left + trigger.width/2;
-      const left=Math.max(margin, Math.min(centerX-pr.width/2, window.innerWidth-pr.width-margin));
-      const top=Math.max(margin, trigger.top-pr.height-gap);
-      picker.style.setProperty('left', `${Math.round(left)}px`, 'important');
-      picker.style.setProperty('top', `${Math.round(top)}px`, 'important');
-      picker.style.setProperty('right', 'auto', 'important');
-      picker.style.setProperty('bottom', 'auto', 'important');
-      picker.style.setProperty('transform', 'scale(1)', 'important');
-      picker.style.setProperty('transform-origin', 'center bottom', 'important');
-    };
-    const openPicker=()=>{
-      if(!picker)return;
-      picker.classList.add('open');
-      picker.setAttribute('aria-hidden','false');
-      requestAnimationFrame(positionReactionPicker);
-    };
-    let pressTimer=null, longPress=false, pressStartX=0, pressStartY=0;
-    const clearPress=()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null;}};
-    likeBtn?.addEventListener('pointerdown',e=>{
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      longPress=false;
-      pressStartX=e.clientX;
-      pressStartY=e.clientY;
-      clearPress();
-      pressTimer=setTimeout(()=>{pressTimer=null;longPress=true;openPicker();},320);
-    });
-    likeBtn?.addEventListener('pointermove',e=>{
-      if (!pressTimer) return;
-      if (Math.hypot(e.clientX-pressStartX,e.clientY-pressStartY) > 10) clearPress();
-    });
-    ["pointerup","pointercancel"].forEach(type=>likeBtn?.addEventListener(type,clearPress));
-    likeBtn?.addEventListener('contextmenu',e=>{e.preventDefault();openPicker();});
-    window.addEventListener('resize',()=>{
-      if(!picker || !picker.classList.contains('open')) return;
-      positionReactionPicker();
-    });
-    // Keep the picker fixed in the viewport while scrolling; only dismiss it
-    // once the originating Like button has moved sufficiently far off-screen.
-    window.addEventListener('scroll',()=>{
-      if(!picker || !picker.classList.contains('open')) return;
-      const trigger=likeBtn?.getBoundingClientRect();
-      if(!trigger) return;
-      const offscreenMargin=96;
-      if(trigger.bottom < -offscreenMargin || trigger.top > window.innerHeight + offscreenMargin){
-        closePicker();
-      }
-    }, {passive:true});
     likeBtn?.addEventListener('click',async e=>{
-      if(longPress){longPress=false;return;}
-      if(!PF.currentUsername()){location.href='login.html';return;}
-      closePicker();
-      try{
-        // Read the current server state before toggling. This prevents a stale
-        // card from trying to add a reaction that is already present.
-        const fresh=await PF.getPost(post.id);
-        const currentReaction=fresh?.my_reaction||null;
-        await PF.reactPost(post.id,currentReaction||"👍");
-        await refreshPostCard(post.id);
-      }catch(err){notify(err.message,'error')}
-    });
-    card.querySelectorAll('[data-post-react]').forEach(btn=>btn.addEventListener('click',async e=>{
-      e.stopPropagation();
+      e.preventDefault();
+      if(likeBtn.disabled) return;
       if(!PF.currentUsername()){location.href='login.html';return}
+      likeBtn.disabled=true;
       try{
-        // Always compare against the latest server-side reaction. Selecting
-        // the same reaction again is a removal, not a duplicate insertion.
-        const selected=btn.dataset.postReact;
         const fresh=await PF.getPost(post.id);
-        const currentReaction=fresh?.my_reaction||null;
-        await PF.reactPost(post.id,currentReaction===selected?currentReaction:selected);
-        closePicker();
+        const active=fresh?.my_reaction===POST_REACTION;
+        await PF.reactPost(post.id, POST_REACTION);
+        likeBtn.classList.toggle('liked', !active);
+        likeBtn.setAttribute('aria-label', !active ? 'Remove star' : 'Star post');
+        likeBtn.setAttribute('title', !active ? 'Remove star' : 'Star post');
         await refreshPostCard(post.id);
-      }catch(err){notify(err.message,'error')}
-    }));
-    document.addEventListener('click',e=>{if(reactionWrap&&!reactionWrap.contains(e.target))closePicker();},{once:false});
+      }catch(err){notify(err.message||'Could not update star','error')}
+      finally{likeBtn.disabled=false}
+    });
     card.querySelector('[data-post-comments]')?.addEventListener('click',async()=>{await renderPostComments(card,post.id)});
     card.querySelector('[data-post-repost]')?.addEventListener('click',async()=>{if(!PF.currentUsername()){location.href='login.html';return}try{await PF.repostPost(post.id);await refreshPostCard(post.id)}catch(e){notify(e.message,'error')}});
     card.querySelector('[data-post-report]')?.addEventListener('click',async()=>{
