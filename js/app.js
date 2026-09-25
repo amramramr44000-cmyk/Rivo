@@ -831,6 +831,8 @@
       media.style.opacity = "0";
       media.style.pointerEvents = "none";
       media.style.left = "-9999px";
+      media.muted = false;
+      media.volume = 1;
       document.body.appendChild(media);
       try {
         await media.play();
@@ -838,6 +840,70 @@
       active.audioEls = active.audioEls || [];
       active.audioEls.push(media);
       return media;
+    }
+
+    // Ask for microphone permission from the actual Call button/Accept button
+    // before LiveKit needs to publish. This avoids the common one-way-audio case
+    // where the microphone is requested only after an async ringing signal.
+    async function preflightCallMicrophone() {
+      if (!navigator.mediaDevices?.getUserMedia) return false;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+        stream.getTracks().forEach(track => { try { track.stop(); } catch {} });
+        return true;
+      } catch (error) {
+        console.warn("[Rivo Calls] Microphone preflight failed:", error);
+        return false;
+      }
+    }
+
+    async function ensureMicrophonePublished(room) {
+      if (!room?.localParticipant || !active) return false;
+      const lp = room.localParticipant;
+      if (active.micEnabled === false) return true;
+
+      let publication = null;
+      try {
+        publication = lp.getTrackPublication(LK.Track.Source.Microphone);
+        if (publication?.track && publication.isMuted !== true) return true;
+      } catch {}
+
+      try {
+        await lp.setMicrophoneEnabled(true);
+      } catch (error) {
+        console.warn("[Rivo Calls] setMicrophoneEnabled failed:", error);
+      }
+
+      try {
+        publication = lp.getTrackPublication(LK.Track.Source.Microphone);
+        if (publication?.track) return publication.isMuted !== true;
+      } catch {}
+
+      // Strong fallback: explicitly create and publish the local audio track.
+      // This is used only when the normal LiveKit helper did not produce a
+      // microphone publication, preventing silent one-way calls.
+      try {
+        if (typeof LK.createLocalAudioTrack === "function") {
+          const localTrack = await LK.createLocalAudioTrack({
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          });
+          await lp.publishTrack(localTrack, { source: LK.Track.Source.Microphone });
+          publication = lp.getTrackPublication(LK.Track.Source.Microphone);
+          return !!publication?.track;
+        }
+      } catch (error) {
+        console.warn("[Rivo Calls] Explicit microphone publish failed:", error);
+      }
+
+      return false;
     }
 
     async function buildAudioRouteMenu() {
@@ -953,8 +1019,7 @@
         audioCaptureDefaults: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true,
-          voiceIsolation: true
+          autoGainControl: true
         },
         publishDefaults: {
           simulcast: true,
@@ -969,6 +1034,21 @@
           try {
             if (publication?.source === LK.Track.Source.Camera && publication.track) {
               attachLocalVideo(publication.track);
+            }
+          } catch {}
+          try {
+            if (publication?.source === LK.Track.Source.Microphone && active) {
+              active.micEnabled = true;
+            }
+          } catch {}
+        });
+      }
+
+      if (LK.RoomEvent.LocalTrackUnpublished) {
+        room.on(LK.RoomEvent.LocalTrackUnpublished, publication => {
+          try {
+            if (publication?.source === LK.Track.Source.Microphone && active?.micEnabled !== false) {
+              setTimeout(() => ensureMicrophonePublished(room), 100);
             }
           } catch {}
         });
@@ -997,7 +1077,11 @@
       });
 
       room.on(LK.RoomEvent.Reconnecting, () => state("Reconnecting…"));
-      room.on(LK.RoomEvent.Reconnected, () => {
+      room.on(LK.RoomEvent.Reconnected, async () => {
+        if (active?.micEnabled !== false) {
+          const ok = await ensureMicrophonePublished(room);
+          if (!ok) notifyCall("Microphone was not restored after reconnect.", "error");
+        }
         state("Connected", true);
         updateQuality(room.localParticipant.connectionQuality);
         if (!callStartedAt) timer();
@@ -1063,7 +1147,10 @@
         }
       );
 
-      await room.localParticipant.setMicrophoneEnabled(true);
+      const micPublished = await ensureMicrophonePublished(room);
+      if (!micPublished) {
+        notifyCall("Microphone could not be published. Check browser microphone permission and try again.", "error");
+      }
 
       if (active.isVideo) {
         try {
@@ -1091,6 +1178,9 @@
       if (active) return notifyCall("A call is already active.", "error");
       if (!LK) throw new Error("Call system is unavailable.");
 
+      // Start microphone permission from the user's Call-button gesture.
+      // The result is cached only for this call; no microphone stream is kept alive.
+      const micPermissionPromise = preflightCallMicrophone();
       const me = await PF.currentProfile();
       const peer = await PF.getCallUser(username);
       const isVideo = type === "video";
@@ -1119,10 +1209,13 @@
         inbox: null,
         channel: null,
         room: null,
-        audioEls: []
+        audioEls: [],
+        micEnabled: true,
+        micPermissionPrepared: false
       };
 
       try {
+        active.micPermissionPrepared = await micPermissionPromise;
         active.channel = await PF.openCallChannel(
           `rivo-call-${callId}`,
           handleSignal
@@ -1213,7 +1306,9 @@
         inbox: null,
         channel: null,
         room: null,
-        audioEls: []
+        audioEls: [],
+        micEnabled: true,
+        micPermissionPrepared: false
       };
     }
 
@@ -1224,6 +1319,7 @@
       e.incoming.classList.add("hidden");
 
       try {
+        active.micPermissionPrepared = await preflightCallMicrophone();
         active.channel = await PF.openCallChannel(
           `rivo-call-${active.callId}`,
           handleSignal
@@ -1299,11 +1395,23 @@
 
       const e = E();
       const on = active.room.localParticipant.isMicrophoneEnabled;
+      const nextEnabled = !on;
 
-      await active.room.localParticipant.setMicrophoneEnabled(!on);
+      try {
+        active.micEnabled = nextEnabled;
+        await active.room.localParticipant.setMicrophoneEnabled(nextEnabled);
+        if (nextEnabled) {
+          const ok = await ensureMicrophonePublished(active.room);
+          if (!ok) throw new Error("Microphone publication failed");
+        }
+      } catch (error) {
+        if (nextEnabled) active.micEnabled = false;
+        notifyCall(error?.message || "Unable to change microphone state.", "error");
+        return;
+      }
 
-      e.mute.classList.toggle("is-off", on);
-      e.mute.setAttribute("aria-label", on ? "Unmute microphone" : "Mute microphone");
+      e.mute.classList.toggle("is-off", !nextEnabled);
+      e.mute.setAttribute("aria-label", nextEnabled ? "Mute microphone" : "Unmute microphone");
     }
 
     async function toggleCamera() {
