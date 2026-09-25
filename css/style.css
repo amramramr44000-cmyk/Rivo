@@ -2774,7 +2774,9 @@ body,main,.container,.messages-shell,.messages-layout{max-width:100%;overflow-x:
 @media(min-width:761px){.rivo-mobile-bottom-nav{display:none!important}}
 /* Desktop topbar: use one overflow menu instead of repeating destinations. */
 @media(min-width:761px){
-  .desktop-nav{display:none!important;}
+  /* Desktop navigation must remain visible. Home is the first primary destination. */
+  .desktop-nav{display:flex!important;align-items:center;gap:4px;flex-wrap:nowrap;min-width:0;}
+  .desktop-nav a{display:inline-flex!important;align-items:center;white-space:nowrap;}
   .menu-button{display:grid!important;place-items:center;width:40px;height:40px;}
   .menu-panel{
     top:66px;
