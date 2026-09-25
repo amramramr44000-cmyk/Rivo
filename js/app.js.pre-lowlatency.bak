@@ -818,134 +818,92 @@
       return d;
     }
 
-    const AUDIO_CAPTURE_OPTIONS = {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-      latency: 0.01,
-      channelCount: 1,
-      voiceIsolation: false
-    };
-
-    const AUDIO_PUBLISH_OPTIONS = () => ({
-      source: LK?.Track?.Source?.Microphone,
-      audioPreset: LK?.AudioPresets?.speech,
-      dtx: true,
-      red: true,
-      stopMicTrackOnMute: false
-    });
-
     async function attachAudioTrack(track) {
-      if (!active || !track) return null;
-
-      let media = active.remoteAudioEl;
-      if (!media) {
-        media = document.createElement("audio");
-        media.autoplay = true;
-        media.playsInline = true;
-        media.setAttribute("playsinline", "");
-        media.setAttribute("data-rivo-call-audio", "true");
-        media.className = "call-remote-audio";
-        media.preload = "auto";
-        media.muted = false;
-        media.volume = 1;
-        media.style.position = "fixed";
-        media.style.width = "1px";
-        media.style.height = "1px";
-        media.style.opacity = "0.01";
-        media.style.pointerEvents = "none";
-        media.style.left = "-9999px";
-        document.body.appendChild(media);
-        active.remoteAudioEl = media;
-      }
-
-      if (active.remoteAudioTrack && active.remoteAudioTrack !== track) {
-        try { active.remoteAudioTrack.detach(media); } catch {}
-        try { active.remoteAudioTrack.detach(); } catch {}
-      }
-
-      active.remoteAudioTrack = track;
+      const media = track.attach();
+      media.autoplay = true;
+      media.playsInline = true;
+      media.setAttribute("playsinline", "");
+      media.setAttribute("data-rivo-call-audio", "true");
+      media.className = "call-remote-audio";
+      media.style.position = "fixed";
+      media.style.width = "1px";
+      media.style.height = "1px";
+      media.style.opacity = "0";
+      media.style.pointerEvents = "none";
+      media.style.left = "-9999px";
+      media.muted = false;
+      media.volume = 1;
+      document.body.appendChild(media);
       try {
-        track.attach(media);
-      } catch {
-        try {
-          const fallback = track.attach();
-          fallback.autoplay = true;
-          fallback.playsInline = true;
-          fallback.volume = 1;
-          fallback.style.position = "fixed";
-          fallback.style.width = "1px";
-          fallback.style.height = "1px";
-          fallback.style.opacity = "0.01";
-          fallback.style.pointerEvents = "none";
-          fallback.style.left = "-9999px";
-          document.body.appendChild(fallback);
-          active.remoteAudioFallbackEl = fallback;
-        } catch {}
-      }
-
-      try { await media.play(); } catch {}
+        await media.play();
+      } catch {}
+      active.audioEls = active.audioEls || [];
+      active.audioEls.push(media);
       return media;
+    }
+
+    // Ask for microphone permission from the actual Call button/Accept button
+    // before LiveKit needs to publish. This avoids the common one-way-audio case
+    // where the microphone is requested only after an async ringing signal.
+    async function preflightCallMicrophone() {
+      if (!navigator.mediaDevices?.getUserMedia) return false;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+        stream.getTracks().forEach(track => { try { track.stop(); } catch {} });
+        return true;
+      } catch (error) {
+        console.warn("[Rivo Calls] Microphone preflight failed:", error);
+        return false;
+      }
     }
 
     async function ensureMicrophonePublished(room) {
       if (!room?.localParticipant || !active) return false;
+      const lp = room.localParticipant;
       if (active.micEnabled === false) return true;
 
-      const lp = room.localParticipant;
       let publication = null;
-
       try {
         publication = lp.getTrackPublication(LK.Track.Source.Microphone);
-        if (publication?.track) {
-          if (publication.isMuted) {
-            await lp.setMicrophoneEnabled(true, AUDIO_CAPTURE_OPTIONS, AUDIO_PUBLISH_OPTIONS());
-          }
-          active.micTrack = publication.track;
-          return true;
-        }
+        if (publication?.track && publication.isMuted !== true) return true;
       } catch {}
 
       try {
-        publication = await lp.setMicrophoneEnabled(
-          true,
-          AUDIO_CAPTURE_OPTIONS,
-          AUDIO_PUBLISH_OPTIONS()
-        );
-        if (publication?.track) {
-          active.micTrack = publication.track;
-          return true;
-        }
+        await lp.setMicrophoneEnabled(true);
       } catch (error) {
-        console.warn("[Rivo Calls] Microphone enable failed:", error);
+        console.warn("[Rivo Calls] setMicrophoneEnabled failed:", error);
       }
 
-      // Wait for the SDK to finish its single microphone publication instead
-      // of creating another track, which can cause duplicate audio/echo.
-      for (let i = 0; i < 10; i++) {
-        await new Promise(resolve => setTimeout(resolve, 50));
-        try {
+      try {
+        publication = lp.getTrackPublication(LK.Track.Source.Microphone);
+        if (publication?.track) return publication.isMuted !== true;
+      } catch {}
+
+      // Strong fallback: explicitly create and publish the local audio track.
+      // This is used only when the normal LiveKit helper did not produce a
+      // microphone publication, preventing silent one-way calls.
+      try {
+        if (typeof LK.createLocalAudioTrack === "function") {
+          const localTrack = await LK.createLocalAudioTrack({
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          });
+          await lp.publishTrack(localTrack, { source: LK.Track.Source.Microphone });
           publication = lp.getTrackPublication(LK.Track.Source.Microphone);
-          if (publication?.track) {
-            active.micTrack = publication.track;
-            return true;
-          }
-        } catch {}
+          return !!publication?.track;
+        }
+      } catch (error) {
+        console.warn("[Rivo Calls] Explicit microphone publish failed:", error);
       }
 
       return false;
-    }
-
-    async function cleanupRemoteAudio(callState) {
-      if (!callState) return;
-      try { callState.remoteAudioTrack?.detach?.(callState.remoteAudioEl); } catch {}
-      try { callState.remoteAudioTrack?.detach?.(); } catch {}
-      for (const el of [callState.remoteAudioEl, callState.remoteAudioFallbackEl]) {
-        try { el?.pause?.(); if (el) el.srcObject = null; el?.remove?.(); } catch {}
-      }
-      callState.remoteAudioTrack = null;
-      callState.remoteAudioEl = null;
-      callState.remoteAudioFallbackEl = null;
     }
 
     async function buildAudioRouteMenu() {
@@ -1053,29 +1011,22 @@
         : undefined;
 
       const room = new LK.Room({
-        adaptiveStream: active.isVideo,
-        dynacast: active.isVideo,
+        adaptiveStream: true,
+        dynacast: true,
         disconnectOnPageLeave: true,
-        webAudioMix: false,
+        webAudioMix: true,
         reconnectPolicy,
-        audioCaptureDefaults: AUDIO_CAPTURE_OPTIONS,
-        publishDefaults: active.isVideo
-          ? {
-              audioPreset: LK.AudioPresets?.speech,
-              dtx: true,
-              red: true,
-              stopMicTrackOnMute: false,
-              simulcast: true,
-              videoCodec: "vp8",
-              degradationPreference: "maintain-framerate",
-              videoSimulcastLayers: []
-            }
-          : {
-              audioPreset: LK.AudioPresets?.speech,
-              dtx: true,
-              red: true,
-              stopMicTrackOnMute: false
-            }
+        audioCaptureDefaults: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
+        publishDefaults: {
+          simulcast: true,
+          videoCodec: "vp8",
+          degradationPreference: "maintain-framerate",
+          videoSimulcastLayers: []
+        }
       });
 
       if (LK.RoomEvent.LocalTrackPublished) {
@@ -1122,19 +1073,7 @@
       });
 
       room.on(LK.RoomEvent.TrackUnsubscribed, track => {
-        if (track?.kind === LK.Track.Kind.Audio && active?.remoteAudioTrack === track) {
-          try { track.detach(active.remoteAudioEl); } catch {}
-          try { track.detach(); } catch {}
-          active.remoteAudioTrack = null;
-          try {
-            if (active.remoteAudioEl) {
-              active.remoteAudioEl.pause();
-              active.remoteAudioEl.srcObject = null;
-            }
-          } catch {}
-        } else {
-          try { track.detach().forEach(x => x.remove()); } catch {}
-        }
+        try { track.detach().forEach(x => x.remove()); } catch {}
       });
 
       room.on(LK.RoomEvent.Reconnecting, () => state("Reconnecting…"));
@@ -1241,6 +1180,7 @@
 
       // Start microphone permission from the user's Call-button gesture.
       // The result is cached only for this call; no microphone stream is kept alive.
+      const micPermissionPromise = preflightCallMicrophone();
       const me = await PF.currentProfile();
       const peer = await PF.getCallUser(username);
       const isVideo = type === "video";
@@ -1270,14 +1210,12 @@
         channel: null,
         room: null,
         audioEls: [],
-        remoteAudioEl: null,
-        remoteAudioTrack: null,
-        remoteAudioFallbackEl: null,
-        micTrack: null,
-        micEnabled: true
+        micEnabled: true,
+        micPermissionPrepared: false
       };
 
       try {
+        active.micPermissionPrepared = await micPermissionPromise;
         active.channel = await PF.openCallChannel(
           `rivo-call-${callId}`,
           handleSignal
@@ -1369,11 +1307,8 @@
         channel: null,
         room: null,
         audioEls: [],
-        remoteAudioEl: null,
-        remoteAudioTrack: null,
-        remoteAudioFallbackEl: null,
-        micTrack: null,
-        micEnabled: true
+        micEnabled: true,
+        micPermissionPrepared: false
       };
     }
 
@@ -1384,6 +1319,7 @@
       e.incoming.classList.add("hidden");
 
       try {
+        active.micPermissionPrepared = await preflightCallMicrophone();
         active.channel = await PF.openCallChannel(
           `rivo-call-${active.callId}`,
           handleSignal
@@ -1445,8 +1381,6 @@
             try { el.srcObject = null; el.remove(); } catch {}
           });
         }
-        await cleanupRemoteAudio(old);
-        try { old?.micTrack?.stop?.(); } catch {}
 
         await old?.inbox?.close?.();
         await old?.channel?.close?.();
@@ -1465,20 +1399,10 @@
 
       try {
         active.micEnabled = nextEnabled;
+        await active.room.localParticipant.setMicrophoneEnabled(nextEnabled);
         if (nextEnabled) {
-          const publication = await active.room.localParticipant.setMicrophoneEnabled(
-            true,
-            AUDIO_CAPTURE_OPTIONS,
-            AUDIO_PUBLISH_OPTIONS()
-          );
-          if (!publication?.track) {
-            const ok = await ensureMicrophonePublished(active.room);
-            if (!ok) throw new Error("Microphone publication failed");
-          } else {
-            active.micTrack = publication.track;
-          }
-        } else {
-          await active.room.localParticipant.setMicrophoneEnabled(false);
+          const ok = await ensureMicrophonePublished(active.room);
+          if (!ok) throw new Error("Microphone publication failed");
         }
       } catch (error) {
         if (nextEnabled) active.micEnabled = false;
