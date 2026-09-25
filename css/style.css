@@ -4997,11 +4997,8 @@ body.video-reward-open{overflow:hidden;}
 }
 
 
-/* Rivo v23 cleanup: keep Home out of the desktop topbar only.
-   The menu/home route remains available elsewhere; mobile navigation is untouched. */
-@media (min-width:761px){
-  .desktop-nav a[href*="posts.html"]{display:none!important;}
-}
+/* Desktop Home fix: Home (posts.html) stays visible in the primary top navigation.
+   Mobile navigation remains unchanged. */
 
 /* Rivo v18: global light/dark control + calm light UI palette. The profile
    card itself remains user-designed and keeps its own template appearance. */
