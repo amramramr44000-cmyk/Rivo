@@ -5273,3 +5273,13 @@ html[data-color-scheme="light"] [data-template="white-signal"] .profile-card{
 @media(max-width:760px){
   html[data-color-scheme="light"] .profile-card{width:calc(100% - 6px);transform:translateY(-3px);}
 }
+
+
+/* v33: unified post star interaction — one-tap toggle only. */
+.post-star-button{color:#929baa!important;position:relative;transition:color .16s ease,background .16s ease,transform .16s ease,filter .16s ease;}
+.post-star-icon{width:19px;height:19px;display:block;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;transition:transform .16s ease,filter .16s ease;}
+.post-star-button:hover,.post-star-button:focus-visible{color:color-mix(in srgb,var(--accent) 78%,#fff)!important;background:color-mix(in srgb,var(--accent) 8%,transparent)!important;outline:none;}
+.post-star-button.liked{color:color-mix(in srgb,var(--accent) 76%,#fff)!important;background:color-mix(in srgb,var(--accent) 10%,transparent)!important;filter:drop-shadow(0 0 7px color-mix(in srgb,var(--accent) 26%,transparent));}
+.post-star-button.liked .post-star-icon{fill:color-mix(in srgb,var(--accent) 72%,#fff);stroke:color-mix(in srgb,var(--accent) 72%,#fff);transform:scale(1.04);}
+.post-reaction-star-mini{font-size:13px;line-height:1;color:color-mix(in srgb,var(--accent) 72%,#fff);filter:drop-shadow(0 0 5px color-mix(in srgb,var(--accent) 20%,transparent));}
+@media(max-width:760px){.post-star-icon{width:19px;height:19px}.post-star-button{min-height:42px!important;}}
