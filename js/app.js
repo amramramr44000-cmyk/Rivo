@@ -617,9 +617,19 @@
                 <span class="call-quality" data-call-quality title="Connection quality">
                   <i></i><span data-call-quality-text>—</span>
                 </span>
+                <button class="icon-btn" type="button" data-call-audio-route aria-label="Audio devices" title="Microphone & speaker">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 14.5a8 8 0 0 1 16 0"></path>
+                    <path d="M6 14.5v3.2A2.3 2.3 0 0 0 8.3 20H10v-5.5H7.8A1.8 1.8 0 0 0 6 16.3"></path>
+                    <path d="M18 14.5v3.2A2.3 2.3 0 0 1 15.7 20H14v-5.5h2.2a1.8 1.8 0 0 1 1.8 1.8"></path>
+                    <path d="M12 4v2"></path>
+                  </svg>
+                </button>
                 <button class="icon-btn" type="button" data-call-close aria-label="Close">×</button>
               </div>
             </header>
+
+            <div class="call-audio-route-menu hidden" data-call-route-menu aria-label="Audio devices"></div>
 
             <div class="call-stage" data-call-stage>
               <div class="call-remote-placeholder">
@@ -663,6 +673,27 @@
 
       document.body.appendChild(h);
 
+      if (!document.getElementById("rivo-call-audio-route-style")) {
+        const style = document.createElement("style");
+        style.id = "rivo-call-audio-route-style";
+        style.textContent = `
+          #rivoCallUI .call-audio-route-menu{position:absolute;z-index:20;top:64px;right:16px;width:min(310px,calc(100vw - 32px));max-height:min(52vh,390px);overflow:auto;padding:10px;border:1px solid color-mix(in srgb,var(--accent) 24%,var(--border));border-radius:16px;background:color-mix(in srgb,var(--card-bg,#0b0f16) 96%,transparent);box-shadow:0 20px 55px rgba(0,0,0,.42);backdrop-filter:blur(18px)}
+          #rivoCallUI .call-audio-route-menu.hidden{display:none!important}
+          #rivoCallUI .call-route-section + .call-route-section{margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
+          #rivoCallUI .call-route-title{padding:5px 6px 7px;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:#8f99a8;font-weight:800}
+          #rivoCallUI .call-route-item{width:100%;display:flex;align-items:center;gap:8px;text-align:left;padding:9px 10px;border:1px solid transparent;border-radius:10px;background:rgba(255,255,255,.035);color:inherit;font:inherit;font-size:11px;cursor:pointer}
+          #rivoCallUI .call-route-item:hover{background:color-mix(in srgb,var(--accent) 9%,transparent);border-color:color-mix(in srgb,var(--accent) 18%,transparent)}
+          #rivoCallUI .call-route-item:disabled{opacity:.5;cursor:not-allowed}
+          #rivoCallUI .call-route-note{padding:7px 6px;color:#7f8998;font-size:9px;line-height:1.55}
+          #rivoCallUI .call-route-device{min-width:0;display:flex;flex-direction:column;gap:2px}
+          #rivoCallUI .call-route-device b{font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+          #rivoCallUI .call-route-device small{font-size:8px;color:#768192;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+          #rivoCallUI .call-head-actions .icon-btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+          @media(max-width:760px){#rivoCallUI .call-audio-route-menu{top:58px;right:10px;width:min(340px,calc(100vw - 20px));max-height:46vh}}
+        `;
+        document.head.appendChild(style);
+      }
+
       $("[data-call-backdrop]", h).onclick = e => {
         if (e.target === e.currentTarget && !active?.connected) closeUI();
       };
@@ -672,11 +703,18 @@
         else closeUI();
       };
 
+      $("[data-call-audio-route]", h).onclick = toggleAudioRoute;
       $("[data-call-end]", h).onclick = () => endCall(true);
       $("[data-call-mute]", h).onclick = toggleMute;
       $("[data-call-camera]", h).onclick = toggleCamera;
       $("[data-call-accept]", h).onclick = acceptIncoming;
       $("[data-call-decline]", h).onclick = declineIncoming;
+      h.addEventListener("click", ev => {
+        const routeMenu = $("[data-call-route-menu]", h);
+        const routeBtn = $("[data-call-audio-route]", h);
+        if (routeMenu?.classList.contains("hidden")) return;
+        if (!routeMenu.contains(ev.target) && !routeBtn.contains(ev.target)) closeRouteMenu();
+      });
 
       return h;
     };
@@ -701,17 +739,20 @@
         camera: $("[data-call-camera]", h),
         quality: $("[data-call-quality]", h),
         qualityText: $("[data-call-quality-text]", h),
+        audioRoute: $("[data-call-audio-route]", h),
+        routeMenu: $("[data-call-route-menu]", h),
       };
     };
 
     const closeRouteMenu = () => {
       const e = E();
-      e.routeMenu.classList.add("hidden");
-      e.route.classList.remove("active");
+      e.routeMenu?.classList.add("hidden");
+      e.audioRoute?.classList.remove("active");
     };
 
     const closeUI = () => {
       const e = E();
+      closeRouteMenu();
       e.b.classList.remove("open");
       e.remote.classList.remove("live");
       e.local.classList.remove("live");
@@ -780,6 +821,16 @@
       e.quality.className = `call-quality ${cls}`;
     };
 
+    if (navigator.mediaDevices?.addEventListener) {
+      navigator.mediaDevices.addEventListener("devicechange", () => {
+        if (!active?.room) return;
+        try {
+          const e = E();
+          if (e.routeMenu && !e.routeMenu.classList.contains("hidden")) buildAudioRouteMenu();
+        } catch {}
+      });
+    }
+
     const startQualityMonitor = room => {
       if (qualityTimer) clearInterval(qualityTimer);
       const refresh = () => {
@@ -818,6 +869,9 @@
       return d;
     }
 
+    // Direct-call voice profile: keep browser echo/noise protection, but remove
+    // avoidable codec buffering/comfort-silence behavior so speech starts and
+    // continues as close to the network floor as the browser/device allows.
     const AUDIO_CAPTURE_OPTIONS = {
       echoCancellation: true,
       noiseSuppression: true,
@@ -829,14 +883,23 @@
 
     const AUDIO_PUBLISH_OPTIONS = () => ({
       source: LK?.Track?.Source?.Microphone,
-      audioPreset: LK?.AudioPresets?.speech,
-      dtx: true,
-      red: true,
+      audioPreset: LK?.AudioPresets?.speech
+        ? { ...LK.AudioPresets.speech, priority: "high" }
+        : { maxBitrate: 24000, priority: "high" },
+      // Ultra-low-latency direct conversation: send continuously and do not
+      // wait for redundant recovery audio before the normal speech path.
+      dtx: false,
+      red: false,
+      forceStereo: false,
       stopMicTrackOnMute: false
     });
 
     async function attachAudioTrack(track) {
       if (!active || !track) return null;
+
+      // Keep the direct-call receive path native: no Web Audio mixer/resampler.
+      // Zero explicit playout delay avoids adding application-level buffering.
+      try { track.setPlayoutDelay?.(0); } catch {}
 
       let media = active.remoteAudioEl;
       if (!media) {
@@ -846,9 +909,10 @@
         media.setAttribute("playsinline", "");
         media.setAttribute("data-rivo-call-audio", "true");
         media.className = "call-remote-audio";
-        media.preload = "auto";
+        media.preload = "none";
         media.muted = false;
         media.volume = 1;
+        media.setAttribute("aria-hidden", "true");
         media.style.position = "fixed";
         media.style.width = "1px";
         media.style.height = "1px";
@@ -863,6 +927,12 @@
         try { active.remoteAudioTrack.detach(media); } catch {}
         try { active.remoteAudioTrack.detach(); } catch {}
       }
+      if (active.remoteAudioFallbackEl) {
+        try { active.remoteAudioFallbackEl.pause?.(); } catch {}
+        try { active.remoteAudioFallbackEl.srcObject = null; } catch {}
+        try { active.remoteAudioFallbackEl.remove(); } catch {}
+        active.remoteAudioFallbackEl = null;
+      }
 
       active.remoteAudioTrack = track;
       try {
@@ -873,6 +943,7 @@
           fallback.autoplay = true;
           fallback.playsInline = true;
           fallback.volume = 1;
+          fallback.setAttribute("aria-hidden", "true");
           fallback.style.position = "fixed";
           fallback.style.width = "1px";
           fallback.style.height = "1px";
@@ -884,6 +955,13 @@
         } catch {}
       }
 
+      // Keep both LiveKit's receiver routing and the actual <audio> element
+      // pinned to the selected output when the browser supports it.
+      try { track.setPlayoutDelay?.(0); } catch {}
+      if (active.outputDeviceId && active.outputDeviceId !== "default") {
+        try { await track.setSinkId?.(active.outputDeviceId); } catch {}
+        try { await media.setSinkId?.(active.outputDeviceId); } catch {}
+      }
       try { await media.play(); } catch {}
       return media;
     }
@@ -902,6 +980,7 @@
             await lp.setMicrophoneEnabled(true, AUDIO_CAPTURE_OPTIONS, AUDIO_PUBLISH_OPTIONS());
           }
           active.micTrack = publication.track;
+          try { active.inputDeviceId = (await publication.track.getDeviceId?.()) || active.inputDeviceId; } catch {}
           return true;
         }
       } catch {}
@@ -914,6 +993,7 @@
         );
         if (publication?.track) {
           active.micTrack = publication.track;
+          try { active.inputDeviceId = (await publication.track.getDeviceId?.()) || active.inputDeviceId; } catch {}
           return true;
         }
       } catch (error) {
@@ -950,76 +1030,137 @@
 
     async function buildAudioRouteMenu() {
       const e = E();
+      if (!e.routeMenu) return;
       e.routeMenu.innerHTML = "";
 
-      const supported = !!LK?.supportsAudioOutputSelection?.();
-      const devices = (navigator.mediaDevices?.enumerateDevices)
+      const devices = navigator.mediaDevices?.enumerateDevices
         ? await navigator.mediaDevices.enumerateDevices().catch(() => [])
         : [];
-
+      const inputs = devices.filter(d => d.kind === "audioinput");
       const outputs = devices.filter(d => d.kind === "audiooutput");
+      const outputSelectionSupported = !!LK?.supportsAudioOutputSelection?.();
 
-      const makeItem = (label, deviceId, disabled = false) => {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className = "call-route-item";
-        b.textContent = label;
-        b.disabled = disabled;
-        b.onclick = async () => {
+      const appendItem = (container, { kind, label, sub, deviceId, disabled = false }) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "call-route-item";
+        button.disabled = disabled;
+
+        const icon = document.createElement("span");
+        icon.textContent = kind === "audioinput" ? "🎙" : "🔊";
+        icon.setAttribute("aria-hidden", "true");
+
+        const copy = document.createElement("span");
+        copy.className = "call-route-device";
+        const strong = document.createElement("b");
+        strong.textContent = label;
+        copy.appendChild(strong);
+        if (sub) {
+          const small = document.createElement("small");
+          small.textContent = sub;
+          copy.appendChild(small);
+        }
+        button.append(icon, copy);
+
+        button.onclick = async () => {
+          if (!active?.room) return;
           try {
-            if (!active?.room) return;
-            if (!deviceId || deviceId === "default") {
-              const ok = await active.room.switchActiveDevice("audiooutput", "default", false);
-              if (ok !== false) {
-                e.routeLabel.textContent = "Device";
-                notifyCall("Audio routed to device", "success");
-              }
+            const id = deviceId || "default";
+            if (kind === "audioinput") {
+              await active.room.switchActiveDevice("audioinput", id, false);
+              active.inputDeviceId = id;
+              try {
+                const pub = active.room.localParticipant.getTrackPublication(LK.Track.Source.Microphone);
+                active.micTrack = pub?.track || active.micTrack;
+              } catch {}
+              notifyCall(`Microphone: ${label}`, "success");
             } else {
-              await active.room.switchActiveDevice("audiooutput", deviceId, false);
-              e.routeLabel.textContent = label.length > 14 ? "Output" : label;
-              notifyCall(`Audio output: ${label}`, "success");
+              if (!outputSelectionSupported && id !== "default") {
+                notifyCall("This browser lets the OS control Bluetooth/wired output automatically.", "error");
+                return;
+              }
+              await active.room.switchActiveDevice("audiooutput", id, false);
+              active.outputDeviceId = id;
+              try { active.remoteAudioTrack?.setPlayoutDelay?.(0); } catch {}
+              try { await active.remoteAudioTrack?.setSinkId?.(id); } catch {}
+              try { await active.remoteAudioEl?.setSinkId?.(id); } catch {}
+              notifyCall(`Speaker: ${label}`, "success");
             }
-                } catch {
-            notifyCall("This device does not allow audio output switching.", "error");
+            await buildAudioRouteMenu();
+          } catch (err) {
+            notifyCall(err?.message || "Could not switch audio device.", "error");
           }
         };
-        e.routeMenu.appendChild(b);
+        container.appendChild(button);
       };
 
-      makeItem("Automatic / Device", "default");
+      const renderSection = (title, kind, list) => {
+        const section = document.createElement("section");
+        section.className = "call-route-section";
+        const titleEl = document.createElement("div");
+        titleEl.className = "call-route-title";
+        titleEl.textContent = title;
+        section.appendChild(titleEl);
 
-      if (supported && outputs.length) {
-        outputs
-          .filter(d => d.deviceId !== "default")
-          .slice(0, 6)
-          .forEach(d => makeItem(d.label || "Audio device", d.deviceId));
-      } else if (!supported) {
-        const note = document.createElement("div");
-        note.className = "call-route-note";
-        note.textContent = "Your browser controls the speaker/earpiece automatically.";
-        e.routeMenu.appendChild(note);
-      }
+        appendItem(section, {
+          kind,
+          label: "System default",
+          sub: kind === "audioinput" ? "Use the OS default microphone" : (outputSelectionSupported ? "Use the OS/browser default speaker" : "Managed by browser/OS"),
+          deviceId: "default"
+        });
+
+        list
+          .filter(d => d.deviceId && d.deviceId !== "default")
+          .slice(0, 12)
+          .forEach(d => appendItem(section, {
+            kind,
+            label: d.label || (kind === "audioinput" ? "Microphone" : "Speaker / headset"),
+            sub: d.deviceId === (kind === "audioinput" ? active?.inputDeviceId : active?.outputDeviceId) ? "Selected" : "Available device",
+            deviceId: d.deviceId,
+            disabled: kind === "audiooutput" && !outputSelectionSupported
+          }));
+
+        if (!list.length) {
+          const note = document.createElement("div");
+          note.className = "call-route-note";
+          note.textContent = kind === "audioinput" ? "No microphone device was exposed by the browser." : "No speaker device was exposed by the browser.";
+          section.appendChild(note);
+        }
+
+        if (kind === "audiooutput" && !outputSelectionSupported) {
+          const note = document.createElement("div");
+          note.className = "call-route-note";
+          note.textContent = "Bluetooth and wired headsets still work through the browser/OS default output; this browser does not expose direct output selection.";
+          section.appendChild(note);
+        }
+
+        e.routeMenu.appendChild(section);
+      };
+
+      renderSection("Microphone", "audioinput", inputs);
+      renderSection("Speaker / headset", "audiooutput", outputs);
 
       const hint = document.createElement("div");
       hint.className = "call-route-note";
-      hint.textContent = "Wired/Bluetooth headsets are preferred by the phone when available.";
+      hint.textContent = "Use any supported wired/Bluetooth headset or the device speaker/mic. The OS/browser remains the final audio route.";
       e.routeMenu.appendChild(hint);
     }
 
     async function toggleAudioRoute(ev) {
       ev?.stopPropagation();
       const e = E();
-      const opening = e.routeMenu.classList.contains("hidden");
-      if (!opening) {
-          return;
-      }
+      if (!e.routeMenu) return;
       if (!active?.room) {
         notifyCall("Audio routing is available after the call connects.", "error");
         return;
       }
+      if (!e.routeMenu.classList.contains("hidden")) {
+        closeRouteMenu();
+        return;
+      }
       await buildAudioRouteMenu();
       e.routeMenu.classList.remove("hidden");
-      e.route.classList.add("active");
+      e.audioRoute?.classList.add("active");
     }
 
     const attachLocalVideo = (track) => {
@@ -1055,26 +1196,21 @@
       const room = new LK.Room({
         adaptiveStream: active.isVideo,
         dynacast: active.isVideo,
+        singlePeerConnection: true,
         disconnectOnPageLeave: true,
         webAudioMix: false,
         reconnectPolicy,
         audioCaptureDefaults: AUDIO_CAPTURE_OPTIONS,
         publishDefaults: active.isVideo
           ? {
-              audioPreset: LK.AudioPresets?.speech,
-              dtx: true,
-              red: true,
-              stopMicTrackOnMute: false,
+              ...AUDIO_PUBLISH_OPTIONS(),
               simulcast: true,
               videoCodec: "vp8",
               degradationPreference: "maintain-framerate",
               videoSimulcastLayers: []
             }
           : {
-              audioPreset: LK.AudioPresets?.speech,
-              dtx: true,
-              red: true,
-              stopMicTrackOnMute: false
+              ...AUDIO_PUBLISH_OPTIONS()
             }
       });
 
@@ -1117,6 +1253,10 @@
 
           try { await media.play(); } catch {}
         } else if (track.kind === LK.Track.Kind.Audio) {
+          // Do not add application-side jitter buffering. LiveKit/WebRTC owns
+          // the transport jitter buffer; explicit zero keeps Rivo from adding
+          // another user-visible delay layer.
+          try { track.setPlayoutDelay?.(0); } catch {}
           await attachAudioTrack(track);
         }
       });
@@ -1143,6 +1283,19 @@
           const ok = await ensureMicrophonePublished(room);
           if (!ok) notifyCall("Microphone was not restored after reconnect.", "error");
         }
+        try {
+          if (active?.inputDeviceId && active.inputDeviceId !== "default") {
+            await room.switchActiveDevice("audioinput", active.inputDeviceId, false);
+          }
+        } catch {}
+        try {
+          if (active?.outputDeviceId && active.outputDeviceId !== "default") {
+            await room.switchActiveDevice("audiooutput", active.outputDeviceId, false);
+            try { await active.remoteAudioTrack?.setSinkId?.(active.outputDeviceId); } catch {}
+            try { await active.remoteAudioEl?.setSinkId?.(active.outputDeviceId); } catch {}
+          }
+        } catch {}
+        try { active?.remoteAudioTrack?.setPlayoutDelay?.(0); } catch {}
         state("Connected", true);
         updateQuality(room.localParticipant.connectionQuality);
         if (!callStartedAt) timer();
@@ -1207,6 +1360,8 @@
           websocketTimeout: 20000
         }
       );
+
+      try { await room.startAudio?.(); } catch {}
 
       const micPublished = await ensureMicrophonePublished(room);
       if (!micPublished) {
@@ -1274,7 +1429,9 @@
         remoteAudioTrack: null,
         remoteAudioFallbackEl: null,
         micTrack: null,
-        micEnabled: true
+        micEnabled: true,
+        inputDeviceId: "default",
+        outputDeviceId: "default"
       };
 
       try {
@@ -1373,7 +1530,9 @@
         remoteAudioTrack: null,
         remoteAudioFallbackEl: null,
         micTrack: null,
-        micEnabled: true
+        micEnabled: true,
+        inputDeviceId: "default",
+        outputDeviceId: "default"
       };
     }
 
@@ -1440,6 +1599,7 @@
       } catch {}
 
       try {
+        closeRouteMenu();
         if (old?.audioEls?.length) {
           old.audioEls.forEach(el => {
             try { el.srcObject = null; el.remove(); } catch {}
