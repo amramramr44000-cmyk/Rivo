@@ -474,23 +474,23 @@
     // canonical username from the currently signed-in profile.
     row.username = normalizeUsername(me.username);
     row.friendRequests = undefined;
-    const payload = {
-      username: row.username,
-      public_data: publicData(row),
-      updated_at: new Date().toISOString()
-    };
-    return withAuthedOp("PROFILE_UPDATE", row.username, async (session) => {
-      const { data, error } = await sb.from("profiles")
-        .update(payload).eq("id", session.user.id)
-        .select("id,username,public_data,private_data,coins_balance,created_at,updated_at").single();
+    const payload = publicData(row);
+    delete payload.username;
+    return withAuthedOp("PROFILE_UPDATE", row.username, async () => {
+      const { data, error } = await sb.rpc("rivo_update_my_profile", { p_public_data: payload });
       if (error) throw error;
-      cacheUsername(data.username);
-      invalidateProfileCache(data.username);
-      const merged = mergeProfile(data, true);
-      merged.id = data.id;
-      cacheWrite(CURRENT_PROFILE_CACHE_KEY, merged);
-      cacheWrite(PROFILE_CACHE_PREFIX + data.username, merged);
-      return merged;
+
+      // Re-read the authoritative row after the server-side merge so the
+      // editor never keeps a stale client-only version of the profile.
+      const fresh = await currentProfile({ force: true });
+      const resolved = fresh || {
+        username: data?.username || row.username,
+        public_data: data?.public_data || payload
+      };
+      const username = normalizeUsername(resolved.username || row.username);
+      cacheUsername(username);
+      invalidateProfileCache(username);
+      return resolved;
     });
   }
 
@@ -850,7 +850,7 @@
     // (some mobile browsers suspend websockets without firing a close
     // event), this nudges a resync every 20s so messages never sit
     // unseen for more than a few seconds.
-    heartbeatTimer = setInterval(() => { onResync?.(); }, 12000);
+    heartbeatTimer = setInterval(() => { onResync?.(); }, 4000);
 
     await connect();
 

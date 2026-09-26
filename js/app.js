@@ -2245,7 +2245,7 @@
       console.warn('[Rivo Economy] editor unlock catalogue unavailable', e);
     }
     const findUnlock = name => editorItemByName.get(String(name).toLowerCase()) || null;
-    const ownsUnlock = name => { const it = findUnlock(name); return !!it && editorOwned.has(String(it.id)); };
+    const ownsUnlock = name => { const it = findUnlock(name); return !!it && (Number(it.price || 0) <= 0 || editorOwned.has(String(it.id))); };
     const priceUnlock = name => Number(findUnlock(name)?.price || 0);
     const unlockLabel = name => { const p = priceUnlock(name); return p > 0 ? `🔒 ${p} 🪙` : 'مجاني'; };
 
