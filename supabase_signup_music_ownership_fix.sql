@@ -1,10 +1,10 @@
--- Rivo FINAL: signup creation + follower persistence fix
--- Run this file LAST after the current Rivo schema/economy/social migrations.
--- Safe to run repeatedly.
+-- Rivo signup fix: empty/default profile music must not require paid ownership.
+-- Safe to run after supabase_economy.sql or older social/economy trigger migrations.
+-- Root cause: an older trigger compared the whole `music` object. New accounts
+-- always contain an empty/default music object, so signup was incorrectly blocked.
+-- Real uploaded audio still requires: Feature · Profile Music
+-- Real uploaded cover still requires: Feature · Music Cover
 
--- 1) Creating a normal profile must not require paid Radius/Glow inventory.
---    The free defaults are radius=24 and glow=45. Premium checks only apply
---    when an existing account changes those values away from their defaults.
 create or replace function public.rivo_validate_paid_profile_data()
 returns trigger
 language plpgsql
@@ -190,93 +190,10 @@ end;
 $$;
 
 revoke all on function public.rivo_validate_paid_profile_data() from public;
+
 drop trigger if exists trg_rivo_validate_paid_profile_data on public.profiles;
 create trigger trg_rivo_validate_paid_profile_data
 before insert or update of public_data on public.profiles
 for each row execute function public.rivo_validate_paid_profile_data();
 
--- 2) Canonical follower source: any profile whose following array contains
---    this username. This makes refresh/reopen show the real value.
-create or replace function public.rivo_get_public_profile(p_username text)
-returns jsonb
-language plpgsql security definer set search_path=public
-as $$
-declare r public.profiles; follower_names jsonb; follower_count int; story_row public.rivo_stories;
-begin
-  perform public.rivo_cleanup_expired_stories();
-  select * into r from public.profiles where username=lower(trim(both '@' from p_username)) limit 1;
-  if not found then return null; end if;
-  select coalesce(jsonb_agg(p.username order by p.username),'[]'::jsonb), count(*)::int
-    into follower_names, follower_count
-  from public.profiles p
-  where coalesce(p.public_data->'following','[]'::jsonb) ? r.username;
-  select * into story_row from public.rivo_stories where user_id=r.id and expires_at > now() and media_type like 'image/%' order by created_at desc limit 1;
-  return jsonb_build_object(
-    'userId',r.id,'username',r.username,'displayName',coalesce(r.public_data->>'displayName',r.username),
-    'bio',coalesce(r.public_data->>'bio',''),'description',coalesce(r.public_data->>'description',''),
-    'location',coalesce(r.public_data->>'location',''),'website',coalesce(r.public_data->>'website',''),
-    'avatar',coalesce(r.public_data->>'avatar',''),'banner',coalesce(r.public_data->>'banner',''),
-    'miniImage',coalesce(r.public_data->>'miniImage',''),'status',coalesce(r.public_data->>'status','Online'),
-    'customStatus',coalesce(r.public_data->>'customStatus',''),'theme',coalesce(r.public_data->>'theme','obsidian'),
-    'template',coalesce(r.public_data->>'template','discord-noir'),'accent',coalesce(r.public_data->>'accent','#7488ff'),
-    'cardRadius',coalesce((r.public_data->>'cardRadius')::numeric,24),'cardStyle',coalesce(r.public_data->>'cardStyle','glass'),
-    'glow',coalesce((r.public_data->>'glow')::numeric,45),'background',coalesce(r.public_data->>'background','aurora'),
-    'animation',coalesce(r.public_data->>'animation','soft'),'socials',coalesce(r.public_data->'socials','[]'::jsonb),
-    'skills',coalesce(r.public_data->'skills','[]'::jsonb),'badges',coalesce(r.public_data->'badges','[]'::jsonb),
-    'projects',coalesce(r.public_data->'projects','[]'::jsonb),'friends',coalesce(r.public_data->'friends','[]'::jsonb),
-    'followers',follower_names,'followersCount',follower_count,
-    'sections',coalesce(r.public_data->'sections','[]'::jsonb),'music',coalesce(r.public_data->'music','{}'::jsonb),
-    'avatarFrame',coalesce(r.public_data->>'avatarFrame','none'),'avatarFrameColor',coalesce(r.public_data->>'avatarFrameColor','#8b5cf6'),
-    'avatarFrameGlow',coalesce((r.public_data->>'avatarFrameGlow')::numeric,35),'avatarFrameWidth',coalesce((r.public_data->>'avatarFrameWidth')::numeric,3),
-    'stats',coalesce(r.public_data->'stats',jsonb_build_object('views',0)),
-    'likes',jsonb_build_object('count',coalesce((r.public_data->'likes'->>'count')::int,0),'users',coalesce(r.public_data->'likes'->'users','[]'::jsonb)),
-    'messagePrivacy',coalesce(r.private_data->'messageSettings'->>'whoCanMessage','everyone'),
-    'callPrivacy',coalesce(r.private_data->'callSettings'->>'whoCanCall','everyone'),
-    'story',case when story_row.id is null then null else jsonb_build_object('active',true,'story_id',story_row.id,'created_at',story_row.created_at,'expires_at',story_row.expires_at) end,
-    'createdAt',r.created_at,'updatedAt',r.updated_at
-  );
-end;
-$$;
-revoke all on function public.rivo_get_public_profile(text) from public;
-grant execute on function public.rivo_get_public_profile(text) to anon, authenticated;
-
--- 3) Follow/unfollow writes both sides and returns the authoritative post-write count.
-create or replace function public.rivo_toggle_follow(p_target_username text)
-returns jsonb language plpgsql security definer set search_path=public as $$
-declare me public.profiles; target public.profiles; following jsonb; followers jsonb; now_following boolean; follower_count int;
-begin
-  if auth.uid() is null then raise exception 'Not signed in'; end if;
-  perform set_config('rivo.internal_profile_save','on',true);
-  select * into me from public.profiles where id=auth.uid() for update;
-  if not found then raise exception 'Not signed in'; end if;
-  if me.is_banned then raise exception 'Your account is blocked'; end if;
-  select * into target from public.profiles where username=lower(trim(both '@' from p_target_username)) for update;
-  if not found then raise exception 'User not found'; end if;
-  if target.is_banned then raise exception 'This account is unavailable'; end if;
-  if me.id=target.id then raise exception 'You cannot follow yourself'; end if;
-
-  following:=coalesce(me.public_data->'following','[]'::jsonb);
-  if following ? target.username then
-    select coalesce(jsonb_agg(v order by v),'[]'::jsonb) into following from jsonb_array_elements(following) v where v <> to_jsonb(target.username);
-    now_following:=false;
-  else
-    following:=following || to_jsonb(target.username); now_following:=true;
-  end if;
-
-  update public.profiles set public_data=jsonb_set(coalesce(public_data,'{}'::jsonb),'{following}',following,true),updated_at=now() where id=me.id;
-
-  -- Recompute the target's followers from the graph, avoiding stale cached arrays.
-  select coalesce(jsonb_agg(p.username order by p.username),'[]'::jsonb), count(*)::int into followers,follower_count
-  from public.profiles p
-  where coalesce(
-    case when p.id=me.id then jsonb_set(coalesce(p.public_data,'{}'::jsonb),'{following}',following,true) else p.public_data end->'following','[]'::jsonb
-  ) ? target.username;
-
-  update public.profiles set public_data=jsonb_set(coalesce(public_data,'{}'::jsonb),'{followers}',followers,true),updated_at=now() where id=target.id;
-  return jsonb_build_object('following',now_following,'followers_count',follower_count);
-end;
-$$;
-revoke all on function public.rivo_toggle_follow(text) from public;
-grant execute on function public.rivo_toggle_follow(text) to authenticated;
-
-select 'Rivo final signup/follow fix installed' as status;
+select 'Rivo signup music ownership fix installed' as status;

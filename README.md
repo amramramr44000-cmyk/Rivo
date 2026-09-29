@@ -101,6 +101,11 @@ This build adds:
 ### Supabase update
 Run the complete `supabase_schema.sql` file in the Supabase SQL Editor for the project. Keep the existing `rivo-media` storage bucket and existing RLS/storage policies. No manual data migration is required for existing profiles, friends, messages, or stories.
 
+### Post publishing RPC repair
+If an already-deployed project shows `Could not find the function public.rivo_create_post(p_content, p_media) in the schema cache` when publishing a post, run `supabase_post_publish_rpc_fix.sql` once in Supabase SQL Editor.
+
+This restores the exact `rivo_create_post(text, jsonb)` RPC already used by `js/core.js`; no frontend changes are required and existing posts/data are preserved.
+
 ## Calling privacy
 Calls support Everyone / Friends only / Nobody under Settings → Calls. The call permission is enforced by Supabase RPC.
 
@@ -221,6 +226,14 @@ Economy v20: the storefront is intentionally removed from Explore. Cosmetic and 
 - `supabase_social_economy_guard_fix_v2.sql` (recommended final social/economy interoperability fix)` as a standalone migration for an already-running Supabase project.
 
 
+## Signup music ownership fix
+
+If signup shows **“Profile music feature is not owned”** for a brand-new account with no music selected, run:
+
+`supabase_signup_music_ownership_fix.sql`
+
+The fix keeps paid ownership enforcement for actual uploaded profile audio/cover, but ignores the empty default `music` object created for every new profile.
+
 ## Final social/economy desktop fix
 
 After applying `supabase_schema.sql` and `supabase_economy.sql`, run `supabase_desktop_social_economy_final_fix.sql` once in Supabase SQL Editor. This final migration replaces the friend-request RPCs with transaction-local trusted writes so the legacy profile guard cannot return a false `Access denied` for legitimate friend actions.
@@ -270,3 +283,7 @@ The function requires the existing `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKI
 
 ## Communities Voice V6
 Run `supabase_communities_v6_mobile_voice_security.sql` after the Communities V5 migration (or use the updated complete `supabase_schema.sql`). It hardens join-request/member visibility, makes empty-room cleanup server-only, and supports the mobile Voice audio unlock flow in the frontend.
+
+
+### V31 Profile Animation
+The Profile Editor now treats `Profile Animation` as an independent cosmetic slot from `Avatar Frame`. Six premium animations are available: Rainfall, Lightning, Cloud Drift, Moneyfall, Ocean Waves and Royal Aurora. Run `supabase_profile_animations_v31.sql` after the existing economy/profile migrations.
