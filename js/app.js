@@ -2185,6 +2185,17 @@
     "white-signal": { accent: "#3157ff", card: "split" }
   };
 
+  const profileAnimationNames = {
+    none: "None",
+    rain: "Rainfall",
+    lightning: "Lightning",
+    clouds: "Cloud Drift",
+    money: "Moneyfall",
+    ocean: "Ocean Waves",
+    aurora: "Royal Aurora"
+  };
+  const profileAnimationIds = new Set(Object.keys(profileAnimationNames));
+
   const templateNames = {
     "discord-noir": "Discord Noir",
     "anime-cinema": "Anime Cinema",
@@ -2223,6 +2234,7 @@
   async function initEditor() {
     const me = await PF.currentProfile(); if (!me) { location.href = "login.html"; return; }
     const state = structuredClone(me);
+    state.animation = profileAnimationIds.has(state.animation) ? state.animation : "none";
     state.template = templates[state.template] ? state.template : "discord-noir";
     state.cardStyle = state.cardStyle || templates[state.template].card;
     state.socials ||= []; state.projects ||= []; state.badges ||= []; state.likes ||= {count:0, users:[]}; state.sections ||= PF.defaults.sections.map(x => ({...x}));
@@ -2235,9 +2247,11 @@
     let editorItems = [];
     const editorOwned = new Set();
     const editorItemByName = new Map();
+    let socialLinkStatus = { included_links: 5, purchased_slots: 0, max_links: 5, extra_price: 150 };
     try {
       editorInventory = await PF.listMyInventory();
       editorItems = await PF.listStoreItems();
+      try { socialLinkStatus = { ...socialLinkStatus, ...(await PF.getSocialLinkStatus()) }; } catch (statusError) { console.warn('[Rivo Economy] social link slot status unavailable', statusError); }
       const eb = $("#editorCoinsBalance"); if (eb) eb.textContent = Number(await PF.getCoinBalance()).toLocaleString();
       editorInventory.forEach(x => editorOwned.add(String(x.item_id)));
       editorItems.forEach(x => editorItemByName.set(String(x.name || '').toLowerCase(), x));
@@ -2335,6 +2349,59 @@
         confirmBtn.textContent = 'تأكيد الدفع';
       }
     };
+    async function purchaseSocialSlot() {
+      if (!PF.purchaseSocialLinkSlot) { notify('هذه الميزة تحتاج تحديث Supabase الخاص بالروابط الإضافية.', 'error'); return false; }
+      const price = Math.max(1, Number(socialLinkStatus.extra_price || 150));
+      const modal = ensureCoinPurchaseModal();
+      const copy = modal.querySelector('[data-coin-buy-copy]');
+      const priceEl = modal.querySelector('[data-coin-buy-price]');
+      const balanceEl = modal.querySelector('[data-coin-buy-balance]');
+      const confirmBtn = modal.querySelector('[data-coin-buy-confirm]');
+      const balance = Number(await PF.getCoinBalance());
+      copy.textContent = `هل تريد دفع ${price.toLocaleString()} عملة لإضافة مساحة رابط جديدة؟`;
+      priceEl.textContent = `${price.toLocaleString()} 🪙`;
+      balanceEl.textContent = `${balance.toLocaleString()} 🪙`;
+      modal.hidden = false;
+      document.body.classList.add('coin-purchase-open');
+
+      const approved = await new Promise(resolve => {
+        let done = false;
+        const cleanup = () => {
+          confirmBtn?.removeEventListener('click', onConfirm);
+          modal.querySelectorAll('[data-coin-buy-close]').forEach(x => x.removeEventListener('click', onCancel));
+          document.removeEventListener('keydown', onKey);
+        };
+        const finish = value => { if (done) return; done = true; cleanup(); resolve(value); };
+        const onConfirm = () => finish(true);
+        const onCancel = () => finish(false);
+        const onKey = e => { if (e.key === 'Escape') finish(false); };
+        confirmBtn?.addEventListener('click', onConfirm);
+        modal.querySelectorAll('[data-coin-buy-close]').forEach(x => x.addEventListener('click', onCancel));
+        document.addEventListener('keydown', onKey);
+        requestAnimationFrame(() => confirmBtn?.focus());
+      });
+      modal.hidden = true;
+      document.body.classList.remove('coin-purchase-open');
+      if (!approved) return false;
+
+      try {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'جارٍ الدفع…';
+        const result = await PF.purchaseSocialLinkSlot();
+        socialLinkStatus = { ...socialLinkStatus, ...result, max_links: Number(result?.max_links ?? (5 + Number(result?.purchased_slots || socialLinkStatus.purchased_slots || 0))) };
+        const eb = $("#editorCoinsBalance"); if (eb) eb.textContent = Number(result?.coins_balance ?? await PF.getCoinBalance()).toLocaleString();
+        notify('تم شراء مساحة رابط إضافية.', 'success');
+        return true;
+      } catch (e) {
+        const msg = String(e?.message || 'تعذر إتمام الدفع');
+        notify(/not enough coins|insufficient/i.test(msg) ? 'رصيدك غير كافٍ لشراء مساحة الرابط.' : msg, 'error');
+        return false;
+      } finally {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'تأكيد الدفع';
+      }
+    }
+
     const openUnlock = async (button, unlockName, apply) => {
       if (editorOwned.has(String(findUnlock(unlockName)?.id || ''))) { apply?.(); return true; }
       const ok = await purchaseUnlock(unlockName);
@@ -2375,7 +2442,12 @@
 
     const templateUnlockName = id => `Template · ${templateNames[id] || id}`;
     const cardStyleUnlockName = id => `Template · Card Style ${id}`;
-    const frameUnlockName = id => id === "none" ? null : `Frame · ${id.charAt(0).toUpperCase()}${id.slice(1)}`;
+    const frameUnlockLabels = {
+      ring:"Ring", double:"Double", diamond:"Diamond", glow:"Glow", scan:"Scan", hologram:"Hologram",
+      orbit:"Orbit", prism:"Prism", starburst:"Starburst", halo:"Halo", ribbon:"Ribbon", circuit:"Circuit", lattice:"Lattice"
+    };
+    const frameUnlockName = id => id === "none" ? null : `Frame · ${frameUnlockLabels[id] || (id.charAt(0).toUpperCase() + id.slice(1))}`;
+    const profileAnimationUnlockName = id => id === "none" ? null : `Feature · Profile Animation · ${profileAnimationNames[id] || id}`;
 
     function decorateUnlockControl(el, unlockName) {
       if (!el || !unlockName) return;
@@ -2398,6 +2470,7 @@
       $$("#templateGrid .template-choice").forEach(b => decorateUnlockControl(b, templateUnlockName(b.dataset.template)));
       $$("#cardStyleGrid .card-style-choice").forEach(b => decorateUnlockControl(b, cardStyleUnlockName(b.dataset.cardStyle)));
       $$("#frameGrid .frame-choice").forEach(b => decorateUnlockControl(b, frameUnlockName(b.dataset.frame)));
+      $$("#profileAnimationGrid .profile-animation-choice").forEach(b => decorateUnlockControl(b, profileAnimationUnlockName(b.dataset.animation)));
       const map = [
         ["avatarUpload", "Feature · Avatar Upload"], ["bannerUpload", "Feature · Banner Upload"],
         ["miniUpload", "Feature · Floating Image"], ["musicTitle", "Feature · Profile Music"],
@@ -2423,12 +2496,19 @@
     $$("#templateGrid .template-choice").forEach(b => b.addEventListener("click", async () => {
       const unlock = templateUnlockName(b.dataset.template);
       const ok = ownsUnlock(unlock) || await purchaseUnlock(unlock); if (!ok) return;
+      const previousTemplate = state.template;
+      const previousDefaultCard = templates[previousTemplate]?.card;
+      const userPickedCardShape = !!state.cardStyle && state.cardStyle !== previousDefaultCard;
       state.template = b.dataset.template;
       const templateCardStyle = templates[state.template].card;
-      // A paid template must not silently activate another separately paid card style.
-      if (ownsUnlock(cardStyleUnlockName(templateCardStyle))) state.cardStyle = templateCardStyle;
+      // Templates and Card Shape are independent controls. A template only swaps
+      // its bundled default shape when the user had not manually chosen another one.
+      if (!userPickedCardShape && ownsUnlock(cardStyleUnlockName(templateCardStyle))) {
+        state.cardStyle = templateCardStyle;
+      }
       state.accent = templates[state.template].accent;
       $$("#templateGrid .template-choice").forEach(x => x.classList.remove("selected")); b.classList.add("selected");
+      $$("#cardStyleGrid .card-style-choice").forEach(x => x.classList.toggle("selected", x.dataset.cardStyle === state.cardStyle));
       applyEditorLocks(); refreshPreview();
     }));
     $$("#cardStyleGrid .card-style-choice").forEach(b => b.addEventListener("click", async () => {
@@ -2468,11 +2548,22 @@
       });
     });
 
-    $$("#frameGrid .frame-choice").forEach(b => b.addEventListener("click", async () => {
+    $$(`[data-panel-content="media"] #frameGrid .frame-choice`).forEach(b => b.addEventListener("click", async () => {
       const unlock = frameUnlockName(b.dataset.frame);
       if (unlock && !(ownsUnlock(unlock) || await purchaseUnlock(unlock))) return;
       state.avatarFrame = b.dataset.frame;
-      $$("#frameGrid .frame-choice").forEach(x => x.classList.remove("selected")); b.classList.add("selected");
+      $$(`[data-panel-content="media"] #frameGrid .frame-choice`).forEach(x => x.classList.remove("selected"));
+      b.classList.add("selected");
+      applyEditorLocks(); refreshPreview();
+    }));
+
+    $$(`#profileAnimationGrid .profile-animation-choice`).forEach(b => b.addEventListener("click", async () => {
+      const id = b.dataset.animation || "none";
+      const unlock = profileAnimationUnlockName(id);
+      if (unlock && !(ownsUnlock(unlock) || await purchaseUnlock(unlock))) return;
+      state.animation = id;
+      $$(`#profileAnimationGrid .profile-animation-choice`).forEach(x => x.classList.remove("selected"));
+      b.classList.add("selected");
       applyEditorLocks(); refreshPreview();
     }));
 
@@ -2493,9 +2584,47 @@
       catch (err) { notify(err.message, "error"); }
     });
 
-    renderSections(state); renderSocials(state); renderBadges(state, { ownsUnlock, purchaseUnlock, applyEditorLocks: () => applyEditorLocks(), refreshPreview });
+    const syncSocialLimitUi = () => {
+      const count = Array.isArray(state.socials) ? state.socials.length : 0;
+      const included = Math.max(1, Number(socialLinkStatus.included_links || 5));
+      const max = Math.max(included, Number(socialLinkStatus.max_links || included));
+      const countEl = $("#socialLinkCount");
+      const box = $("#socialLimitBox");
+      const add = $("#addSocial");
+      if (countEl) countEl.textContent = `${count} / ${max}`;
+      if (box) {
+        box.classList.toggle('is-full', count >= max);
+        box.classList.toggle('has-paid-slots', max > included);
+        const hint = box.querySelector('small');
+        if (hint) hint.textContent = max > included
+          ? `First ${included} links are included. You own ${max - included} additional paid slot${max - included === 1 ? '' : 's'}.`
+          : `Use up to ${included} links. Every link beyond the included limit requires one paid slot.`;
+      }
+      if (add) {
+        const featurePrice = priceUnlock('Feature · Social Links');
+        if (count < included) add.textContent = ownsUnlock('Feature · Social Links') ? '+ Add link' : `+ Add link · ${featurePrice.toLocaleString()} 🪙`;
+        else if (count < max) add.textContent = '+ Add link';
+        else add.textContent = `+ Add link · ${Number(socialLinkStatus.extra_price || 150).toLocaleString()} 🪙`;
+        add.setAttribute('aria-label', count < max ? 'Add social link' : 'Buy and add an additional social link');
+      }
+    };
+
+    renderSections(state); renderSocials(state, syncSocialLimitUi); renderBadges(state, { ownsUnlock, purchaseUnlock, applyEditorLocks: () => applyEditorLocks(), refreshPreview });
     applyEditorLocks();
-    $("#addSocial")?.addEventListener("click", async () => { if (!(ownsUnlock("Feature · Social Links") || await purchaseUnlock("Feature · Social Links"))) return; state.socials.push({label:"Website", url:""}); renderSocials(state); });
+    syncSocialLimitUi();
+    $("#addSocial")?.addEventListener("click", async () => {
+      const included = Math.max(1, Number(socialLinkStatus.included_links || 5));
+      const max = Math.max(included, Number(socialLinkStatus.max_links || included));
+      const count = Array.isArray(state.socials) ? state.socials.length : 0;
+      if (count >= max) {
+        const ok = await purchaseSocialSlot();
+        if (!ok) return;
+      } else if (!(ownsUnlock("Feature · Social Links") || await purchaseUnlock("Feature · Social Links"))) {
+        return;
+      }
+      state.socials.push({label:"Website", url:""});
+      renderSocials(state, syncSocialLimitUi);
+    });
 
     $("#saveBtn")?.addEventListener("click", async (e) => {
       const btn = e.currentTarget;
@@ -2512,6 +2641,11 @@
         state.password ||= me.password;
         state.projects = [];
         state.music = {...(state.music || {}), artist: ""};
+        const includedSocialLinks = Math.max(1, Number(socialLinkStatus.included_links || 5));
+        const maxSocialLinks = Math.max(includedSocialLinks, Number(socialLinkStatus.max_links || includedSocialLinks));
+        if (Array.isArray(state.socials) && state.socials.length > maxSocialLinks) {
+          throw new Error(`You can save up to ${maxSocialLinks} social links. Purchase another slot to add more.`);
+        }
         await PF.saveProfile(state); localStorage.setItem("pf_session", u);
         notify("Profile saved", "success");
         setTimeout(() => location.href = `profile.html?u=${encodeURIComponent(u)}`, 380);
@@ -2529,6 +2663,7 @@
     $(`#templateGrid .template-choice[data-template="${state.template}"]`)?.classList.add("selected");
     $(`#cardStyleGrid .card-style-choice[data-card-style="${state.cardStyle}"]`)?.classList.add("selected");
     $(`#frameGrid .frame-choice[data-frame="${state.avatarFrame || "none"}"]`)?.classList.add("selected");
+    $(`#profileAnimationGrid .profile-animation-choice[data-animation="${state.animation || "none"}"]`)?.classList.add("selected");
     if (state.avatar && $("#avatarMediaPreviewImg")) { $("#avatarMediaPreviewImg").src = state.avatar; $("#avatarMediaPreviewImg").parentElement.classList.remove("hidden"); }
     if (state.banner && $("#bannerMediaPreviewImg")) { $("#bannerMediaPreviewImg").src = state.banner; $("#bannerMediaPreviewImg").parentElement.classList.remove("hidden"); }
     refreshPreview();
@@ -2549,12 +2684,13 @@
   }
   function moveSection(state, idx, delta) { const next = idx + delta; if (next < 0 || next >= state.sections.length) return; [state.sections[idx], state.sections[next]] = [state.sections[next], state.sections[idx]]; renderSections(state); }
 
-  function renderSocials(state) {
+  function renderSocials(state, onChanged = null) {
     const box = $("#socialList"); if (!box) return;
     box.innerHTML = state.socials.map((s, i) => `<div class="edit-row"><input class="field-input" value="${esc(s.label)}" data-social-label="${i}" placeholder="Platform"><input class="field-input" value="${esc(s.url)}" data-social-url="${i}" placeholder="https://..."><button class="btn btn-sm btn-danger" data-social-del="${i}">Remove</button></div>`).join("");
     $$('[data-social-label]').forEach(x => x.oninput = () => state.socials[+x.dataset.socialLabel].label = x.value.slice(0, 30));
     $$('[data-social-url]').forEach(x => x.oninput = () => state.socials[+x.dataset.socialUrl].url = x.value.slice(0, 500));
-    $$('[data-social-del]').forEach(x => x.onclick = () => { state.socials.splice(+x.dataset.socialDel, 1); renderSocials(state); });
+    $$('[data-social-del]').forEach(x => x.onclick = () => { state.socials.splice(+x.dataset.socialDel, 1); renderSocials(state, onChanged); });
+    onChanged?.();
   }
 
   function renderProjects() { return; }
@@ -2655,6 +2791,11 @@
       ? `<span class="profile-owner-likes" title="Profile likes"><span class="heart-mini">♥</span><b>${displayViews(likeCount)}</b></span>`
       : "";
     const frame = `frame-${p.avatarFrame || "none"}`;
+    const animationId = profileAnimationIds.has(p.animation) ? p.animation : "none";
+    const animationClass = animationId === "none" ? "" : ` profile-animation-${animationId}`;
+    const animationLayer = animationId === "none"
+      ? ""
+      : `<div class="profile-animation-layer profile-animation-${animationId}" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>`;
     const social = (p.socials || []).map(s => { const href = safeLink(s.url); return href ? `<a class="social-pill" href="${esc(href)}" target="_blank" rel="noreferrer">${esc(s.label || "Link")}</a>` : ""; }).join("");
     const seenSectionTypes = new Set();
     const sectionHtml = (p.sections || [])
@@ -2736,7 +2877,8 @@
         ? `<div class="profile-mini-standalone profile-owner-likes-only">${ownerLikesBadge}</div>`
         : "";
 
-    return `<article class="profile-card template-card${isMe ? "" : " profile-card-other"}">
+    return `<article class="profile-card template-card${isMe ? "" : " profile-card-other"}${animationClass}" data-profile-animation="${animationId}">
+      ${animationLayer}
       <div class="profile-banner">${banner}</div>
       <div class="profile-content">
         <div class="profile-head">
@@ -2952,22 +3094,14 @@ async function initProfile() {
     const statusAdd = $("[data-profile-status-add]");
     if (statusAdd && statusAdd.dataset.bound !== "1") {
       statusAdd.dataset.bound = "1";
-      statusAdd.addEventListener("click", async () => {
-        const current = String(profile.customStatus || "").trim();
-        const value = window.prompt("اكتب حالتك الحالية", current);
-        if (value === null) return;
-        const next = value.trim().slice(0, 80);
-        try {
-          statusAdd.disabled = true;
-          await PF.updateProfile({ customStatus: next });
-          profile.customStatus = next;
-          notify(next ? "تم تحديث الحالة" : "تمت إزالة الحالة", "success");
-          statusAdd.title = next || "إضافة حالة";
-        } catch (err) {
-          notify(err?.message || "تعذر تحديث الحالة", "error");
-        } finally {
-          statusAdd.disabled = false;
-        }
+      statusAdd.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        // The profile-level "Add story" control must use the same image picker
+        // as the avatar story control. It previously opened the custom-text
+        // status prompt, which was the wrong action on the full profile page.
+        const picker = ensureStoryPicker();
+        picker.click();
       });
     }
 

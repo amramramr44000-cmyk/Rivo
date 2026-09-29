@@ -55,7 +55,7 @@
     username: "", displayName: "", bio: "", description: "", location: "", website: "",
     avatar: "", banner: "", miniImage: "", status: "Online", customStatus: "",
     theme: "obsidian", template: "discord-noir", accent: "#7488ff", cardRadius: 24,
-    cardStyle: "glass", glow: 45, background: "aurora", animation: "soft",
+    cardStyle: "glass", glow: 45, background: "aurora", animation: "none",
     socials: [], skills: [], badges: [], projects: [], friends: [],
     friendRequests: { incoming: [], outgoing: [] },
     following: [],
@@ -771,6 +771,8 @@
   async function listStoreItems(type = null) { return callRpc("rivo_list_store_items", { p_type: type || null }, "STORE_LIST"); }
   async function listMyInventory() { return callRpc("rivo_list_my_inventory", {}, "INVENTORY_LIST"); }
   async function purchaseStoreItem(itemId) { return withInFlightGuard(`STORE_PURCHASE:${itemId}`, async () => { const result = await callRpc("purchase_store_item", { target_item_id: itemId }, "STORE_PURCHASE"); invalidateProfileCache(currentUsername()); return result; }); }
+  async function getSocialLinkStatus() { return callRpc("rivo_get_social_link_status", {}, "SOCIAL_LINK_STATUS"); }
+  async function purchaseSocialLinkSlot() { return withInFlightGuard("SOCIAL_LINK_SLOT_PURCHASE", async () => { const result = await callRpc("rivo_purchase_social_link_slot", {}, "SOCIAL_LINK_SLOT_PURCHASE"); invalidateProfileCache(currentUsername()); return result; }); }
   async function transferCoinsByUsername(username, amount) { return withInFlightGuard(`COIN_TRANSFER:${normalizeUsername(username)}:${Number(amount)}`, async () => { const result = await callRpc("transfer_coins_by_username", { target_username: String(username || ""), transfer_amount: Math.floor(Number(amount) || 0) }, "COIN_TRANSFER"); invalidateProfileCache(currentUsername()); return result; }); }
   async function rewardAdCoins(amount = 15) { return withInFlightGuard("COIN_AD_REWARD", async () => { const result = await callRpc("reward_ad_coins", { reward_amount: Math.floor(Number(amount) || 15) }, "COIN_AD_REWARD"); invalidateProfileCache(currentUsername()); return result; }); }
   async function equipStoreItem(itemId) { return withInFlightGuard(`STORE_EQUIP:${itemId}`, async () => { const result = await callRpc("equip_store_item", { target_item_id: itemId }, "STORE_EQUIP"); invalidateProfileCache(currentUsername()); return result; }); }
@@ -2063,7 +2065,7 @@ async function getVoiceUrl(path) {
     listConversations, getMessages, deleteMessage, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminSetCoins, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, deletePostComment, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCommunityVoice, startCommunityVoice, endCommunityVoice, setCommunityVoicePolicy, setCommunityModerator, setCommunityVoiceMute, moderateCommunityVoice, subscribeCommunityVoice, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, deletePostComment, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, getSocialLinkStatus, purchaseSocialLinkSlot, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCommunityVoice, startCommunityVoice, endCommunityVoice, setCommunityVoicePolicy, setCommunityModerator, setCommunityVoiceMute, moderateCommunityVoice, subscribeCommunityVoice, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
     NAV_I18N, I18N, currentLanguage, translateString, applyI18n, applySavedLanguage
   };
 })();
