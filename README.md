@@ -286,4 +286,4 @@ Run `supabase_communities_v6_mobile_voice_security.sql` after the Communities V5
 
 
 ### V31 Profile Animation
-The Profile Editor now treats `Profile Animation` as an independent cosmetic slot from `Avatar Frame`. Six premium animations are available: Rainfall, Lightning, Cloud Drift, Moneyfall, Ocean Waves and Royal Aurora. Run `supabase_profile_animations_v31.sql` after the existing economy/profile migrations.
+The Profile Editor now treats `Profile Animation` as an independent cosmetic slot from `Avatar Frame`. Six premium profile animations are available: Meteor Shower, Lightning, Petal Drift, Moneyfall, Ocean Spray and Astral Dust. Existing internal IDs/store ownership records remain stable. Run `supabase_profile_animations_v31.sql` after the existing economy/profile migrations.

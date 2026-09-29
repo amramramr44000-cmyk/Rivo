@@ -1,26 +1,17 @@
--- Rivo V31: independent Profile Animation slot + six premium animations.
--- Run after the current Rivo schema/economy migrations.
--- No existing Avatar Frame selections are removed.
+-- Rivo V32: adds three more independent Profile Animations.
+-- Safe to run after the fixed V31 migration. Existing ownership and Avatar Frames stay unchanged.
 
-
--- v31: six independent profile animations. These are intentionally stored as
--- feature unlocks because animation is a profile-data setting, not an Avatar Frame.
 insert into public.store_items (name, description, type, price, image_url, is_active)
 select v.name, v.description, 'feature', v.price, null, true
 from (values
-  ('Feature · Profile Animation · Rainfall', 'Full-profile animated rainfall with layered depth and soft diagonal motion.', 7000::bigint),
-  ('Feature · Profile Animation · Lightning', 'Full-profile storm animation with controlled electric flashes.', 8500::bigint),
-  ('Feature · Profile Animation · Cloud Drift', 'Slow-moving atmospheric cloud layers with cinematic depth.', 7800::bigint),
-  ('Feature · Profile Animation · Moneyfall', 'Premium falling currency particles with refined depth and glow.', 9500::bigint),
-  ('Feature · Profile Animation · Ocean Waves', 'Deep ocean surface animation with rolling layered waves.', 9000::bigint),
-  ('Feature · Profile Animation · Royal Aurora', 'Luxury aurora ribbons flowing across the full profile.', 12000::bigint)
+  ('Feature · Profile Animation · Pure Rainfall', 'Fine transparent rain streaks that move over the profile without tinting the template.', 8200::bigint),
+  ('Feature · Profile Animation · Autumn Leaves', 'Layered drifting leaves with natural rotation and soft depth.', 9800::bigint),
+  ('Feature · Profile Animation · Frost Spark', 'Delicate crystal snow sparks that fade and reappear around the profile.', 10800::bigint)
 ) as v(name, description, price)
 where not exists (
   select 1 from public.store_items s
   where lower(s.name)=lower(v.name) and s.type='feature'
 );
-
-notify pgrst, 'reload schema';
 
 create or replace function public.rivo_validate_paid_profile_data()
 returns trigger
@@ -106,9 +97,6 @@ begin
     end if;
   end if;
 
-  -- Profile Animation is an independent cosmetic slot. It can be equipped
-  -- at the same time as any Avatar Frame. Legacy 'soft' and the new 'none'
-  -- value are free/off states; all paid animations are ownership-checked.
   if TG_OP = 'INSERT' or new_data->>'animation' is distinct from old_data->>'animation' then
     value := coalesce(new_data->>'animation','none');
     if value not in ('none','soft') then
@@ -119,6 +107,9 @@ begin
         when 'money' then 'Moneyfall'
         when 'ocean' then 'Ocean Waves'
         when 'aurora' then 'Royal Aurora'
+        when 'rainfall' then 'Pure Rainfall'
+        when 'leaves' then 'Autumn Leaves'
+        when 'frost' then 'Frost Spark'
         else null
       end;
       if value is null or not public.rivo_inventory_owned_by_name(uid,'Feature · Profile Animation · ' || value) then
@@ -157,8 +148,6 @@ begin
     raise exception 'Music cover feature is not owned';
   end if;
 
-  -- IMPORTANT: a template brings its own accent color. That accent is not
-  -- "Custom Accent" and must not block saving a template-only change.
   template_accent := case coalesce(new_data->>'template','discord-noir')
     when 'discord-noir' then '#7488ff'
     when 'anime-cinema' then '#ff6fb0'
@@ -199,8 +188,6 @@ begin
     raise exception 'Glow control feature is not owned';
   end if;
 
-  -- Social links: the feature unlock enables the first 5 links.
-  -- Every additional link consumes one permanently purchased slot.
   if TG_OP = 'INSERT' or new_data->'socials' is distinct from old_data->'socials' then
     old_social_count := jsonb_array_length(coalesce(old_data->'socials','[]'::jsonb));
     new_social_count := jsonb_array_length(coalesce(new_data->'socials','[]'::jsonb));
@@ -227,10 +214,4 @@ begin
 end;
 $$;
 
-revoke all on function public.rivo_validate_paid_profile_data() from public;
-
-drop trigger if exists trg_rivo_validate_paid_profile_data on public.profiles;
-create trigger trg_rivo_validate_paid_profile_data
-before insert or update of public_data on public.profiles
-for each row execute function public.rivo_validate_paid_profile_data();
-
+notify pgrst, 'reload schema';
