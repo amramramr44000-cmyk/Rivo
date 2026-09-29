@@ -2185,16 +2185,32 @@
     "white-signal": { accent: "#3157ff", card: "split" }
   };
 
-  const profileAnimationNames = {
+  // Internal IDs stay stable so existing ownership records keep working.
+  // The visible labels/descriptions can evolve independently from the economy.
+  const profileAnimationLabels = {
     none: "None",
+    rain: "Meteor Shower",
+    lightning: "Lightning",
+    clouds: "Petal Drift",
+    money: "Moneyfall",
+    ocean: "Ocean Waves",
+    aurora: "Astral Dust",
+    rainfall: "Rainfall",
+    leaves: "Autumn Leaves",
+    frost: "Frost Spark"
+  };
+  const profileAnimationStoreNames = {
     rain: "Rainfall",
     lightning: "Lightning",
     clouds: "Cloud Drift",
     money: "Moneyfall",
     ocean: "Ocean Waves",
-    aurora: "Royal Aurora"
+    aurora: "Royal Aurora",
+    rainfall: "Pure Rainfall",
+    leaves: "Autumn Leaves",
+    frost: "Frost Spark"
   };
-  const profileAnimationIds = new Set(Object.keys(profileAnimationNames));
+  const profileAnimationIds = new Set(Object.keys(profileAnimationLabels));
 
   const templateNames = {
     "discord-noir": "Discord Noir",
@@ -2447,7 +2463,7 @@
       orbit:"Orbit", prism:"Prism", starburst:"Starburst", halo:"Halo", ribbon:"Ribbon", circuit:"Circuit", lattice:"Lattice"
     };
     const frameUnlockName = id => id === "none" ? null : `Frame · ${frameUnlockLabels[id] || (id.charAt(0).toUpperCase() + id.slice(1))}`;
-    const profileAnimationUnlockName = id => id === "none" ? null : `Feature · Profile Animation · ${profileAnimationNames[id] || id}`;
+    const profileAnimationUnlockName = id => id === "none" ? null : `Feature · Profile Animation · ${profileAnimationStoreNames[id] || id}`;
 
     function decorateUnlockControl(el, unlockName) {
       if (!el || !unlockName) return;
@@ -2795,7 +2811,7 @@
     const animationClass = animationId === "none" ? "" : ` profile-animation-${animationId}`;
     const animationLayer = animationId === "none"
       ? ""
-      : `<div class="profile-animation-layer profile-animation-${animationId}" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>`;
+      : `<div class="profile-animation-layer profile-animation-${animationId}" aria-hidden="true">${Array.from({length:12}, () => "<i></i>").join("")}</div>`;
     const social = (p.socials || []).map(s => { const href = safeLink(s.url); return href ? `<a class="social-pill" href="${esc(href)}" target="_blank" rel="noreferrer">${esc(s.label || "Link")}</a>` : ""; }).join("");
     const seenSectionTypes = new Set();
     const sectionHtml = (p.sections || [])
