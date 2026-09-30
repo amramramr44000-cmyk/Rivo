@@ -7181,3 +7181,103 @@ html[data-color-scheme="light"] .template-choice[data-template="white-signal"]{c
   .profile-avatar-wrap:has(.frame-ribbon)::after{width:34px!important;height:5px!important;bottom:8px!important;right:0!important;}
   .profile-card.profile-animation-rainfall .profile-animation-layer i{height:20px!important;}
 }
+
+/* =========================================================
+   RIVO V8 — template integrity / broken-divider cleanup
+   Final visual safety layer. Fixes only visible structural
+   artifacts; template identities remain unchanged.
+   ========================================================= */
+
+/* Cyber Terminal: keep the console aesthetic without broken-looking
+   dashed boxes around every section. Use clean terminal rules instead. */
+html[data-template="cyber-terminal"] .section-block{
+  border-top:1px solid rgba(56,255,155,.22)!important;
+  border-right:0!important;
+  border-bottom:0!important;
+  border-left:0!important;
+  border-radius:2px!important;
+  background:linear-gradient(180deg,rgba(56,255,155,.018),transparent 45%)!important;
+  position:relative!important;
+}
+html[data-template="cyber-terminal"] .section-block::before{
+  content:"";
+  position:absolute;
+  top:-1px;
+  left:0;
+  width:34px;
+  height:1px;
+  background:#39d99b;
+  box-shadow:0 0 8px rgba(56,255,155,.30);
+  pointer-events:none;
+}
+html[data-template="cyber-terminal"] .profile-stats>div{
+  border-style:solid!important;
+  border-color:rgba(56,255,155,.17)!important;
+  background:rgba(56,255,155,.022)!important;
+  box-shadow:inset 2px 0 0 rgba(56,255,155,.20)!important;
+}
+html[data-template="cyber-terminal"] .badge-pill{
+  border-style:solid!important;
+}
+html[data-template="cyber-terminal"] .template-card[data-card-style="terminal"]{
+  border-style:solid!important;
+  border-color:rgba(56,255,155,.30)!important;
+}
+
+/* Neon Arena: a precise divider reads better than a partial/dashed edge. */
+html[data-template="neon-arena"] .section-block{
+  border-top:2px solid rgba(85,214,255,.17)!important;
+  border-radius:0 0 4px 4px;
+}
+
+/* Botanical Night: retain the organic green language without a broken-box look. */
+html[data-template="botanical-night"] .section-block{
+  border-top:1px solid rgba(121,215,154,.14)!important;
+  border-radius:0 0 6px 6px;
+}
+
+/* Pixel Arcade keeps its dashed/pixel character, but prevents it from
+   becoming heavy or incomplete on narrow cards. */
+html[data-template="pixel-arcade"] .section-block{
+  border-top:1px solid rgba(125,255,141,.22)!important;
+  background:linear-gradient(180deg,rgba(125,255,141,.018),transparent 42%)!important;
+}
+
+/* Ticket card shape: replace a browser-drawn dashed perimeter with a
+   controlled perforated edge, so corners stay continuous on phones. */
+[data-card-style="ticket"] .template-card{
+  border:1px solid color-mix(in srgb,var(--accent) 24%,#fff)!important;
+  border-style:solid!important;
+  position:relative!important;
+}
+[data-card-style="ticket"] .template-card::after{
+  content:"";
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+  z-index:3;
+  border-radius:inherit;
+  background:
+    radial-gradient(circle at 9px 50%,rgba(255,255,255,.78) 0 1.4px,transparent 1.7px) left center/18px 28px repeat-y,
+    radial-gradient(circle at calc(100% - 9px) 50%,rgba(255,255,255,.52) 0 1.2px,transparent 1.6px) right center/18px 28px repeat-y;
+  opacity:.22;
+}
+
+/* Keep all template banners clipped only by the card itself. This prevents
+   decorative banner geometry from creating accidental white/empty wedges. */
+.profile-card.template-card .profile-banner,
+.profile-card.template-card .profile-banner-fallback,
+.profile-card.template-card .profile-banner-image{
+  overflow:hidden!important;
+  max-width:100%!important;
+  box-sizing:border-box!important;
+}
+
+@media(max-width:760px){
+  html[data-template="cyber-terminal"] .section-block{padding-top:18px!important;}
+  [data-card-style="ticket"] .template-card::after{opacity:.16;}
+}
+
+@media(prefers-reduced-motion:reduce){
+  html[data-template="cyber-terminal"] .section-block::before{box-shadow:none;}
+}
