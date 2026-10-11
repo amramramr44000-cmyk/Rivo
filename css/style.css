@@ -7314,3 +7314,19 @@ html[data-template="pixel-arcade"] .section-block{
  body.rivo-chat-fullscreen .message-compose{grid-template-columns:46px 34px minmax(0,1fr) auto}
  body.rivo-chat-fullscreen .message-image-button{width:34px;height:44px;min-width:34px;border-radius:11px}
 }
+
+/* Accessible full-size private-message image viewer with an explicit download action. */
+.message-attachment-image{touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;outline-offset:3px}
+.message-attachment-image:focus-visible{outline:2px solid var(--accent,#78a9ff)}
+.message-image-viewer{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:12px;padding:76px 16px 18px;overflow:auto}
+.message-image-viewer>img{max-width:min(96vw,1400px);max-height:calc(88dvh - 64px);object-fit:contain;touch-action:pan-x pan-y}
+.message-image-viewer-tools{position:fixed;z-index:2;top:max(12px,env(safe-area-inset-top));right:14px;left:14px;display:flex;justify-content:flex-end;align-items:center;gap:9px;pointer-events:none}
+.message-image-viewer-download,.message-image-viewer-tools .message-image-viewer-close{position:static;pointer-events:auto;min-height:44px;border:1px solid rgba(255,255,255,.22);border-radius:14px;background:rgba(20,20,20,.9);color:#fff;box-shadow:0 6px 24px rgba(0,0,0,.25);cursor:pointer}
+.message-image-viewer-download{padding:0 16px;font:inherit;font-size:13px;font-weight:700}
+.message-image-viewer-download:disabled{opacity:.65;cursor:wait}
+.message-image-viewer-tools .message-image-viewer-close{width:44px;height:44px;padding:0;font-size:28px;line-height:1}
+@media(max-width:600px){
+ .message-image-viewer{padding:70px 8px max(12px,env(safe-area-inset-bottom))}
+ .message-image-viewer>img{max-width:96vw;max-height:calc(84dvh - 54px)}
+ .message-image-viewer-download{font-size:12px;padding:0 12px}
+}
