@@ -2144,6 +2144,20 @@ async function getMessageImageUrl(path) {
   return data?.signedUrl || "";
 }
 
+async function getMessageImageDownloadUrl(path) {
+  requireClient();
+  const safePath = String(path || "");
+  if (!safePath) return "";
+  const rawExt = safePath.split("/").pop()?.split(".").pop()?.toLowerCase() || "jpg";
+  const ext = /^(?:jpe?g|png|webp|gif|avif|heic|heif|bmp)$/.test(rawExt) ? rawExt : "jpg";
+  const filename = `rivo-photo-${Date.now()}.${ext}`;
+  // Ask Storage to send Content-Disposition: attachment so downloads also work
+  // in mobile browsers that ignore the cross-origin <a download> attribute.
+  const { data, error } = await sb.storage.from("rivo-message-media").createSignedUrl(safePath, 3600, { download: filename });
+  if (error) throw error;
+  return data?.signedUrl || "";
+}
+
 async function getVoiceUrl(path) {
   requireClient();
   const safePath = String(path || "");
@@ -2275,7 +2289,7 @@ async function getVoiceUrl(path) {
     listConversations, getMessages, deleteMessage, editMessage, markMessagesRead, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminSetCoins, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, deletePostComment, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, getSocialLinkStatus, purchaseSocialLinkSlot, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCommunityVoice, startCommunityVoice, endCommunityVoice, setCommunityVoicePolicy, setCommunityModerator, setCommunityVoiceMute, moderateCommunityVoice, subscribeCommunityVoice, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl, sendImageMessage, getMessageImageUrl,
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, deletePostComment, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, getSocialLinkStatus, purchaseSocialLinkSlot, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCommunityVoice, startCommunityVoice, endCommunityVoice, setCommunityVoicePolicy, setCommunityModerator, setCommunityVoiceMute, moderateCommunityVoice, subscribeCommunityVoice, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl, sendImageMessage, getMessageImageUrl, getMessageImageDownloadUrl,
     NAV_I18N, I18N, currentLanguage, translateString, applyI18n, applySavedLanguage
   };
 })();

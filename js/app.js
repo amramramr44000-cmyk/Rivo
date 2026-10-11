@@ -943,14 +943,13 @@
       stopMicTrackOnMute: false
     });
 
-    async function attachAudioTrack(track) {
-      if (!active || !track) return null;
+    async function attachAudioTrack(track, callState = active) {
+      if (!callState || active !== callState || !track) return null;
+      const stillCurrent = () => active === callState;
 
-      // Keep the direct-call receive path native: no Web Audio mixer/resampler.
-      // Zero explicit playout delay avoids adding application-level buffering.
+      // Keep the receive path native; LiveKit/WebRTC owns network jitter buffering.
       try { track.setPlayoutDelay?.(0); } catch {}
-
-      let media = active.remoteAudioEl;
+      let media = callState.remoteAudioEl;
       if (!media) {
         media = document.createElement("audio");
         media.autoplay = true;
@@ -969,21 +968,21 @@
         media.style.pointerEvents = "none";
         media.style.left = "-9999px";
         document.body.appendChild(media);
-        active.remoteAudioEl = media;
+        callState.remoteAudioEl = media;
       }
 
-      if (active.remoteAudioTrack && active.remoteAudioTrack !== track) {
-        try { active.remoteAudioTrack.detach(media); } catch {}
-        try { active.remoteAudioTrack.detach(); } catch {}
+      if (callState.remoteAudioTrack && callState.remoteAudioTrack !== track) {
+        try { callState.remoteAudioTrack.detach(media); } catch {}
+        try { callState.remoteAudioTrack.detach(); } catch {}
       }
-      if (active.remoteAudioFallbackEl) {
-        try { active.remoteAudioFallbackEl.pause?.(); } catch {}
-        try { active.remoteAudioFallbackEl.srcObject = null; } catch {}
-        try { active.remoteAudioFallbackEl.remove(); } catch {}
-        active.remoteAudioFallbackEl = null;
+      if (callState.remoteAudioFallbackEl) {
+        try { callState.remoteAudioFallbackEl.pause?.(); } catch {}
+        try { callState.remoteAudioFallbackEl.srcObject = null; } catch {}
+        try { callState.remoteAudioFallbackEl.remove(); } catch {}
+        callState.remoteAudioFallbackEl = null;
       }
 
-      active.remoteAudioTrack = track;
+      callState.remoteAudioTrack = track;
       try {
         track.attach(media);
       } catch {
@@ -1000,68 +999,118 @@
           fallback.style.pointerEvents = "none";
           fallback.style.left = "-9999px";
           document.body.appendChild(fallback);
-          active.remoteAudioFallbackEl = fallback;
+          callState.remoteAudioFallbackEl = fallback;
         } catch {}
       }
 
-      // Keep both LiveKit's receiver routing and the actual <audio> element
-      // pinned to the selected output when the browser supports it.
-      try { track.setPlayoutDelay?.(0); } catch {}
-      if (active.outputDeviceId && active.outputDeviceId !== "default") {
-        try { await track.setSinkId?.(active.outputDeviceId); } catch {}
-        try { await media.setSinkId?.(active.outputDeviceId); } catch {}
+      if (!stillCurrent()) {
+        try { track.detach(media); } catch {}
+        try { media.pause(); media.srcObject = null; media.remove(); } catch {}
+        return null;
       }
+      try { track.setPlayoutDelay?.(0); } catch {}
+      if (callState.outputDeviceId && callState.outputDeviceId !== "default") {
+        try { await track.setSinkId?.(callState.outputDeviceId); } catch {}
+        if (!stillCurrent()) return null;
+        try { await media.setSinkId?.(callState.outputDeviceId); } catch {}
+      }
+      if (!stillCurrent()) return null;
       try { await media.play(); } catch {}
-      return media;
+      return stillCurrent() ? media : null;
     }
 
-    async function ensureMicrophonePublished(room) {
-      if (!room?.localParticipant || !active) return false;
-      if (active.micEnabled === false) return true;
+    async function ensureMicrophonePublished(room, callState = active) {
+      if (!room?.localParticipant || !callState || active !== callState) return false;
+      if (callState.micEnabled === false) return true;
 
       const lp = room.localParticipant;
-      let publication = null;
+      const stillCurrent = () => active === callState;
+      const rememberPublication = async publication => {
+        if (!stillCurrent() || !publication?.track) return false;
+        callState.micTrack = publication.track;
+        try {
+          callState.inputDeviceId = (await publication.track.getDeviceId?.()) || callState.inputDeviceId;
+        } catch {}
+        return stillCurrent();
+      };
+      const getLivePublication = () => {
+        try {
+          const pub = lp.getTrackPublication(LK.Track.Source.Microphone);
+          const raw = pub?.track?.mediaStreamTrack;
+          if (pub?.track && raw?.readyState !== "ended") return pub;
+        } catch {}
+        return null;
+      };
 
-      try {
-        publication = lp.getTrackPublication(LK.Track.Source.Microphone);
-        if (publication?.track) {
+      let publication = getLivePublication();
+      if (publication?.track) {
+        try {
           if (publication.isMuted) {
             await lp.setMicrophoneEnabled(true, AUDIO_CAPTURE_OPTIONS, AUDIO_PUBLISH_OPTIONS());
+            if (!stillCurrent()) return false;
+            publication = getLivePublication() || publication;
           }
-          active.micTrack = publication.track;
-          try { active.inputDeviceId = (await publication.track.getDeviceId?.()) || active.inputDeviceId; } catch {}
-          return true;
+        } catch (error) {
+          console.warn("[Rivo Calls] Could not re-enable existing microphone:", error);
         }
-      } catch {}
+        return rememberPublication(publication);
+      }
 
+      let primaryError = null;
       try {
         publication = await lp.setMicrophoneEnabled(
           true,
           AUDIO_CAPTURE_OPTIONS,
           AUDIO_PUBLISH_OPTIONS()
         );
-        if (publication?.track) {
-          active.micTrack = publication.track;
-          try { active.inputDeviceId = (await publication.track.getDeviceId?.()) || active.inputDeviceId; } catch {}
-          return true;
-        }
+        if (!stillCurrent()) return false;
+        publication = publication?.track ? publication : getLivePublication();
+        if (publication?.track) return rememberPublication(publication);
       } catch (error) {
+        primaryError = error;
         console.warn("[Rivo Calls] Microphone enable failed:", error);
       }
 
-      // Wait for the SDK to finish its single microphone publication instead
-      // of creating another track, which can cause duplicate audio/echo.
-      for (let i = 0; i < 10; i++) {
-        await new Promise(resolve => setTimeout(resolve, 50));
-        try {
-          publication = lp.getTrackPublication(LK.Track.Source.Microphone);
-          if (publication?.track) {
-            active.micTrack = publication.track;
-            return true;
-          }
-        } catch {}
+      // If the SDK returned before dispatching LocalTrackPublished, wait for
+      // the same publication before attempting another enable operation.
+      if (!primaryError && stillCurrent()) {
+        for (let i = 0; i < 4; i++) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          if (!stillCurrent()) return false;
+          publication = getLivePublication();
+          if (publication?.track) return rememberPublication(publication);
+        }
       }
 
+      if (!stillCurrent()) return false;
+      const errorText = `${primaryError?.name || ""} ${primaryError?.message || ""}`.toLowerCase();
+      const permissionDenied = /notallowederror|permission denied|permission is denied|denied by system|securityerror|not allowed/.test(errorText);
+
+      // Some browsers reject one of the optional capture constraints. Retry once
+      // with only widely supported constraints; never do this after an explicit
+      // permission denial and never create parallel microphone tracks.
+      if (!permissionDenied) {
+        try {
+          publication = await lp.setMicrophoneEnabled(
+            true,
+            { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            AUDIO_PUBLISH_OPTIONS()
+          );
+          if (!stillCurrent()) return false;
+          publication = publication?.track ? publication : getLivePublication();
+          if (publication?.track) return rememberPublication(publication);
+        } catch (error) {
+          console.warn("[Rivo Calls] Safe microphone retry failed:", error);
+        }
+      }
+
+      // Give the SDK a short moment to finish a publication already in flight.
+      for (let i = 0; i < 10; i++) {
+        if (!stillCurrent()) return false;
+        await new Promise(resolve => setTimeout(resolve, 50));
+        publication = getLivePublication();
+        if (publication?.track) return rememberPublication(publication);
+      }
       return false;
     }
 
@@ -1112,15 +1161,17 @@
         button.append(icon, copy);
 
         button.onclick = async () => {
-          if (!active?.room) return;
+          const callState = active;
+          if (!callState?.room) return;
           try {
             const id = deviceId || "default";
             if (kind === "audioinput") {
-              await active.room.switchActiveDevice("audioinput", id, false);
-              active.inputDeviceId = id;
+              await callState.room.switchActiveDevice("audioinput", id, false);
+              if (active !== callState) return;
+              callState.inputDeviceId = id;
               try {
-                const pub = active.room.localParticipant.getTrackPublication(LK.Track.Source.Microphone);
-                active.micTrack = pub?.track || active.micTrack;
+                const pub = callState.room.localParticipant.getTrackPublication(LK.Track.Source.Microphone);
+                callState.micTrack = pub?.track || callState.micTrack;
               } catch {}
               notifyCall(`Microphone: ${label}`, "success");
             } else {
@@ -1128,16 +1179,18 @@
                 notifyCall("This browser lets the OS control Bluetooth/wired output automatically.", "error");
                 return;
               }
-              await active.room.switchActiveDevice("audiooutput", id, false);
-              active.outputDeviceId = id;
-              try { active.remoteAudioTrack?.setPlayoutDelay?.(0); } catch {}
-              try { await active.remoteAudioTrack?.setSinkId?.(id); } catch {}
-              try { await active.remoteAudioEl?.setSinkId?.(id); } catch {}
+              await callState.room.switchActiveDevice("audiooutput", id, false);
+              if (active !== callState) return;
+              callState.outputDeviceId = id;
+              try { callState.remoteAudioTrack?.setPlayoutDelay?.(0); } catch {}
+              try { await callState.remoteAudioTrack?.setSinkId?.(id); } catch {}
+              if (active !== callState) return;
+              try { await callState.remoteAudioEl?.setSinkId?.(id); } catch {}
               notifyCall(`Speaker: ${label}`, "success");
             }
-            await buildAudioRouteMenu();
+            if (active === callState) await buildAudioRouteMenu();
           } catch (err) {
-            notifyCall(err?.message || "Could not switch audio device.", "error");
+            if (active === callState) notifyCall(err?.message || "Could not switch audio device.", "error");
           }
         };
         container.appendChild(button);
@@ -1197,16 +1250,18 @@
 
     async function toggleAudioRoute(ev) {
       ev?.stopPropagation();
+      const callState = active;
       const e = E();
       if (!e.routeMenu) return;
-      // The click is a fresh user gesture on iOS/Android; use it to unlock
-      // WebRTC audio before opening the device menu.
-      if (active?.room) {
-        try { await active.room.startAudio?.(); } catch {}
-        try { if (active.remoteAudioEl?.paused) await active.remoteAudioEl.play(); } catch {}
-        try { if (active.remoteAudioFallbackEl?.paused) await active.remoteAudioFallbackEl.play(); } catch {}
+      // The click is a fresh user gesture on mobile; use it to unlock call audio.
+      if (callState?.room) {
+        try { await callState.room.startAudio?.(); } catch {}
+        if (active !== callState) return;
+        try { if (callState.remoteAudioEl?.paused) await callState.remoteAudioEl.play(); } catch {}
+        if (active !== callState) return;
+        try { if (callState.remoteAudioFallbackEl?.paused) await callState.remoteAudioFallbackEl.play(); } catch {}
       }
-      if (!active?.room) {
+      if (!callState?.room || active !== callState) {
         notifyCall("Audio routing is available after the call connects.", "error");
         return;
       }
@@ -1215,6 +1270,7 @@
         return;
       }
       await buildAudioRouteMenu();
+      if (active !== callState) return;
       e.routeMenu.classList.remove("hidden");
       e.audioRoute?.classList.add("active");
     }
@@ -1242,46 +1298,54 @@
     };
 
     async function connectMedia() {
+      const callState = active;
+      if (!callState?.roomName) throw new Error("Call room is missing.");
       if (!LK) LK = await loadLiveKitClient();
       if (!LK) throw new Error("LiveKit client failed to load.");
-      if (!active?.roomName) throw new Error("Call room is missing.");
+      if (active !== callState) return false;
 
       const e = E();
+      const stillCurrent = () => active === callState;
+      const disconnectIfStale = async room => {
+        if (stillCurrent()) return false;
+        try { await room?.disconnect?.(); } catch {}
+        return true;
+      };
 
       const reconnectPolicy = LK.DefaultReconnectPolicy
         ? new LK.DefaultReconnectPolicy([300, 700, 1200, 2000, 3500, 6000, 10000])
         : undefined;
 
       const room = new LK.Room({
-        adaptiveStream: active.isVideo,
-        dynacast: active.isVideo,
+        adaptiveStream: !!callState.isVideo,
+        dynacast: !!callState.isVideo,
         singlePeerConnection: true,
         disconnectOnPageLeave: true,
         webAudioMix: false,
         reconnectPolicy,
         audioCaptureDefaults: AUDIO_CAPTURE_OPTIONS,
-        publishDefaults: active.isVideo
+        publishDefaults: callState.isVideo
           ? {
               ...AUDIO_PUBLISH_OPTIONS(),
               simulcast: true,
               videoCodec: "vp8",
               degradationPreference: "maintain-framerate"
             }
-          : {
-              ...AUDIO_PUBLISH_OPTIONS()
-            }
+          : { ...AUDIO_PUBLISH_OPTIONS() }
       });
 
       if (LK.RoomEvent.LocalTrackPublished) {
         room.on(LK.RoomEvent.LocalTrackPublished, publication => {
+          if (!stillCurrent()) return;
           try {
             if (publication?.source === LK.Track.Source.Camera && publication.track) {
               attachLocalVideo(publication.track);
             }
           } catch {}
           try {
-            if (publication?.source === LK.Track.Source.Microphone && active) {
-              active.micEnabled = true;
+            if (publication?.source === LK.Track.Source.Microphone) {
+              callState.micAvailable = true;
+              callState.micTrack = publication.track || callState.micTrack;
             }
           } catch {}
         });
@@ -1289,9 +1353,10 @@
 
       if (LK.RoomEvent.LocalTrackUnpublished) {
         room.on(LK.RoomEvent.LocalTrackUnpublished, publication => {
+          if (!stillCurrent()) return;
           try {
-            if (publication?.source === LK.Track.Source.Microphone && active?.micEnabled !== false) {
-              setTimeout(() => ensureMicrophonePublished(room), 100);
+            if (publication?.source === LK.Track.Source.Microphone && callState.micEnabled !== false) {
+              setTimeout(() => { if (stillCurrent()) ensureMicrophonePublished(room, callState); }, 250);
             } else if (publication?.source === LK.Track.Source.Camera) {
               E().stage.querySelectorAll(".call-local-video.live").forEach(video => {
                 try { video.pause?.(); video.srcObject = null; video.remove(); } catch {}
@@ -1301,170 +1366,172 @@
         });
       }
 
-      room.on(LK.RoomEvent.TrackSubscribed, async (track) => {
-        if (track.kind === LK.Track.Kind.Video) {
-          const media = track.attach();
-          media.className = "call-remote-video live";
-          media.autoplay = true;
-          media.playsInline = true;
-
-          const old = e.stage.querySelector(".call-remote-video.live");
-          if (old) old.remove();
-
-          e.stage.appendChild(media);
-
-          try { await media.play(); } catch {}
-        } else if (track.kind === LK.Track.Kind.Audio) {
-          // Do not add application-side jitter buffering. LiveKit/WebRTC owns
-          // the transport jitter buffer; explicit zero keeps Rivo from adding
-          // another user-visible delay layer.
+      room.on(LK.RoomEvent.TrackSubscribed, async track => {
+        if (!stillCurrent()) { try { track?.detach?.().forEach?.(x => x.remove()); } catch {} return; }
+        if (track?.kind === LK.Track.Kind.Video) {
+          try {
+            const media = track.attach();
+            media.className = "call-remote-video live";
+            media.autoplay = true;
+            media.playsInline = true;
+            media.setAttribute("playsinline", "");
+            const old = e.stage.querySelector(".call-remote-video.live");
+            if (old) { try { old.pause?.(); old.srcObject = null; old.remove(); } catch {} }
+            e.stage.appendChild(media);
+            try { await media.play(); } catch {}
+            if (!stillCurrent()) { try { track.detach(media); media.remove(); } catch {} }
+          } catch (error) { console.warn("[Rivo Calls] Could not attach remote video:", error); }
+        } else if (track?.kind === LK.Track.Kind.Audio) {
           try { track.setPlayoutDelay?.(0); } catch {}
-          await attachAudioTrack(track);
+          if (stillCurrent()) await attachAudioTrack(track, callState);
         }
       });
 
       room.on(LK.RoomEvent.TrackUnsubscribed, track => {
-        if (track?.kind === LK.Track.Kind.Audio && active?.remoteAudioTrack === track) {
-          try { track.detach(active.remoteAudioEl); } catch {}
+        if (track?.kind === LK.Track.Kind.Audio && callState.remoteAudioTrack === track) {
+          try { track.detach(callState.remoteAudioEl); } catch {}
           try { track.detach(); } catch {}
-          active.remoteAudioTrack = null;
+          callState.remoteAudioTrack = null;
           try {
-            if (active.remoteAudioEl) {
-              active.remoteAudioEl.pause();
-              active.remoteAudioEl.srcObject = null;
+            if (callState.remoteAudioEl) {
+              callState.remoteAudioEl.pause();
+              callState.remoteAudioEl.srcObject = null;
             }
           } catch {}
         } else {
-          try { track.detach().forEach(x => x.remove()); } catch {}
+          try { track?.detach?.().forEach(x => x.remove()); } catch {}
         }
       });
 
-      room.on(LK.RoomEvent.Reconnecting, () => state("Reconnecting…"));
+      room.on(LK.RoomEvent.Reconnecting, () => { if (stillCurrent()) state("Reconnecting…"); });
       room.on(LK.RoomEvent.Reconnected, async () => {
-        if (active?.micEnabled !== false) {
-          const ok = await ensureMicrophonePublished(room);
-          if (!ok) notifyCall("Microphone was not restored after reconnect.", "error");
+        if (!stillCurrent()) return;
+        if (callState.micEnabled !== false) {
+          const ok = await ensureMicrophonePublished(room, callState);
+          if (stillCurrent() && !ok) notifyCall("Microphone was not restored. Check browser permissions or select another input device.", "error");
         }
+        if (!stillCurrent()) return;
         try {
-          if (active?.inputDeviceId && active.inputDeviceId !== "default") {
-            await room.switchActiveDevice("audioinput", active.inputDeviceId, false);
+          if (callState.inputDeviceId && callState.inputDeviceId !== "default") {
+            await room.switchActiveDevice("audioinput", callState.inputDeviceId, false);
           }
         } catch {}
         try {
-          if (active?.outputDeviceId && active.outputDeviceId !== "default") {
-            await room.switchActiveDevice("audiooutput", active.outputDeviceId, false);
-            try { await active.remoteAudioTrack?.setSinkId?.(active.outputDeviceId); } catch {}
-            try { await active.remoteAudioEl?.setSinkId?.(active.outputDeviceId); } catch {}
+          if (callState.outputDeviceId && callState.outputDeviceId !== "default") {
+            await room.switchActiveDevice("audiooutput", callState.outputDeviceId, false);
+            try { await callState.remoteAudioTrack?.setSinkId?.(callState.outputDeviceId); } catch {}
+            try { await callState.remoteAudioEl?.setSinkId?.(callState.outputDeviceId); } catch {}
           }
         } catch {}
-        try { active?.remoteAudioTrack?.setPlayoutDelay?.(0); } catch {}
-        state("Connected", true);
-        updateQuality(room.localParticipant.connectionQuality);
-        if (!callStartedAt) timer();
+        try { callState.remoteAudioTrack?.setPlayoutDelay?.(0); } catch {}
+        if (stillCurrent()) {
+          state(callState.micAvailable === false ? "Connected · microphone unavailable" : "Connected", true);
+          updateQuality(room.localParticipant?.connectionQuality);
+          if (!callStartedAt) timer();
+        }
       });
 
-      room.on(LK.RoomEvent.ConnectionQualityChanged, (quality) => {
-        updateQuality(quality);
+      room.on(LK.RoomEvent.ConnectionQualityChanged, quality => {
+        if (stillCurrent()) updateQuality(quality);
       });
-
       room.on(LK.RoomEvent.AudioPlaybackStatusChanged, playing => {
-        if (!playing) notifyCall("Tap Audio to start call sound.", "error");
+        if (stillCurrent() && !playing) notifyCall("Tap the audio control to enable call sound.", "error");
       });
-
       room.on(LK.RoomEvent.Disconnected, reason => {
-        if (active) {
-          notifyCall(
-            reason ? `Call ended: ${reason}` : "Call connection ended.",
-            "error"
-          );
-          endCall(false);
-        }
+        if (!stillCurrent()) return;
+        notifyCall(reason ? `Call connection ended: ${String(reason)}` : "Call connection ended.", "error");
+        endCall(false);
       });
-
       room.on(LK.RoomEvent.ParticipantDisconnected, () => {
-        if (active?.connected) endCall(false);
+        if (stillCurrent() && callState.connected) endCall(false);
       });
-
       room.on(LK.RoomEvent.MediaDevicesError, err => {
-        notifyCall(
-          err?.message || "Microphone or camera permission is unavailable.",
-          "error"
-        );
+        if (stillCurrent()) notifyCall(err?.message || "Microphone or camera permission is unavailable.", "error");
       });
-
       room.on(LK.RoomEvent.TrackStreamStateChanged, (_pub, streamState) => {
+        if (!stillCurrent()) return;
         const paused = String(streamState).toLowerCase().includes("paused");
         if (paused) state("Optimizing connection…");
-        else if (active?.connected) state("Connected", true);
+        else if (callState.connected) state(callState.micAvailable === false ? "Connected · microphone unavailable" : "Connected", true);
       });
 
-      active.room = room;
-      active.audioEls = [];
+      callState.room = room;
+      callState.audioEls = [];
+      state(callState.isVideo ? "Connecting video…" : "Connecting…");
 
-      state(active.isVideo ? "Connecting video…" : "Connecting…");
-
-      const d = await token(active.roomName, active.meId);
-
-      if (!d.server_url || !d.participant_token) {
-        throw new Error("LiveKit authorization failed.");
-      }
-
-      // Pre-warm where supported to reduce perceived connect latency.
+      const d = await token(callState.roomName, callState.meId);
+      if (await disconnectIfStale(room)) return false;
+      if (!d.server_url || !d.participant_token) throw new Error("LiveKit authorization failed.");
       try { room.prepareConnection(d.server_url, d.participant_token); } catch {}
 
-      await room.connect(
-        d.server_url,
-        d.participant_token,
-        {
-          autoSubscribe: true,
-          maxRetries: 6,
-          peerConnectionTimeout: 20000,
-          websocketTimeout: 20000
-        }
-      );
-
+      await room.connect(d.server_url, d.participant_token, {
+        autoSubscribe: true,
+        maxRetries: 6,
+        peerConnectionTimeout: 20000,
+        websocketTimeout: 20000
+      });
+      if (await disconnectIfStale(room)) return false;
       try { await room.startAudio?.(); } catch {}
+      if (!stillCurrent()) { await disconnectIfStale(room); return false; }
 
-      const micPublished = await ensureMicrophonePublished(room);
+      const micPublished = await ensureMicrophonePublished(room, callState);
+      if (await disconnectIfStale(room)) return false;
+      callState.micAvailable = !!micPublished;
       if (!micPublished) {
-        notifyCall("Microphone could not be published. Check browser microphone permission and try again.", "error");
+        const secureOrigin = window.isSecureContext || ["localhost", "127.0.0.1"].includes(location.hostname);
+        notifyCall(
+          secureOrigin
+            ? "Microphone unavailable. Check this site's microphone permission and close other apps using it; you can still listen while reconnecting the mic."
+            : "Microphone needs a secure HTTPS page and browser permission. Reopen Rivo over HTTPS and allow microphone access.",
+          "error"
+        );
+        const muteButton = E().mute;
+        muteButton?.classList.add("is-off");
+        muteButton?.setAttribute("aria-label", "Retry microphone");
       }
 
-      if (active.isVideo) {
+      if (callState.isVideo) {
         let cameraStarted = false;
         try {
-          // Prefer the front camera for a phone video call; some Android
-          // browsers reject an explicit mode, so retry once with defaults.
           await room.localParticipant.setCameraEnabled(true, { facingMode: "user" });
+          if (!stillCurrent()) { await disconnectIfStale(room); return false; }
           cameraStarted = true;
         } catch (cameraError) {
           console.warn("Front camera enable failed; retrying default camera:", cameraError);
-          try { await room.localParticipant.setCameraEnabled(true); cameraStarted = true; }
-          catch (fallbackCameraError) {
+          try {
+            await room.localParticipant.setCameraEnabled(true);
+            if (!stillCurrent()) { await disconnectIfStale(room); return false; }
+            cameraStarted = true;
+          } catch (fallbackCameraError) {
             console.warn("Camera enable failed:", fallbackCameraError || cameraError);
+            if (!stillCurrent()) return false;
             const message = String(fallbackCameraError?.message || cameraError?.message || "");
             notifyCall(/permission|denied|notallowed/i.test(message)
               ? "Camera permission is blocked. Allow camera access in your browser settings and retry."
               : "Camera could not start. Check that another app is not using it, then retry.", "error");
           }
         }
-        const pub = room.localParticipant.getTrackPublication(LK.Track.Source.Camera);
+        if (!stillCurrent()) { await disconnectIfStale(room); return false; }
+        let pub = null;
+        try { pub = room.localParticipant.getTrackPublication(LK.Track.Source.Camera); } catch {}
         if (pub?.track) attachLocalVideo(pub.track);
         if (cameraStarted && !pub?.track) {
-          // TrackPublished normally arrives asynchronously. Recheck once rather
-          // than publishing the same camera a second time.
           setTimeout(() => {
-            const cameraPub = active?.room?.localParticipant?.getTrackPublication?.(LK.Track.Source.Camera);
-            if (active?.isVideo && cameraPub?.track) attachLocalVideo(cameraPub.track);
+            if (!stillCurrent()) return;
+            let cameraPub = null;
+            try { cameraPub = callState.room?.localParticipant?.getTrackPublication?.(LK.Track.Source.Camera); } catch {}
+            if (callState.isVideo && cameraPub?.track) attachLocalVideo(cameraPub.track);
           }, 350);
         }
       }
 
-      active.connected = true;
-      state("Connected", true);
+      if (!stillCurrent()) { await disconnectIfStale(room); return false; }
+      callState.connected = true;
+      state(callState.micAvailable === false ? "Connected · microphone unavailable" : "Connected", true);
       if (!callStartedAt) timer();
-      updateQuality(room.localParticipant.connectionQuality);
+      updateQuality(room.localParticipant?.connectionQuality);
       startQualityMonitor(room);
+      return true;
     }
 
     async function beginCall(username, type = "audio") {
@@ -1544,22 +1611,24 @@
     }
 
     async function handleSignal(msg) {
-      if (!active || msg.callId !== active.callId) return;
+      const callState = active;
+      if (!callState || msg?.callId !== callState.callId) return;
 
-      if (msg.type === "accept" && active.role === "caller") {
+      if (msg.type === "accept" && callState.role === "caller") {
         try {
           state("Connecting…");
           await connectMedia();
         } catch (err) {
+          if (active !== callState) return;
           notifyCall(err.message || "Could not connect the call", "error");
-          endCall(true);
+          await endCall(true);
         }
-      } else if (msg.type === "decline" || msg.type === "hangup") {
+      } else if ((msg.type === "decline" || msg.type === "hangup") && active === callState) {
         notifyCall(msg.type === "decline" ? "Call declined." : "Call ended.");
-        endCall(false);
-      } else if (msg.type === "busy") {
+        await endCall(false);
+      } else if (msg.type === "busy" && active === callState) {
         notifyCall("This person is already on a call.", "error");
-        endCall(false);
+        await endCall(false);
       }
     }
 
@@ -1616,52 +1685,68 @@
     }
 
     async function acceptIncoming() {
-      if (!active || active.role !== "callee") return;
+      const callState = active;
+      if (!callState || callState.role !== "callee" || callState.accepting) return;
+      callState.accepting = true;
 
       const e = E();
+      const acceptButton = e.incoming.querySelector("[data-call-accept]");
+      if (acceptButton) { acceptButton.disabled = true; acceptButton.textContent = "Connecting…"; }
       e.incoming.classList.add("hidden");
+      state(callState.isVideo ? "Preparing video call…" : "Preparing voice call…");
 
       try {
         if (!LK) LK = await loadLiveKitClient();
-        active.channel = await PF.openCallChannel(
-          `rivo-call-${active.callId}`,
+        if (active !== callState) return;
+        if (!LK) throw new Error("Call system is unavailable.");
+
+        callState.channel = await PF.openCallChannel(
+          `rivo-call-${callState.callId}`,
           handleSignal
         );
+        if (active !== callState) {
+          await callState.channel?.close?.();
+          return;
+        }
 
-        await active.channel.send({
-          callId: active.callId,
-          from: active.meId,
-          to: active.peerId,
+        await callState.channel.send({
+          callId: callState.callId,
+          from: callState.meId,
+          to: callState.peerId,
           type: "accept"
         });
+        if (active !== callState) return;
 
         await connectMedia();
-        try { await active?.room?.startAudio?.(); } catch {}
+        if (active === callState) {
+          try { await callState.room?.startAudio?.(); } catch {}
+        }
       } catch (err) {
-        notifyCall(err.message || "Could not accept the call", "error");
-        endCall(true);
+        if (active === callState) {
+          notifyCall(err.message || "Could not accept the call", "error");
+          await endCall(true);
+        }
+      } finally {
+        callState.accepting = false;
+        if (acceptButton) { acceptButton.disabled = false; acceptButton.textContent = "Accept"; }
       }
     }
 
     async function declineIncoming() {
-      if (!active) return;
-
+      const callState = active;
+      if (!callState || callState.role !== "callee") return;
       try {
-        const box = await PF.openCallChannel(
-          `rivo-call-inbox-${active.peerId}`
-        );
-
+        const box = await PF.openCallChannel(`rivo-call-inbox-${callState.peerId}`);
+        if (active !== callState) { await box.close(); return; }
         await box.send({
-          callId: active.callId,
-          from: active.meId,
-          to: active.peerId,
+          callId: callState.callId,
+          from: callState.meId,
+          to: callState.peerId,
           type: "decline"
         });
-
         await box.close();
       } catch {}
-
-      endCall(false);
+      if (active === callState) await endCall(false);
     }
 
     async function endCall(send = true) {
@@ -1698,59 +1783,56 @@
     }
 
     async function toggleMute() {
-      if (!active?.room) return;
-
+      const callState = active;
+      if (!callState?.room) return;
       const e = E();
-      const on = active.room.localParticipant.isMicrophoneEnabled;
-      const nextEnabled = !on;
+      const currentlyEnabled = !!callState.room.localParticipant.isMicrophoneEnabled;
+      const nextEnabled = !currentlyEnabled;
+      callState.micEnabled = nextEnabled;
 
       try {
-        active.micEnabled = nextEnabled;
         if (nextEnabled) {
-          const publication = await active.room.localParticipant.setMicrophoneEnabled(
-            true,
-            AUDIO_CAPTURE_OPTIONS,
-            AUDIO_PUBLISH_OPTIONS()
-          );
-          if (!publication?.track) {
-            const ok = await ensureMicrophonePublished(active.room);
-            if (!ok) throw new Error("Microphone publication failed");
-          } else {
-            active.micTrack = publication.track;
-          }
+          const ok = await ensureMicrophonePublished(callState.room, callState);
+          if (active !== callState) return;
+          if (!ok) throw new Error("Microphone could not be enabled. Check this site's microphone permission and selected input device.");
         } else {
-          await active.room.localParticipant.setMicrophoneEnabled(false);
+          await callState.room.localParticipant.setMicrophoneEnabled(false);
+          if (active !== callState) return;
         }
       } catch (error) {
-        if (nextEnabled) active.micEnabled = false;
+        if (active !== callState) return;
+        callState.micEnabled = !nextEnabled;
         notifyCall(error?.message || "Unable to change microphone state.", "error");
         return;
       }
 
+      if (active !== callState) return;
+      if (nextEnabled) callState.micAvailable = true;
       e.mute.classList.toggle("is-off", !nextEnabled);
       e.mute.setAttribute("aria-label", nextEnabled ? "Mute microphone" : "Unmute microphone");
     }
 
     async function toggleCamera() {
-      if (!active?.room || !active.isVideo) return;
-
+      const callState = active;
+      if (!callState?.room || !callState.isVideo) return;
       const e = E();
-      const on = active.room.localParticipant.isCameraEnabled;
-
+      const currentlyEnabled = !!callState.room.localParticipant.isCameraEnabled;
       try {
-        await active.room.localParticipant.setCameraEnabled(!on);
+        await callState.room.localParticipant.setCameraEnabled(!currentlyEnabled);
+        if (active !== callState) return;
       } catch (err) {
-        notifyCall(err?.message || "Unable to change camera state.", "error");
+        if (active === callState) notifyCall(err?.message || "Unable to change camera state.", "error");
         return;
       }
 
-      if (!on) {
-        const pub = active.room.localParticipant.getTrackPublication(LK.Track.Source.Camera);
-        if (pub?.track) attachLocalVideo(pub.track);
+      if (!currentlyEnabled) {
+        let pub = null;
+        try { pub = callState.room.localParticipant.getTrackPublication(LK.Track.Source.Camera); } catch {}
+        if (pub?.track && active === callState) attachLocalVideo(pub.track);
       }
-
-      e.camera.classList.toggle("is-off", on);
-      e.camera.setAttribute("aria-label", on ? "Turn camera on" : "Turn camera off");
+      if (active !== callState) return;
+      e.camera.classList.toggle("is-off", currentlyEnabled);
+      e.camera.setAttribute("aria-label", currentlyEnabled ? "Turn camera on" : "Turn camera off");
     }
 
     window.addEventListener("offline", () => {
@@ -3405,6 +3487,87 @@ async function initProfile() {
     if (messageImageBtn) messageImageBtn.disabled = true;
 
     const scrollThread = () => { thread.scrollTop = thread.scrollHeight; };
+    let activeMessageImageViewer = null;
+    const closeMessageImageViewer = () => {
+      if (!activeMessageImageViewer) return;
+      const { viewer, onKeyDown } = activeMessageImageViewer;
+      document.removeEventListener("keydown", onKeyDown);
+      viewer.remove();
+      activeMessageImageViewer = null;
+    };
+    const openMessageImageViewer = async image => {
+      const path = String(image?.dataset?.messageImagePath || "");
+      if (!path) return;
+      try {
+        const url = await PF.getMessageImageUrl(path);
+        if (!url) throw new Error("This photo is not available anymore.");
+        if (!image.isConnected) return;
+        image.src = url;
+        image.dataset.imageLoaded = "1";
+        closeMessageImageViewer();
+
+        const viewer = document.createElement("div");
+        viewer.className = "message-image-viewer";
+        viewer.setAttribute("role", "dialog");
+        viewer.setAttribute("aria-modal", "true");
+        viewer.setAttribute("aria-label", "Photo preview");
+
+        const toolbar = document.createElement("div");
+        toolbar.className = "message-image-viewer-tools";
+        const download = document.createElement("button");
+        download.type = "button";
+        download.className = "message-image-viewer-download";
+        download.textContent = "Download photo";
+        download.setAttribute("aria-label", "Download photo");
+        const close = document.createElement("button");
+        close.type = "button";
+        close.className = "message-image-viewer-close";
+        close.textContent = "×";
+        close.setAttribute("aria-label", "Close photo");
+
+        const full = document.createElement("img");
+        full.src = url;
+        full.alt = "Photo message";
+        full.decoding = "async";
+        full.draggable = false;
+        toolbar.append(download, close);
+        viewer.append(toolbar, full);
+        const onKeyDown = event => { if (event.key === "Escape") closeMessageImageViewer(); };
+        close.onclick = closeMessageImageViewer;
+        viewer.addEventListener("click", event => { if (event.target === viewer) closeMessageImageViewer(); });
+        download.onclick = async () => {
+          if (download.disabled) return;
+          download.disabled = true;
+          const originalText = download.textContent;
+          download.textContent = "Preparing…";
+          try {
+            const downloadUrl = await PF.getMessageImageDownloadUrl(path);
+            if (!downloadUrl) throw new Error("Could not create a download link.");
+            const link = document.createElement("a");
+            link.href = downloadUrl;
+            link.download = `rivo-photo-${Date.now()}`;
+            link.rel = "noopener";
+            link.style.display = "none";
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            download.textContent = "Download started";
+            setTimeout(() => { if (download.isConnected) download.textContent = originalText; }, 1200);
+          } catch (error) {
+            notify(error?.message || "Could not download this photo.", "error");
+            download.textContent = originalText;
+          } finally {
+            download.disabled = false;
+          }
+        };
+        document.addEventListener("keydown", onKeyDown);
+        document.body.appendChild(viewer);
+        activeMessageImageViewer = { viewer, onKeyDown };
+        close.focus({ preventScroll: true });
+      } catch (error) {
+        notify(error?.message || "Could not open this photo.", "error");
+      }
+    };
     const queueMessageImage = img => {
       if (!img || img.dataset.imageQueued || img.dataset.imageLoaded) return;
       img.dataset.imageQueued = "1";
@@ -3558,23 +3721,46 @@ async function initProfile() {
       } else if (m.message_type === "image" && m.image_path) {
         const image = document.createElement("img");
         image.className = "message-attachment-image";
-        image.alt = "Photo message";
+        image.alt = "Photo message — tap to open or hold to preview";
         image.loading = "lazy";
         image.decoding = "async";
+        image.draggable = false;
+        image.tabIndex = 0;
+        image.setAttribute("role", "button");
+        image.setAttribute("aria-label", "Open photo. On a phone, press and hold to open the photo.");
+        image.title = "Click to open · press and hold on phone";
         image.dataset.messageImagePath = m.image_path;
-        image.addEventListener("click", () => {
-          if (!image.src || image.src === location.href) return;
-          const viewer = document.createElement("div");
-          viewer.className = "message-image-viewer";
-          viewer.setAttribute("role", "dialog");
-          viewer.setAttribute("aria-label", "Photo preview");
-          const close = document.createElement("button");
-          close.type = "button"; close.className = "message-image-viewer-close"; close.textContent = "×"; close.setAttribute("aria-label", "Close photo");
-          const full = document.createElement("img"); full.src = image.src; full.alt = image.alt;
-          viewer.append(close, full);
-          close.onclick = () => viewer.remove();
-          viewer.addEventListener("click", ev => { if (ev.target === viewer) viewer.remove(); });
-          document.body.appendChild(viewer);
+        let imageHoldTimer = null;
+        let imageWasLongPressed = false;
+        const clearImageHold = () => { if (imageHoldTimer) clearTimeout(imageHoldTimer); imageHoldTimer = null; };
+        image.addEventListener("pointerdown", event => {
+          if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
+          imageWasLongPressed = false;
+          clearImageHold();
+          imageHoldTimer = setTimeout(() => {
+            imageWasLongPressed = true;
+            openMessageImageViewer(image);
+          }, 480);
+        });
+        image.addEventListener("pointerup", clearImageHold);
+        image.addEventListener("pointercancel", clearImageHold);
+        image.addEventListener("pointerleave", clearImageHold);
+        image.addEventListener("contextmenu", event => {
+          event.preventDefault();
+          if (imageWasLongPressed) return;
+          imageWasLongPressed = true;
+          clearImageHold();
+          openMessageImageViewer(image);
+        });
+        image.addEventListener("click", event => {
+          if (imageWasLongPressed) { event.preventDefault(); imageWasLongPressed = false; return; }
+          openMessageImageViewer(image);
+        });
+        image.addEventListener("keydown", event => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openMessageImageViewer(image);
+          }
         });
         bubble.appendChild(image);
         queueMessageImage(image);
