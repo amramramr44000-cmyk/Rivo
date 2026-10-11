@@ -761,10 +761,32 @@
   async function getMessages(username, limit = 80) {
     return callRpc("rivo_get_messages", { p_other_username: normalizeUsername(username), p_limit: Math.max(1, Math.min(Number(limit) || 80, 200)) });
   }
-  async function deleteMessage(messageId) {
+  async function deleteMessage(messageId, scope = "everyone") {
     const id = Number(messageId);
     if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid message");
-    return callRpc("rivo_delete_message", { p_message_id: id }, "MESSAGE_DELETE");
+    const targetScope = scope === "me" ? "me" : "everyone";
+    const result = await callRpc("rivo_message_action", { p_message_id: id, p_scope: targetScope }, "MESSAGE_DELETE");
+    // Use the Storage API to remove private media bytes. The RPC returns paths
+    // only after it has authorized and performed the corresponding message action.
+    if (targetScope === "everyone" && result) {
+      const work = [];
+      if (result.voice_path) work.push(sb.storage.from("rivo-voice").remove([result.voice_path]));
+      if (result.image_path) work.push(sb.storage.from("rivo-message-media").remove([result.image_path]));
+      await Promise.allSettled(work);
+    }
+    return result;
+  }
+  async function editMessage(messageId, content) {
+    const id = Number(messageId);
+    const text = normalizeMessageText(content);
+    if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid message");
+    if (!text || text.length > 2000) throw new Error("Message must be between 1 and 2000 characters.");
+    return callRpc("rivo_edit_message", { p_message_id: id, p_content: text }, "MESSAGE_EDIT");
+  }
+  async function markMessagesRead(username) {
+    const u = normalizeUsername(username);
+    if (!u) return 0;
+    return Number(await callRpc("rivo_mark_messages_read", { p_other_username: u }, "MESSAGE_MARK_READ")) || 0;
   }
 
   async function getCoinBalance() { return Number(await callRpc("rivo_get_coin_balance", {}, "COIN_BALANCE_READ")) || 0; }
@@ -794,38 +816,68 @@
     let retryDelay = 1000;
     let retryTimer = null;
     let heartbeatTimer = null;
+    let connecting = false;
+    let subscribed = false;
+    let hiddenSince = document.visibilityState === "hidden" ? Date.now() : 0;
 
-    const seen = new Set(); // de-dupe: INSERT can be delivered by both filtered channels below
-    const emit = row => {
+    const seen = new Set(); // de-dupe INSERTs delivered by both filtered channels
+    const emit = (row, eventType = "INSERT") => {
       if (!row || !row.id) return;
       const key = String(row.id);
-      if (seen.has(key)) return;
-      seen.add(key);
-      if (seen.size > 500) { const first = seen.values().next().value; seen.delete(first); }
-      callback?.(row);
+      if (eventType === "INSERT") {
+        if (seen.has(key)) return;
+        seen.add(key);
+        if (seen.size > 500) { const first = seen.values().next().value; seen.delete(first); }
+      }
+      // Mark update/delete events without changing the database row shape.
+      callback?.({ ...row, __rivoEventType: eventType });
     };
 
-    async function connect() {
-      if (stopped) return;
-      const { data: { session } } = await sb.auth.getSession();
-      const myId = session?.user?.id || null;
-      if (!myId) return;
-      await syncRealtimeAuth(session);
+    async function connect(force = false) {
+      if (stopped || connecting) return;
+      // Don't tear down a healthy socket on every focus event. Reconnect only
+      // when needed, or after a long foreground gap, while keeping recovery.
+      if (subscribed && !force) return;
+      connecting = true;
+      try {
+        const { data: { session } } = await sb.auth.getSession();
+        const myId = session?.user?.id || null;
+        if (!myId) { connecting = false; return; }
+        await syncRealtimeAuth(session);
 
-      if (channel) { try { await sb.removeChannel(channel); } catch {} channel = null; }
-
-      channel = sb.channel(`rivo-messages-${myId}`)
-        .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_messages", filter: `sender_id=eq.${myId}` }, payload => emit(payload?.new))
-        .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_messages", filter: `receiver_id=eq.${myId}` }, payload => emit(payload?.new))
-        .subscribe(status => {
-          if (stopped) return;
+        if (channel) { try { await sb.removeChannel(channel); } catch {} channel = null; }
+        subscribed = false;
+        const nextChannel = sb.channel(`rivo-messages-${myId}`)
+          .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_messages", filter: `sender_id=eq.${myId}` }, payload => emit(payload?.new, "INSERT"))
+          .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_messages", filter: `receiver_id=eq.${myId}` }, payload => emit(payload?.new, "INSERT"))
+          .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rivo_messages", filter: `sender_id=eq.${myId}` }, payload => emit(payload?.new, "UPDATE"))
+          .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rivo_messages", filter: `receiver_id=eq.${myId}` }, payload => emit(payload?.new, "UPDATE"))
+          // Postgres Changes does not consistently support column filters for DELETE.
+          // The table has participant-only SELECT RLS and REPLICA IDENTITY FULL, so
+          // filter the old row locally after the server applies its access rules.
+          .on("postgres_changes", { event: "DELETE", schema: "public", table: "rivo_messages" }, payload => {
+            const row = payload?.old;
+            if (row && (String(row.sender_id) === String(myId) || String(row.receiver_id) === String(myId))) emit(row, "DELETE");
+          });
+        channel = nextChannel;
+        nextChannel.subscribe(status => {
+          if (stopped || channel !== nextChannel) return;
           if (status === "SUBSCRIBED") {
+            connecting = false;
+            subscribed = true;
             retryDelay = 1000;
             onResync?.();
           } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            connecting = false;
+            subscribed = false;
             scheduleReconnect();
           }
         });
+      } catch {
+        connecting = false;
+        subscribed = false;
+        scheduleReconnect();
+      }
     }
 
     function scheduleReconnect() {
@@ -833,34 +885,45 @@
       retryTimer = setTimeout(() => {
         retryTimer = null;
         retryDelay = Math.min(retryDelay * 2, 15000);
-        connect();
+        connect(true);
       }, retryDelay);
     }
 
     const onVisible = () => {
       if (document.visibilityState !== "visible" || stopped) return;
-      // Coming back from background: make sure the socket is alive and
-      // pull anything that may have been missed while it was suspended.
-      connect();
+      // Reconnect after an actual long background suspension, not simply because
+      // a healthy page was focused again. Still resync data on foreground/focus.
+      const wasSuspended = hiddenSince > 0 && Date.now() - hiddenSince > 30000;
+      hiddenSince = 0;
+      if (!subscribed || wasSuspended) connect(true);
       onResync?.();
     };
-    document.addEventListener("visibilitychange", onVisible);
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        if (!hiddenSince) hiddenSince = Date.now();
+        return;
+      }
+      onVisible();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("focus", onVisible);
     window.addEventListener("online", onVisible);
 
-    // Safety-net poll: if for any reason the socket silently stalls
-    // (some mobile browsers suspend websockets without firing a close
-    // event), this nudges a resync every 20s so messages never sit
-    // unseen for more than a few seconds.
-    heartbeatTimer = setInterval(() => { onResync?.(); }, 4000);
+    // Realtime delivers messages immediately. This low-frequency fallback only
+    // catches silent mobile-WebSocket stalls; pause it while the tab is hidden.
+    heartbeatTimer = setInterval(() => {
+      if (!stopped && document.visibilityState === "visible") onResync?.();
+    }, 20000);
 
-    await connect();
+    await connect(true);
 
     return async () => {
       stopped = true;
+      connecting = false;
+      subscribed = false;
       clearTimeout(retryTimer);
       clearInterval(heartbeatTimer);
-      document.removeEventListener("visibilitychange", onVisible);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onVisible);
       window.removeEventListener("online", onVisible);
       if (channel) { try { await sb.removeChannel(channel); } catch {} }
@@ -886,15 +949,38 @@
     const session = (await sb.auth.getSession()).data?.session;
     if (!session?.user?.id) throw new Error("Please sign in to call.");
     await syncRealtimeAuth(session);
-    const channel = sb.channel(String(channelName), {
-      config: { broadcast: { self: false } }
-    });
+    const channel = sb.channel(String(channelName), { config: { broadcast: { self: false } } });
     channel.on("broadcast", { event: "signal" }, ({ payload }) => {
       try { onSignal?.(payload || {}); } catch {}
     });
-    await channel.subscribe();
+    try {
+      await new Promise((resolve, reject) => {
+        let finished = false;
+        const timer = setTimeout(() => {
+          if (finished) return;
+          finished = true;
+          reject(new Error("The call signaling channel did not connect. Check your network and try again."));
+        }, 12000);
+        channel.subscribe(status => {
+          if (finished) return;
+          if (status === "SUBSCRIBED") {
+            finished = true; clearTimeout(timer); resolve();
+          } else if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) {
+            finished = true; clearTimeout(timer);
+            reject(new Error("Could not establish call signaling. Please try again."));
+          }
+        });
+      });
+    } catch (error) {
+      try { await sb.removeChannel(channel); } catch {}
+      throw error;
+    }
     return {
-      send: payload => channel.send({ type: "broadcast", event: "signal", payload }),
+      send: async payload => {
+        const result = await channel.send({ type: "broadcast", event: "signal", payload });
+        if (result !== "ok" && result?.status !== "ok") throw new Error("Could not send call signal. Please check your connection and retry.");
+        return result;
+      },
       close: async () => { try { await sb.removeChannel(channel); } catch {} }
     };
   }
@@ -963,6 +1049,68 @@
     return canvas.toDataURL("image/webp", quality);
   }
 
+
+  // Fallback decoder for browsers/formats where createImageBitmap is unavailable.
+  async function compressImageWithElementToBlob(file, maxW, quality) {
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const image = await new Promise((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error("This image format is not supported by your browser."));
+        el.src = objectUrl;
+      });
+      const scale = Math.min(1, maxW / image.naturalWidth);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const ctx = canvas.getContext("2d", { alpha: true });
+      if (!ctx) throw new Error("Could not process this image on your device.");
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      return await new Promise((resolve, reject) => {
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("Could not compress this image.")), "image/webp", quality);
+      });
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+
+  // Upload-only path: encode directly to Blob so large photos are not expanded
+  // to a base64 data URL and decoded again before upload. GIFs keep their existing
+  // original frames directly, avoiding both re-encoding and base64 expansion.
+  async function compressImageToBlob(file, maxW=1280, quality=.8) {
+    if (!file || !String(file.type || "").startsWith("image/")) throw new Error("Please choose a valid image.");
+    if (file.size > 10 * 1024 * 1024) throw new Error("Image must be 10 MB or smaller.");
+    // Keep animated GIF bytes intact without an expensive base64 conversion.
+    if (file.type === "image/gif") return file.slice(0, file.size, "image/gif");
+    if (typeof createImageBitmap !== "function") return compressImageWithElementToBlob(file, maxW, quality);
+
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file);
+    } catch {
+      // Fallback for browser/image formats unsupported by createImageBitmap.
+      return compressImageWithElementToBlob(file, maxW, quality);
+    }
+    try {
+      const scale = Math.min(1, maxW / bitmap.width);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      const ctx = canvas.getContext("2d", { alpha: true });
+      if (!ctx) throw new Error("Could not process this image on your device.");
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((resolve, reject) => {
+        canvas.toBlob(result => result ? resolve(result) : reject(new Error("Could not compress this image.")), "image/webp", quality);
+      });
+      return blob;
+    } finally {
+      bitmap.close?.();
+    }
+  }
+
   // -----------------------------
   // Rivo Stories (12-hour, one active story per account)
   // -----------------------------
@@ -1003,8 +1151,7 @@
 
     const stamp = `${Date.now()}-${crypto.randomUUID()}`;
     if (file.size > 12 * 1024 * 1024) throw new Error("Story image must be 12 MB or smaller.");
-    const dataUrl = await compressImage(file, 1080, .84);
-    const blob = dataUrlToBlob(dataUrl);
+    const blob = await compressImageToBlob(file, 1080, .84);
     const mime = "image/webp";
     const storagePath = `${uid}/stories/${stamp}.webp`;
     const publicUrl = await uploadBlob(blob, storagePath, mime);
@@ -1913,8 +2060,10 @@ async function uploadVoiceBlob(blob) {
   if (blob.size > 8 * 1024 * 1024) throw new Error("Voice message is too large.");
   const me = await currentProfile();
   if (!me?.id) throw new Error("No signed-in profile.");
-  const mime = blob.type || "audio/webm";
-  const ext = mime.includes("ogg") ? "ogg" : mime.includes("mp4") || mime.includes("m4a") ? "m4a" : "webm";
+  const mime = String(blob.type || "audio/webm").split(";")[0].toLowerCase();
+  const extensions = { "audio/webm":"webm", "audio/ogg":"ogg", "audio/mp4":"m4a", "audio/mpeg":"mp3", "audio/aac":"aac", "audio/3gpp":"3gp" };
+  const ext = extensions[mime];
+  if (!ext) throw new Error(`Unsupported voice format (${mime}). Please update your browser and try again.`);
   const path = `${me.id}/voice/${Date.now()}-${crypto.randomUUID()}.${ext}`;
   const { error } = await sb.storage.from("rivo-voice").upload(path, blob, {
     contentType: mime,
@@ -1925,19 +2074,74 @@ async function uploadVoiceBlob(blob) {
   return { path, mime };
 }
 
-async function sendVoiceMessage(username, blob, durationMs) {
+async function sendVoiceMessage(username, blob, durationMs, clientMessageKey = null) {
+  const key = clientMessageKey || crypto.randomUUID();
   const media = await uploadVoiceBlob(blob);
   try {
-    return await callRpc("rivo_send_voice_message", {
+    const result = await callRpc("rivo_send_voice_message_v2", {
       p_receiver_username: normalizeUsername(username),
       p_storage_path: media.path,
       p_duration_ms: Math.max(1, Math.min(Number(durationMs) || 0, 5 * 60 * 1000)),
-      p_mime_type: media.mime
+      p_mime_type: media.mime,
+      p_client_message_key: key
     }, "VOICE_MESSAGE_SEND");
+    if (result?.voice_path && result.voice_path !== media.path) {
+      try { await sb.storage.from("rivo-voice").remove([media.path]); } catch {}
+    }
+    return result;
   } catch (error) {
-    try { await sb.storage.from("rivo-voice").remove([media.path]); } catch {}
+    // A network timeout may happen after the DB transaction committed. Ask the
+    // server whether this is still an orphan before ever deleting its bytes.
+    try {
+      const safeToRemove = await callRpc("rivo_cleanup_message_upload", { p_bucket_id: "rivo-voice", p_storage_path: media.path }, "VOICE_UPLOAD_CLEANUP");
+      if (safeToRemove) await sb.storage.from("rivo-voice").remove([media.path]);
+    } catch {}
     throw error;
   }
+}
+
+async function sendImageMessage(username, file) {
+  requireClient();
+  if (!(file instanceof File) || !String(file.type || "").startsWith("image/")) throw new Error("Choose an image file.");
+  if (file.size > 10 * 1024 * 1024) throw new Error("Choose an image smaller than 10 MB.");
+  const me = await currentProfile();
+  if (!me?.id) throw new Error("No signed-in profile.");
+  const isGif = file.type.toLowerCase() === "image/gif";
+  let blob = await compressImageToBlob(file, 1600, .82);
+  // Re-encode only when the first optimized image is still too large; normal
+  // photos take one pass, while unusually dense photos get smaller fallbacks.
+  if (!isGif && blob?.size > 8 * 1024 * 1024) blob = await compressImageToBlob(file, 1280, .72);
+  if (!isGif && blob?.size > 8 * 1024 * 1024) blob = await compressImageToBlob(file, 1024, .62);
+  if (!isGif && blob?.size > 8 * 1024 * 1024) blob = await compressImageToBlob(file, 900, .55);
+  if (!blob?.size || blob.size > 8 * 1024 * 1024) throw new Error("The image must be 8 MB or smaller after compression.");
+  const mime = isGif ? "image/gif" : String(blob.type || "image/webp").toLowerCase();
+  const ext = mime === "image/gif" ? "gif" : mime === "image/jpeg" ? "jpg" : mime === "image/png" ? "png" : mime === "image/avif" ? "avif" : "webp";
+  const path = `${me.id}/messages/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+  const { error: uploadError } = await sb.storage.from("rivo-message-media").upload(path, blob, {
+    contentType: mime, cacheControl: "3600", upsert: false
+  });
+  if (uploadError) throw uploadError;
+  try {
+    return await callRpc("rivo_send_image_message", {
+      p_receiver_username: normalizeUsername(username), p_storage_path: path,
+      p_mime_type: mime, p_byte_size: blob.size
+    }, "MESSAGE_IMAGE_SEND");
+  } catch (error) {
+    try {
+      const safeToRemove = await callRpc("rivo_cleanup_message_upload", { p_bucket_id: "rivo-message-media", p_storage_path: path }, "MESSAGE_IMAGE_CLEANUP");
+      if (safeToRemove) await sb.storage.from("rivo-message-media").remove([path]);
+    } catch {}
+    throw error;
+  }
+}
+
+async function getMessageImageUrl(path) {
+  requireClient();
+  const safePath = String(path || "");
+  if (!safePath) return "";
+  const { data, error } = await sb.storage.from("rivo-message-media").createSignedUrl(safePath, 3600);
+  if (error) throw error;
+  return data?.signedUrl || "";
 }
 
 async function getVoiceUrl(path) {
@@ -1956,11 +2160,15 @@ async function getVoiceUrl(path) {
     if (!(file instanceof File)) throw new Error("Choose an image.");
     if (!file.type.startsWith("image/")) throw new Error("Only images are supported.");
     if (file.size > 8 * 1024 * 1024) throw new Error("Each image must be 8 MB or less.");
-    const dataUrl = await compressImage(file, 1800, .86);
-    const blob = dataUrlToBlob(dataUrl);
-    const path = `${me.id}/posts/${Date.now()}-${crypto.randomUUID()}.webp`;
-    const url = await uploadBlob(blob, path, "image/webp");
-    return { url, path, type: "image/webp" };
+    // 1600 px / 0.82 WebP quality stays crisp on phones while cutting upload size.
+    // Keep GIF files animated, and store them with their real MIME type/extension.
+    const isGif = file.type === "image/gif";
+    const mime = isGif ? "image/gif" : "image/webp";
+    const ext = isGif ? "gif" : "webp";
+    const blob = await compressImageToBlob(file, 1600, .82);
+    const path = `${me.id}/posts/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+    const url = await uploadBlob(blob, path, mime);
+    return { url, path, type: mime };
   }
   async function listPosts(username=null, limit=30, offset=0) { return callRpc("rivo_list_posts", { p_username: username || null, p_limit: limit, p_offset: offset }); }
   async function getPost(id) { return callRpc("rivo_get_post", { p_post_id: Number(id) }); }
@@ -1985,11 +2193,13 @@ async function getVoiceUrl(path) {
     if(!me?.id) throw new Error("No signed-in profile.");
     if(!(file instanceof File) || !file.type.startsWith("image/")) throw new Error("Choose a valid image.");
     if(file.size > 8*1024*1024) throw new Error("Community image must be 8 MB or smaller.");
-    const dataUrl=await compressImage(file,900,.86);
-    const blob=dataUrlToBlob(dataUrl);
-    const path=`${me.id}/communities/${Date.now()}-${crypto.randomUUID()}.webp`;
-    const url=await uploadBlob(blob,path,"image/webp");
-    return {url,path,type:"image/webp"};
+    const isGif=file.type==="image/gif";
+    const mime=isGif?"image/gif":"image/webp";
+    const ext=isGif?"gif":"webp";
+    const blob=await compressImageToBlob(file,900,.86);
+    const path=`${me.id}/communities/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+    const url=await uploadBlob(blob,path,mime);
+    return {url,path,type:mime};
   }
   async function createCommunity(name, description, joinPolicy, image=null, voiceStartPolicy="everyone") {
     return callRpc("rivo_create_community", {
@@ -2062,10 +2272,10 @@ async function getVoiceUrl(path) {
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
     updateProfile, saveProfile, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
     removeFriend, cancelFriendRequest, toggleFollow, isFollowing, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
-    listConversations, getMessages, deleteMessage, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
+    listConversations, getMessages, deleteMessage, editMessage, markMessagesRead, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminSetCoins, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, deletePostComment, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, getSocialLinkStatus, purchaseSocialLinkSlot, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCommunityVoice, startCommunityVoice, endCommunityVoice, setCommunityVoicePolicy, setCommunityModerator, setCommunityVoiceMute, moderateCommunityVoice, subscribeCommunityVoice, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl,
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, deletePostComment, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, getSocialLinkStatus, purchaseSocialLinkSlot, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCommunityVoice, startCommunityVoice, endCommunityVoice, setCommunityVoicePolicy, setCommunityModerator, setCommunityVoiceMute, moderateCommunityVoice, subscribeCommunityVoice, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl, sendImageMessage, getMessageImageUrl,
     NAV_I18N, I18N, currentLanguage, translateString, applyI18n, applySavedLanguage
   };
 })();

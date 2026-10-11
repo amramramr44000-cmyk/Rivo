@@ -6,6 +6,29 @@
   const esc = (s) => window.PF?.escapeHtml ? PF.escapeHtml(s) : String(s ?? "");
   const initials = (p) => PF.initials(p);
   let profilePresenceUnsubscribe = null;
+  let globalPresencePromise = null;
+  let globalPresenceUser = "";
+
+  function ensureGlobalPresence(username = PF.currentUsername()) {
+    const user = PF.normalizeUsername(username || "");
+    if (!user) return Promise.resolve(null);
+    if (window.__rivoPresenceConnection && globalPresenceUser === user) return Promise.resolve(window.__rivoPresenceConnection);
+    if (globalPresencePromise && globalPresenceUser === user) return globalPresencePromise;
+    globalPresenceUser = user;
+    globalPresencePromise = (async () => {
+      try { await window.__rivoPresenceConnection?.unsubscribe?.(); } catch {}
+      window.__rivoPresenceConnection = null;
+      const api = await PF.subscribePresence(user, evt => {
+        const state = evt?.state || {};
+        window.__rivoPresenceState = state;
+        document.dispatchEvent(new CustomEvent("rivo:presence", { detail: { state, event: evt?.event || "sync", key: evt?.key || "" } }));
+      });
+      window.__rivoPresenceConnection = api;
+      window.__rivoPresenceUser = user;
+      return api;
+    })().finally(() => { globalPresencePromise = null; });
+    return globalPresencePromise;
+  }
 
   const notify = (msg, type = "") => {
     let stack = $(".toast-stack");
@@ -17,12 +40,35 @@
     setTimeout(() => el.remove(), 2800);
   };
 
+
+  // Load the large LiveKit SDK only when a call or community voice room is used.
+  // The pinned URL matches the version previously included on every page.
+  let liveKitLoadPromise = null;
+  function loadLiveKitClient() {
+    if (window.LivekitClient) return Promise.resolve(window.LivekitClient);
+    if (liveKitLoadPromise) return liveKitLoadPromise;
+    liveKitLoadPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://cdn.jsdelivr.net/npm/livekit-client@2.22.1/dist/livekit-client.umd.min.js";
+      script.async = true;
+      script.onload = () => window.LivekitClient
+        ? resolve(window.LivekitClient)
+        : reject(new Error("LiveKit client failed to initialize."));
+      script.onerror = () => reject(new Error("Could not load the voice service client. Check your connection and try again."));
+      document.head.appendChild(script);
+    }).catch(error => {
+      liveKitLoadPromise = null; // Permit a later retry after a network/CDN failure.
+      throw error;
+    });
+    return liveKitLoadPromise;
+  }
+
   const avatarMarkup = (p, cls = "avatar-sm") => {
     const username = PF.normalizeUsername(p?.username || "");
     const active = !!p?.story?.active;
     const own = !!username && username === PF.currentUsername();
     const inner = p?.avatar
-      ? `<span class="${cls}"><img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}"></span>`
+      ? `<span class="${cls}"><img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}" loading="lazy" decoding="async"></span>`
       : `<span class="${cls}">${esc(initials(p))}</span>`;
     return `<span class="avatar-story-trigger ${active ? "has-story" : ""} ${own ? "is-own-story-avatar" : ""}" data-story-user="${esc(username)}" data-story-active="${active ? "1" : "0"}" data-story-own="${own ? "1" : "0"}" title="${active ? `View ${esc(p?.displayName || username)} story` : own ? "Add a story" : ""}">${active ? `<span class="story-ring-frame" aria-hidden="true"></span>` : ""}${inner}${own && !active ? `<b class="story-add-dot" aria-hidden="true">+</b>` : ""}</span>`;
   };
@@ -244,7 +290,10 @@
       el.classList.add("disabled-link");
       el.addEventListener("click", e => e.preventDefault(), { once: true });
     });
-    if (logged) initNotificationCenter();
+    if (logged) {
+      initNotificationCenter();
+      ensureGlobalPresence().catch(err => console.debug("Rivo presence unavailable", err));
+    }
   }
 
   async function initNotificationCenter() {
@@ -591,7 +640,7 @@
     if (window.__rivoCallsReady) return;
     window.__rivoCallsReady = true;
 
-    const LK = window.LivekitClient;
+    let LK = window.LivekitClient || null;
     let active = null;
     let callTimer = null;
     let qualityTimer = null;
@@ -781,7 +830,7 @@
       const e = E();
       e.name.textContent = p?.displayName || p?.username || "Contact";
       e.av.innerHTML = p?.avatar
-        ? `<img src="${PF.safeUrl(p.avatar)}" alt="">`
+        ? `<img src="${PF.safeUrl(p.avatar)}" alt="" loading="lazy" decoding="async">`
         : PF.initials(p?.displayName || p?.username || "?");
     };
 
@@ -1150,6 +1199,13 @@
       ev?.stopPropagation();
       const e = E();
       if (!e.routeMenu) return;
+      // The click is a fresh user gesture on iOS/Android; use it to unlock
+      // WebRTC audio before opening the device menu.
+      if (active?.room) {
+        try { await active.room.startAudio?.(); } catch {}
+        try { if (active.remoteAudioEl?.paused) await active.remoteAudioEl.play(); } catch {}
+        try { if (active.remoteAudioFallbackEl?.paused) await active.remoteAudioFallbackEl.play(); } catch {}
+      }
       if (!active?.room) {
         notifyCall("Audio routing is available after the call connects.", "error");
         return;
@@ -1167,7 +1223,8 @@
       if (!track) return;
       const e = E();
       const current = e.stage.querySelector(".call-local-video.live");
-      if (current && current.dataset.rivoTrackAttached === "1") return;
+      const trackKey = String(track.sid || track.mediaStreamTrack?.id || "camera");
+      if (current?.dataset.rivoTrackId === trackKey) return;
       try {
         const media = track.attach();
         media.className = "call-local-video live";
@@ -1176,14 +1233,16 @@
         media.playsInline = true;
         media.setAttribute("playsinline", "");
         media.dataset.rivoTrackAttached = "1";
-        if (current) current.replaceWith(media);
-        else e.stage.appendChild(media);
+        media.dataset.rivoTrackId = trackKey;
+        if (current) { try { current.srcObject = null; current.remove(); } catch {} }
+        e.stage.appendChild(media);
         e.local = media;
         media.play?.().catch(() => {});
-      } catch {}
+      } catch (err) { console.warn("[Rivo Calls] Could not attach local camera", err); }
     };
 
     async function connectMedia() {
+      if (!LK) LK = await loadLiveKitClient();
       if (!LK) throw new Error("LiveKit client failed to load.");
       if (!active?.roomName) throw new Error("Call room is missing.");
 
@@ -1206,8 +1265,7 @@
               ...AUDIO_PUBLISH_OPTIONS(),
               simulcast: true,
               videoCodec: "vp8",
-              degradationPreference: "maintain-framerate",
-              videoSimulcastLayers: []
+              degradationPreference: "maintain-framerate"
             }
           : {
               ...AUDIO_PUBLISH_OPTIONS()
@@ -1234,6 +1292,10 @@
           try {
             if (publication?.source === LK.Track.Source.Microphone && active?.micEnabled !== false) {
               setTimeout(() => ensureMicrophonePublished(room), 100);
+            } else if (publication?.source === LK.Track.Source.Camera) {
+              E().stage.querySelectorAll(".call-local-video.live").forEach(video => {
+                try { video.pause?.(); video.srcObject = null; video.remove(); } catch {}
+              });
             }
           } catch {}
         });
@@ -1369,18 +1431,33 @@
       }
 
       if (active.isVideo) {
+        let cameraStarted = false;
         try {
-          await room.localParticipant.setCameraEnabled(true);
+          // Prefer the front camera for a phone video call; some Android
+          // browsers reject an explicit mode, so retry once with defaults.
+          await room.localParticipant.setCameraEnabled(true, { facingMode: "user" });
+          cameraStarted = true;
         } catch (cameraError) {
-          console.warn("Camera enable failed:", cameraError);
-          notifyCall("Camera permission or device access is unavailable.", "error");
+          console.warn("Front camera enable failed; retrying default camera:", cameraError);
+          try { await room.localParticipant.setCameraEnabled(true); cameraStarted = true; }
+          catch (fallbackCameraError) {
+            console.warn("Camera enable failed:", fallbackCameraError || cameraError);
+            const message = String(fallbackCameraError?.message || cameraError?.message || "");
+            notifyCall(/permission|denied|notallowed/i.test(message)
+              ? "Camera permission is blocked. Allow camera access in your browser settings and retry."
+              : "Camera could not start. Check that another app is not using it, then retry.", "error");
+          }
         }
-
-        const pub = room.localParticipant.getTrackPublication(
-          LK.Track.Source.Camera
-        );
-
+        const pub = room.localParticipant.getTrackPublication(LK.Track.Source.Camera);
         if (pub?.track) attachLocalVideo(pub.track);
+        if (cameraStarted && !pub?.track) {
+          // TrackPublished normally arrives asynchronously. Recheck once rather
+          // than publishing the same camera a second time.
+          setTimeout(() => {
+            const cameraPub = active?.room?.localParticipant?.getTrackPublication?.(LK.Track.Source.Camera);
+            if (active?.isVideo && cameraPub?.track) attachLocalVideo(cameraPub.track);
+          }, 350);
+        }
       }
 
       active.connected = true;
@@ -1392,12 +1469,14 @@
 
     async function beginCall(username, type = "audio") {
       if (active) return notifyCall("A call is already active.", "error");
-      if (!LK) throw new Error("Call system is unavailable.");
 
-      // Start microphone permission from the user's Call-button gesture.
-      // The result is cached only for this call; no microphone stream is kept alive.
-      const me = await PF.currentProfile();
-      const peer = await PF.getCallUser(username);
+      // Fetch the SDK and resolve the participants concurrently to reduce the
+      // connection-start delay without downloading the SDK on ordinary page views.
+      const [me, peer, liveKitClient] = await Promise.all([
+        PF.currentProfile(), PF.getCallUser(username), loadLiveKitClient()
+      ]);
+      LK = liveKitClient;
+      if (!LK) throw new Error("Call system is unavailable.");
       const isVideo = type === "video";
       const callId = crypto.randomUUID();
       const roomName = `rivo-${callId}`;
@@ -1543,6 +1622,7 @@
       e.incoming.classList.add("hidden");
 
       try {
+        if (!LK) LK = await loadLiveKitClient();
         active.channel = await PF.openCallChannel(
           `rivo-call-${active.callId}`,
           handleSignal
@@ -1556,6 +1636,7 @@
         });
 
         await connectMedia();
+        try { await active?.room?.startAudio?.(); } catch {}
       } catch (err) {
         notifyCall(err.message || "Could not accept the call", "error");
         endCall(true);
@@ -2753,7 +2834,7 @@
     const list = (Array.isArray(p?.equippedStoreItems) ? p.equippedStoreItems : []).filter(x => x?.type === "badge").slice(0, limit);
     return list.map(b => {
       const label = b.name || "Store badge";
-      const icon = b.image_url ? `<img src="${esc(b.image_url)}" alt="">` : `<span>✦</span>`;
+      const icon = b.image_url ? `<img src="${esc(b.image_url)}" alt="" loading="lazy" decoding="async">` : `<span>✦</span>`;
       return compact
         ? `<button type="button" class="badge-pill store-badge-pill badge-compact-toggle" data-badge-label="${esc(label)}" title="${esc(label)}" aria-label="${esc(label)}">${icon}<span class="badge-pop-label" aria-hidden="true">${esc(label)}</span></button>`
         : `<span class="badge-pill store-badge-pill" title="${esc(label)}">${icon}${esc(label)}</span>`;
@@ -2777,7 +2858,7 @@
 
   function renderMusic(p) {
     if (!p.music?.audio) return "";
-    return `<section class="section-block music-section"><div class="section-kicker">MUSIC</div><div class="pf-player" data-pf-player><div class="player-cover">${p.music.cover ? `<img src="${esc(p.music.cover)}" alt="">` : `<span>♫</span>`}</div><div class="player-main"><div class="player-title">${esc(p.music.title || "Profile Music")}</div><div class="player-meta">Profile track</div><div class="player-controls"><button type="button" data-player-play class="player-btn">▶</button><div class="player-progress"><span data-player-bar></span></div><span data-player-time>0:00</span><input data-player-volume type="range" min="0" max="1" step="0.01" value="0.8"></div></div><audio data-player-audio preload="metadata" src="${esc(p.music.audio)}"></audio></div></section>`;
+    return `<section class="section-block music-section"><div class="section-kicker">MUSIC</div><div class="pf-player" data-pf-player><div class="player-cover">${p.music.cover ? `<img src="${esc(p.music.cover)}" alt="" loading="lazy" decoding="async">` : `<span>♫</span>`}</div><div class="player-main"><div class="player-title">${esc(p.music.title || "Profile Music")}</div><div class="player-meta">Profile track</div><div class="player-controls"><button type="button" data-player-play class="player-btn">▶</button><div class="player-progress"><span data-player-bar></span></div><span data-player-time>0:00</span><input data-player-volume type="range" min="0" max="1" step="0.01" value="0.8"></div></div><audio data-player-audio preload="metadata" src="${esc(p.music.audio)}"></audio></div></section>`;
   }
 
   function bindPlayer(root = document) {
@@ -2802,7 +2883,7 @@
     const meUsername = PF.currentUsername();
     const liked = !!meUsername && likedBy.includes(meUsername);
     const likeCount = Number(p.likes?.count ?? likedBy.length ?? 0);
-    const mini = p.miniImage ? `<div class="profile-mini-float" title="Decorative image"><img src="${esc(p.miniImage)}" alt=""></div>` : "";
+    const mini = p.miniImage ? `<div class="profile-mini-float" title="Decorative image"><img src="${esc(p.miniImage)}" alt="" loading="lazy" decoding="async"></div>` : "";
     const ownerLikesBadge = isMe
       ? `<span class="profile-owner-likes" title="Profile likes"><span class="heart-mini">♥</span><b>${displayViews(likeCount)}</b></span>`
       : "";
@@ -2839,7 +2920,7 @@
       }).join("");
 
     const banner = p.banner
-      ? `<img class="profile-banner-image" src="${esc(p.banner)}" alt="" loading="eager">`
+      ? `<img class="profile-banner-image" src="${esc(p.banner)}" alt="" loading="eager" decoding="async">`
       : `<div class="profile-banner-fallback"></div>`;
     let action = "";
     const canInteract = !preview && !isMe && !!PF.currentUsername();
@@ -2899,7 +2980,7 @@
       <div class="profile-content">
         <div class="profile-head">
           <div class="profile-avatar-wrap">
-            <button type="button" class="profile-avatar-button ${p.story?.active ? "has-story" : "story-empty"}" data-story-user="${esc(p.username)}" data-story-active="${p.story?.active ? "1" : "0"}" data-story-own="${isMe ? "1" : "0"}" aria-label="${p.story?.active ? "View story" : isMe ? "Add a story" : "Profile avatar"}">${p.story?.active ? `<span class="story-ring-frame" aria-hidden="true"></span>` : ""}<span class="profile-avatar ${frame}">${p.avatar ? `<img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}">` : esc(initials(p))}${storeFrameOverlay(p)}</span></button>
+            <button type="button" class="profile-avatar-button ${p.story?.active ? "has-story" : "story-empty"}" data-story-user="${esc(p.username)}" data-story-active="${p.story?.active ? "1" : "0"}" data-story-own="${isMe ? "1" : "0"}" aria-label="${p.story?.active ? "View story" : isMe ? "Add a story" : "Profile avatar"}">${p.story?.active ? `<span class="story-ring-frame" aria-hidden="true"></span>` : ""}<span class="profile-avatar ${frame}">${p.avatar ? `<img src="${esc(p.avatar)}" alt="${esc(p.displayName || p.username)}" loading="eager" decoding="async">` : esc(initials(p))}${storeFrameOverlay(p)}</span></button>
             ${isMe
               ? `<button type="button" class="profile-status-add" data-profile-status-add aria-label="إضافة حالة" title="إضافة حالة"><span aria-hidden="true">+</span><span class="profile-status-add-label">إضافة حالة</span></button>`
               : `<div class="profile-presence profile-presence-dot" data-profile-presence="${esc(p.username)}" aria-label="${esc(PF.translateString("Offline"))}" title="${esc(PF.translateString("Offline"))}" role="img"><span class="status-dot offline" aria-hidden="true"></span></div>`}
@@ -2991,10 +3072,15 @@
     };
     const viewer = PF.currentUsername();
     if (!viewer) { update({}); return; }
+    // Reuse the site-wide presence channel instead of creating another socket
+    // for each profile visit. This keeps online status accurate across pages
+    // while reducing redundant Realtime subscriptions.
+    const onPresence = evt => update(evt?.detail?.state || window.__rivoPresenceState || {});
+    document.addEventListener("rivo:presence", onPresence);
+    profilePresenceUnsubscribe = async () => document.removeEventListener("rivo:presence", onPresence);
     try {
-      const api = await PF.subscribePresence(viewer, evt => update(evt?.state || {}));
-      profilePresenceUnsubscribe = api.unsubscribe;
-      update(api.state || {});
+      const api = await ensureGlobalPresence(viewer);
+      update(api?.state || window.__rivoPresenceState || {});
     } catch {
       update({});
     }
@@ -3309,10 +3395,43 @@ async function initProfile() {
     let recordingStartedAt = 0;
     let recordingTimer = null;
     let voiceDraft = null;
+    let voiceSending = false;
+    let imageSending = false;
+    let imageObserver = null;
+    let voiceUrlObserver = null;
+    const discardedRecorders = new WeakSet();
+    const messageImageInput = $("#messageImageInput");
+    const messageImageBtn = $("#messageImageBtn");
+    if (messageImageBtn) messageImageBtn.disabled = true;
 
     const scrollThread = () => { thread.scrollTop = thread.scrollHeight; };
+    const queueMessageImage = img => {
+      if (!img || img.dataset.imageQueued || img.dataset.imageLoaded) return;
+      img.dataset.imageQueued = "1";
+      const load = async () => {
+        if (img.dataset.imageLoaded || img.dataset.imageLoading) return;
+        img.dataset.imageLoading = "1";
+        try {
+          const url = await PF.getMessageImageUrl(img.dataset.messageImagePath || "");
+          if (url) { img.src = url; img.dataset.imageLoaded = "1"; }
+          else img.alt = "Image unavailable";
+        } catch { img.alt = "Unable to load image"; }
+        finally { delete img.dataset.imageLoading; }
+      };
+      if ("IntersectionObserver" in window) {
+        imageObserver ||= new IntersectionObserver(entries => {
+          entries.forEach(entry => {
+            if (entry.isIntersecting) {
+              imageObserver.unobserve(entry.target);
+              load();
+            }
+          });
+        }, { root: thread, rootMargin: "280px 0px" });
+        imageObserver.observe(img);
+      } else load();
+    };
     const avatarMini = p => p?.avatar
-      ? `<img class="message-avatar" src="${esc(p.avatar)}" alt="">`
+      ? `<img class="message-avatar" src="${esc(p.avatar)}" alt="" loading="lazy" decoding="async">`
       : `<span class="message-avatar message-avatar-fallback">${esc(PF.initials(p))}</span>`;
 
     const getPresenceFor = username => {
@@ -3351,7 +3470,13 @@ async function initProfile() {
     };
 
     const appendMessage = (m, keepBottom = true) => {
-      if (!m?.id || renderedMessageIds.has(String(m.id))) return;
+      if (!m?.id) return;
+      const marker = String(m.content || "");
+      // Realtime sends the base row before the private media metadata may be
+      // available. Never expose the internal [voice]/[image] transport marker.
+      if ((marker === "[voice]" && !(m.message_type === "voice" && m.voice_path)) ||
+          (marker === "[image]" && !(m.message_type === "image" && m.image_path))) return;
+      if (renderedMessageIds.has(String(m.id))) return;
       renderedMessageIds.add(String(m.id));
       const row = document.createElement("div");
       row.className = `message-row ${m.sender_username === me.username ? "mine" : "theirs"}`;
@@ -3359,6 +3484,11 @@ async function initProfile() {
       bubble.className = "message-bubble";
       bubble.dir = "auto";
       bubble.setAttribute("data-message-id", String(m.id));
+      bubble.dataset.messageType = m.message_type || "text";
+      bubble.dataset.messageContent = String(m.content || "");
+      bubble.dataset.readAt = String(m.read_at || "");
+      bubble.dataset.editedAt = String(m.edited_at || "");
+
       if (m.message_type === "voice" && m.voice_path) {
         const voiceWrap = document.createElement("div");
         voiceWrap.className = "voice-message-bubble";
@@ -3368,79 +3498,144 @@ async function initProfile() {
         play.textContent = "▶";
         play.setAttribute("aria-label", "Play voice message");
         const audio = document.createElement("audio");
-        audio.preload = "metadata";
-        audio.controls = true;
+        audio.preload = "none";
+        audio.controls = false;
+        audio.hidden = true;
         audio.className = "voice-audio";
         const dur = document.createElement("span");
         dur.className = "voice-duration";
-        dur.textContent = "0:00";
+        dur.textContent = m.voice_duration ? formatVoiceTime(m.voice_duration) : "Voice message";
         voiceWrap.append(play, audio, dur);
         bubble.appendChild(voiceWrap);
+        const prepareAudio = async () => {
+          const requestedAt = Number(audio.dataset.urlCreatedAt || 0);
+          if (audio.getAttribute("src") && Date.now() - requestedAt <= 50 * 60 * 1000) return;
+          // Share the same URL refresh promise between viewport prefetch and a tap.
+          // This avoids signed-URL network latency inside the user's play gesture on mobile.
+          if (!audio.__rivoUrlPromise) {
+            audio.__rivoUrlPromise = (async () => {
+              const url = await PF.getVoiceUrl(m.voice_path);
+              if (!url) throw new Error("Voice message URL is unavailable.");
+              audio.src = url;
+              audio.dataset.urlCreatedAt = String(Date.now());
+            })().finally(() => { audio.__rivoUrlPromise = null; });
+          }
+          await audio.__rivoUrlPromise;
+        };
+        if ("IntersectionObserver" in window) {
+          voiceUrlObserver ||= new IntersectionObserver(entries => {
+            entries.forEach(entry => {
+              if (!entry.isIntersecting) return;
+              voiceUrlObserver.unobserve(entry.target);
+              entry.target.__rivoPrepareVoice?.().catch(() => {});
+            });
+          }, { root: thread, rootMargin: "300px 0px" });
+          play.__rivoPrepareVoice = prepareAudio;
+          voiceUrlObserver.observe(play);
+        }
         play.onclick = async () => {
           try {
-            if (!audio.src) audio.src = await PF.getVoiceUrl(m.voice_path);
-            if (audio.paused) { await audio.play(); play.textContent = "Ⅱ"; } else { audio.pause(); play.textContent = "▶"; }
-          } catch (err) { notify(err.message || "Could not play voice message", "error"); }
+            play.disabled = true;
+            // Usually prefetched while the bubble was near the viewport. If not,
+            // resolve now and allow a second tap if the browser blocks late autoplay.
+            await prepareAudio();
+            if (audio.paused) { await audio.play(); play.textContent = "Ⅱ"; }
+            else { audio.pause(); play.textContent = "▶"; }
+          } catch (err) {
+            audio.removeAttribute("src");
+            notify(err.message || "Could not play voice message. Tap play again if your browser blocked playback.", "error");
+          } finally { play.disabled = false; }
         };
-        audio.onplay = () => { play.textContent = "Ⅱ"; };
-        audio.onpause = () => { play.textContent = "▶"; };
-        audio.ontimeupdate = () => { const sec = Number(m.voice_duration || audio.currentTime || 0) / (m.voice_duration ? 1000 : 1); dur.textContent = `${Math.floor(sec/60)}:${String(Math.floor(sec%60)).padStart(2,"0")}`; };
-        audio.onloadedmetadata = () => { if (!m.voice_duration && Number.isFinite(audio.duration)) dur.textContent = `${Math.floor(audio.duration/60)}:${String(Math.floor(audio.duration%60)).padStart(2,"0")}`; };
+        audio.addEventListener("play", () => { play.textContent = "Ⅱ"; });
+        audio.addEventListener("pause", () => { play.textContent = "▶"; });
+        audio.addEventListener("ended", () => { play.textContent = "▶"; });
+        audio.addEventListener("error", () => { play.textContent = "▶"; }, { once: true });
+        audio.addEventListener("loadedmetadata", () => {
+          const sec = Number.isFinite(audio.duration) ? audio.duration : Number(m.voice_duration || 0) / 1000;
+          dur.textContent = formatVoiceTime(sec * 1000);
+        });
+        audio.addEventListener("error", () => { dur.textContent = "Audio unavailable"; }, { once: true });
+      } else if (m.message_type === "image" && m.image_path) {
+        const image = document.createElement("img");
+        image.className = "message-attachment-image";
+        image.alt = "Photo message";
+        image.loading = "lazy";
+        image.decoding = "async";
+        image.dataset.messageImagePath = m.image_path;
+        image.addEventListener("click", () => {
+          if (!image.src || image.src === location.href) return;
+          const viewer = document.createElement("div");
+          viewer.className = "message-image-viewer";
+          viewer.setAttribute("role", "dialog");
+          viewer.setAttribute("aria-label", "Photo preview");
+          const close = document.createElement("button");
+          close.type = "button"; close.className = "message-image-viewer-close"; close.textContent = "×"; close.setAttribute("aria-label", "Close photo");
+          const full = document.createElement("img"); full.src = image.src; full.alt = image.alt;
+          viewer.append(close, full);
+          close.onclick = () => viewer.remove();
+          viewer.addEventListener("click", ev => { if (ev.target === viewer) viewer.remove(); });
+          document.body.appendChild(viewer);
+        });
+        bubble.appendChild(image);
+        queueMessageImage(image);
       } else {
         const content = document.createElement("span");
         content.className = PF.isEmojiOnly(m.content) ? "message-content emoji-only" : "message-content";
         content.textContent = PF.normalizeMessageText(m.content);
         bubble.appendChild(content);
       }
+
+      const meta = document.createElement("div");
+      meta.className = "message-meta";
+      if (m.edited_at) {
+        const edited = document.createElement("span");
+        edited.className = "message-edited-label";
+        edited.textContent = "Edited";
+        meta.appendChild(edited);
+      }
       const time = document.createElement("time");
-      time.textContent = new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      bubble.appendChild(time);
+      time.dateTime = m.created_at || "";
+      time.textContent = m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+      meta.appendChild(time);
+      if (m.sender_username === me.username && !String(m.id).startsWith("pending-")) {
+        const ticks = document.createElement("span");
+        ticks.className = `message-read-state ${m.read_at ? "is-read" : "is-sent"}`;
+        ticks.textContent = m.read_at ? "✓✓" : "✓";
+        ticks.setAttribute("aria-label", m.read_at ? "Read" : "Sent");
+        ticks.title = m.read_at ? "Read" : "Sent";
+        meta.appendChild(ticks);
+      }
+      bubble.appendChild(meta);
+
       if (!String(m.id).startsWith("pending-")) {
         const reactionBar = document.createElement("div");
         reactionBar.className = "message-reactions";
         reactionBar.innerHTML = (Array.isArray(m.reactions) ? m.reactions : []).map(r => `<button type="button" class="reaction-chip ${r.me ? "mine" : ""}" data-reaction-message="${esc(m.id)}" data-reaction-value="${esc(r.reaction)}"><span>${esc(r.reaction)}</span><b>${esc(r.count)}</b></button>`).join("");
         if (reactionBar.childElementCount) bubble.appendChild(reactionBar);
-
-        // Reactions on desktop/touch: existing reaction chips are clickable,
-        // while a press-and-hold on the message bubble opens the quick menu.
-        // There is intentionally no visible "+" button, keeping the bubble
-        // clean on small screens.
         reactionBar.querySelectorAll("[data-reaction-message]").forEach(btn => {
           btn.addEventListener("click", async ev => {
-            ev.preventDefault();
-            ev.stopPropagation();
-            try {
-              await PF.toggleMessageReaction(btn.dataset.reactionMessage, btn.dataset.reactionValue);
-              await refreshOpenThread();
-            } catch (err) {
-              notify(err?.message || "Could not update reaction", "error");
-            }
+            ev.preventDefault(); ev.stopPropagation();
+            try { await PF.toggleMessageReaction(btn.dataset.reactionMessage, btn.dataset.reactionValue); await refreshOpenThread(); }
+            catch (err) { notify(err?.message || "Could not update reaction", "error"); }
           });
         });
 
         let holdTimer = null;
         let holdTriggered = false;
-        const clearHold = () => {
-          if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
-        };
+        const clearHold = () => { if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; } };
         bubble.addEventListener("pointerdown", ev => {
           if (ev.target.closest("button,a,input,textarea,select")) return;
-          holdTriggered = false;
-          clearHold();
+          holdTriggered = false; clearHold();
           holdTimer = setTimeout(() => {
             holdTriggered = true;
-            openReactionMenu(bubble, m.id, ev.clientX, ev.clientY, { allowDelete: m.sender_username === me.username });
+            openMessageActions(bubble, m, ev.clientX, ev.clientY);
           }, 520);
         }, { passive: true });
         bubble.addEventListener("pointerup", clearHold, { passive: true });
         bubble.addEventListener("pointercancel", clearHold, { passive: true });
         bubble.addEventListener("pointerleave", clearHold, { passive: true });
         bubble.addEventListener("click", ev => {
-          if (holdTriggered) {
-            ev.preventDefault();
-            ev.stopPropagation();
-            holdTriggered = false;
-          }
+          if (holdTriggered) { ev.preventDefault(); ev.stopPropagation(); holdTriggered = false; }
         });
       }
       row.appendChild(bubble);
@@ -3450,37 +3645,65 @@ async function initProfile() {
       if (keepBottom) scrollThread();
     };
 
-    function openReactionMenu(anchorEl, messageId, clientX = null, clientY = null, options = {}) {
+    function openMessageActions(anchorEl, message, clientX = null, clientY = null) {
       document.querySelectorAll(".reaction-popover").forEach(x => x.remove());
       const pop = document.createElement("div");
-      pop.className = "reaction-popover glass";
-      pop.innerHTML = PF.REACTION_SET.map(r => `<button type="button" data-quick-reaction="${esc(r)}">${esc(r)}</button>`).join("") + (options.allowDelete ? `<button type="button" class="reaction-delete-action" data-delete-message="${esc(messageId)}" aria-label="Delete message">🗑️</button>` : "");
+      pop.className = "reaction-popover glass message-action-popover";
+      PF.REACTION_SET.forEach(reaction => {
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.textContent = reaction; btn.setAttribute("aria-label", `React ${reaction}`);
+        btn.addEventListener("click", async () => {
+          try { await PF.toggleMessageReaction(message.id, reaction); await refreshOpenThread(); }
+          catch (e) { notify(e.message || "Could not update reaction", "error"); }
+          finally { pop.remove(); }
+        });
+        pop.appendChild(btn);
+      });
+      const addAction = (label, action, destructive = false) => {
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = `message-action-item ${destructive ? "is-destructive" : ""}`;
+        btn.textContent = label;
+        btn.addEventListener("click", async ev => {
+          ev.preventDefault(); ev.stopPropagation(); btn.disabled = true;
+          try { await action(); pop.remove(); }
+          catch (err) { btn.disabled = false; notify(err?.message || "Message action failed", "error"); }
+        });
+        pop.appendChild(btn);
+      };
+      const isMine = message.sender_username === me.username;
+      const isText = !message.message_type || message.message_type === "text";
+      if (isMine && isText && !String(message.id).startsWith("pending-")) {
+        addAction("Edit message", async () => {
+          const edited = prompt("Edit message", String(message.content || ""));
+          if (edited === null) return;
+          if (!String(edited).trim() || String(edited).trim() === String(message.content || "").trim()) return;
+          await PF.editMessage(message.id, edited);
+          await refreshOpenThread();
+          try { conversations = await PF.listConversations(); renderConversations(); } catch {}
+        });
+      }
+      if (!String(message.id).startsWith("pending-")) {
+        addAction("Delete for me", async () => {
+          if (!confirm("Hide this message from your chat?")) return;
+          await PF.deleteMessage(message.id, "me");
+          await refreshOpenThread();
+          conversations = await PF.listConversations(); renderConversations();
+        }, true);
+        if (isMine) addAction("Delete for everyone", async () => {
+          if (!confirm("Delete this message for both people? This cannot be undone.")) return;
+          await PF.deleteMessage(message.id, "everyone");
+          await refreshOpenThread();
+          conversations = await PF.listConversations(); renderConversations();
+        }, true);
+      }
       document.body.appendChild(pop);
       const rect = anchorEl.getBoundingClientRect();
       const x = Number.isFinite(clientX) ? clientX : rect.left + rect.width / 2;
       const y = Number.isFinite(clientY) ? clientY : rect.top;
-      pop.style.left = `${Math.max(8, Math.min(window.innerWidth - 220, x - 90))}px`;
-      pop.style.top = `${Math.max(8, y - 58)}px`;
-      $$('[data-quick-reaction]', pop).forEach(btn => btn.onclick = async () => {
-        try { await PF.toggleMessageReaction(messageId, btn.dataset.quickReaction); await refreshOpenThread(); } catch (e) { notify(e.message, "error"); } finally { pop.remove(); }
-      });
-      pop.querySelector('[data-delete-message]')?.addEventListener('click', async ev => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const btn = ev.currentTarget;
-        btn.disabled = true;
-        try {
-          await PF.deleteMessage(messageId);
-          await refreshOpenThread();
-          try { conversations = await PF.listConversations(); renderConversations(); } catch {}
-        } catch (e) {
-          notify(e.message || "Could not delete message", "error");
-          btn.disabled = false;
-          return;
-        }
-        pop.remove();
-      });
-      setTimeout(() => document.addEventListener("click", () => pop.remove(), {once:true}), 0);
+      pop.style.left = `${Math.max(8, Math.min(window.innerWidth - 250, x - 100))}px`;
+      pop.style.top = `${Math.max(8, Math.min(window.innerHeight - 100, y - 70))}px`;
+      const dismiss = ev => { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener("pointerdown", dismiss, true); } };
+      setTimeout(() => document.addEventListener("pointerdown", dismiss, true), 0);
     }
 
     async function refreshOpenThread() {
@@ -3491,6 +3714,10 @@ async function initProfile() {
 
     const renderThread = messages => {
       renderedMessageIds.clear();
+      try { imageObserver?.disconnect(); } catch {}
+      try { voiceUrlObserver?.disconnect(); } catch {}
+      imageObserver = null;
+      voiceUrlObserver = null;
       thread.innerHTML = "";
       if (!activeUser) {
         thread.innerHTML = `<div id="messageEmpty" class="message-empty"><div class="message-empty-icon">✉</div><h2>Choose a conversation</h2><p>Select someone from the left to start messaging.</p></div>`;
@@ -3512,6 +3739,22 @@ async function initProfile() {
       renderConversations();
     }
 
+    const updateConversationFromMessage = (msg, otherId) => {
+      const conversation = conversations.find(c =>
+        (c.userId && String(c.userId) === String(otherId)) ||
+        (activeUser && c.username === activeUser && activeUserId && String(activeUserId) === String(otherId))
+      );
+      if (!conversation) return false;
+      conversation.lastMessage = msg.content === "[voice]" ? "Voice message" : msg.content === "[image]" ? "Photo" : String(msg.content || "");
+      conversation.createdAt = msg.created_at || conversation.createdAt;
+      conversation.updatedLabel = conversation.createdAt
+        ? new Date(conversation.createdAt).toLocaleDateString([], { month: "short", day: "2-digit" })
+        : "Now";
+      conversations.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+      renderConversations();
+      return true;
+    };
+
     // Reflects the recipient's "who can message you" setting on the compose
     // box itself, instead of only finding out after Send is tapped. peerProfile
     // is whatever PF.getProfile returned for the open conversation (it always
@@ -3522,6 +3765,8 @@ async function initProfile() {
         input.disabled = false;
         input.placeholder = "Write a message...";
         if (submitBtn) submitBtn.disabled = false;
+        if (messageImageBtn) messageImageBtn.disabled = false;
+        if (voiceRecordBtn) voiceRecordBtn.disabled = false;
         return;
       }
       const priv = peerProfile.messagePrivacy || "everyone";
@@ -3531,6 +3776,8 @@ async function initProfile() {
       const locked = closed || friendsOnly;
       input.disabled = locked;
       if (submitBtn) submitBtn.disabled = locked;
+      if (messageImageBtn) messageImageBtn.disabled = locked;
+      if (voiceRecordBtn) voiceRecordBtn.disabled = locked;
       input.placeholder = closed
         ? "This user has closed their messages"
         : friendsOnly
@@ -3540,6 +3787,8 @@ async function initProfile() {
     }
 
     async function openConversation(username) {
+      const nextUsername = PF.normalizeUsername(username);
+      if (voiceDraft && nextUsername !== activeUser) clearVoiceDraft();
       messagesLayout.classList.add("conversation-open");
       if (window.innerWidth <= 760) document.body.classList.add("rivo-chat-fullscreen");
       window.__rivoActiveMessageUser = PF.normalizeUsername(username);
@@ -3582,6 +3831,8 @@ async function initProfile() {
         renderThread(messages);
         updateThreadPresence();
         applyComposeLock(peerProfile);
+        // Mark inbound messages as read after the thread has been loaded.
+        PF.markMessagesRead(activeUser).then(changed => { if (changed > 0 && activeUser === PF.normalizeUsername(username)) refreshOpenThread(); }).catch(() => {});
         if (!input.disabled) input.focus();
       } catch (e) { notify(e.message, "error"); }
     }
@@ -3675,6 +3926,9 @@ async function initProfile() {
       input.disabled = true;
       const sendBtn = form.querySelector('button[type="submit"]');
       if (sendBtn) sendBtn.disabled = true;
+      if (messageImageBtn) messageImageBtn.disabled = true;
+      if (voiceRecordBtn) voiceRecordBtn.disabled = true;
+      clearVoiceDraft();
     });
 
 const voiceBar = $("#voiceMessageBar");
@@ -3683,76 +3937,105 @@ const voiceMessageState = $("#voiceMessageState");
 const voiceMessageTime = $("#voiceMessageTime");
 const voiceMessageCancel = $("#voiceMessageCancel");
 const voiceMessageSend = $("#voiceMessageSend");
+if (voiceRecordBtn) voiceRecordBtn.disabled = true;
 const formatVoiceTime = ms => { const sec=Math.floor(Math.max(0, Number(ms)||0)/1000); return `${Math.floor(sec/60)}:${String(sec%60).padStart(2,"0")}`; };
-const stopVoiceStream = () => { try { recordingStream?.getTracks?.().forEach(t => t.stop()); } catch {} recordingStream=null; };
-const clearVoiceDraft = () => { voiceDraft=null; if(voiceMessageSend) voiceMessageSend.disabled=true; if(voiceBar) voiceBar.classList.add("hidden"); if(voiceMessageState) voiceMessageState.textContent="Ready"; if(voiceMessageTime) voiceMessageTime.textContent="0:00"; };
-const finishVoiceRecording = () => {
-  if (!mediaRecorder) return;
-  try { if (mediaRecorder.state !== "inactive") mediaRecorder.stop(); } catch {}
-  stopVoiceStream();
-  clearInterval(recordingTimer); recordingTimer=null; mediaRecorder=null;
+const stopVoiceStream = stream => { try { (stream || recordingStream)?.getTracks?.().forEach(t => t.stop()); } catch {} if (!stream || stream === recordingStream) recordingStream=null; };
+const clearVoiceDraft = () => {
+  voiceDraft=null; voiceSending=false;
+  if(voiceMessageSend){voiceMessageSend.disabled=true;voiceMessageSend.hidden=true;}
+  if(voiceMessageCancel)voiceMessageCancel.hidden=true;
+  if(voiceBar)voiceBar.classList.add("hidden");
+  if(voiceMessageState)voiceMessageState.textContent="Ready";
+  if(voiceMessageTime)voiceMessageTime.textContent="0:00";
+};
+const finishVoiceRecording = (discard = true) => {
+  const recorder = mediaRecorder;
+  if (!recorder) { if (discard) clearVoiceDraft(); return; }
+  if (discard) discardedRecorders.add(recorder);
+  try { if (recorder.state !== "inactive") recorder.stop(); } catch {}
+  clearInterval(recordingTimer); recordingTimer=null;
+  mediaRecorder=null;
+  // The recorder's onstop owns stream cleanup; stopping tracks here can truncate
+  // the final dataavailable event on some Android browsers.
+  if (discard) clearVoiceDraft();
 };
 let voicePressActive = false;
 let voicePointerId = null;
-let voiceJustFinished = false;
 
 const startVoiceRecording = async () => {
   if (mediaRecorder && mediaRecorder.state === "recording") return;
-  if (!activeUser) { notify("Choose a conversation first.", "error"); return; }
+  if (!activeUser) { notify("Choose a conversation first.", "error"); voicePressActive=false; return; }
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-    notify("Voice recording is not supported in this browser.", "error"); return;
+    notify("Voice recording is not supported in this browser.", "error"); voicePressActive=false; return;
   }
+  const targetUsername = activeUser;
+  let stream = null;
   try {
-    recordingStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true }
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true, channelCount:1 }
     });
-    const preferred = ["audio/webm;codecs=opus","audio/ogg;codecs=opus","audio/webm","audio/mp4"]
-      .find(t => MediaRecorder.isTypeSupported(t));
-    mediaRecorder = new MediaRecorder(
-      recordingStream,
-      preferred ? { mimeType: preferred, audioBitsPerSecond: 64000 } : undefined
-    );
+    // If the user released the hold while Android was showing its permission
+    // prompt, never start an orphan recording afterwards.
+    if (!voicePressActive || targetUsername !== activeUser) { stopVoiceStream(stream); return; }
+    const preferred = ["audio/webm;codecs=opus","audio/ogg;codecs=opus","audio/mp4","audio/webm"]
+      .find(t => { try { return MediaRecorder.isTypeSupported(t); } catch { return false; } });
+    let recorder;
+    try { recorder = new MediaRecorder(stream, preferred ? { mimeType: preferred, audioBitsPerSecond: 64000 } : undefined); }
+    catch { recorder = new MediaRecorder(stream); }
+    mediaRecorder = recorder;
+    recordingStream = stream;
     const chunks = [];
     recordingStartedAt = Date.now();
     voiceDraft = null;
-    mediaRecorder.ondataavailable = e => { if (e.data?.size) chunks.push(e.data); };
-    mediaRecorder.onstop = () => {
-      const duration = Math.min(Date.now() - recordingStartedAt, 5 * 60 * 1000);
-      const mime = mediaRecorder?.mimeType || "audio/webm";
-      const blob = new Blob(chunks, { type: mime });
-      if (blob.size && duration >= 350) {
-        voiceDraft = { blob, duration };
-        if (voiceBar) voiceBar.classList.remove("hidden");
-        if (voiceMessageState) voiceMessageState.textContent = "Voice ready";
-        if (voiceMessageSend) voiceMessageSend.disabled = false;
-      } else {
-        clearVoiceDraft();
-      }
+    voiceSending = false;
+    recorder.ondataavailable = e => { if (e.data?.size) chunks.push(e.data); };
+    recorder.onerror = () => { discardedRecorders.add(recorder); stopVoiceStream(stream); clearInterval(recordingTimer); recordingTimer=null; if(mediaRecorder===recorder)mediaRecorder=null; notify("Recording failed. Please try again.","error"); clearVoiceDraft(); };
+    recorder.onstop = () => {
+      stopVoiceStream(stream);
+      clearInterval(recordingTimer); recordingTimer=null;
+      if(mediaRecorder===recorder)mediaRecorder=null;
       if (voiceRecordBtn) voiceRecordBtn.classList.remove("recording");
+      if (discardedRecorders.has(recorder)) return;
+      const duration = Math.min(Date.now() - recordingStartedAt, 5 * 60 * 1000);
+      const mime = String(recorder.mimeType || chunks.find(c => c.type)?.type || "audio/webm").split(";")[0].toLowerCase();
+      const blob = new Blob(chunks, { type: mime });
+      if (blob.size && duration >= 350 && targetUsername) {
+        voiceDraft = { blob, duration, clientMessageKey: crypto.randomUUID(), receiverUsername: targetUsername };
+        if (voiceBar) voiceBar.classList.remove("hidden");
+        if (voiceMessageState) voiceMessageState.textContent = "Voice ready · review then send";
+        if (voiceMessageSend) { voiceMessageSend.hidden=false; voiceMessageSend.disabled=false; }
+        if (voiceMessageCancel) voiceMessageCancel.hidden=false;
+      } else clearVoiceDraft();
     };
-    mediaRecorder.start(250);
+    recorder.start(500);
     voiceBar?.classList.remove("hidden");
     if (voiceMessageState) voiceMessageState.textContent = "Recording… release to stop";
     if (voiceMessageTime) voiceMessageTime.textContent = "0:00";
+    if (voiceMessageSend) voiceMessageSend.hidden=true;
+    if (voiceMessageCancel) voiceMessageCancel.hidden=true;
     voiceRecordBtn?.classList.add("recording");
     recordingTimer = setInterval(() => {
       const ms = Math.min(Date.now() - recordingStartedAt, 5 * 60 * 1000);
       if (voiceMessageTime) voiceMessageTime.textContent = formatVoiceTime(ms);
-      if (ms >= 5 * 60 * 1000) stopVoiceRecording();
+      if (ms >= 5 * 60 * 1000) { voicePressActive=false; stopVoiceRecording(); }
     }, 250);
-  } catch {
-    stopVoiceStream();
+  } catch (err) {
+    stopVoiceStream(stream);
+    voicePressActive=false;
+    if (voiceRecordBtn) voiceRecordBtn.classList.remove("recording");
+    clearVoiceDraft();
     notify("Microphone permission is required to record a voice message.", "error");
   }
 };
 
 const stopVoiceRecording = () => {
-  if (!mediaRecorder) return;
-  try { if (mediaRecorder.state !== "inactive") mediaRecorder.stop(); } catch {}
-  stopVoiceStream();
+  const recorder = mediaRecorder;
+  if (!recorder) return;
+  try { if (recorder.state !== "inactive") recorder.stop(); }
+  catch { stopVoiceStream(recordingStream); }
   clearInterval(recordingTimer);
-  recordingTimer = null;
-  mediaRecorder = null;
+  recordingTimer=null;
+  mediaRecorder=null;
 };
 
 const endVoicePress = async () => {
@@ -3760,13 +4043,12 @@ const endVoicePress = async () => {
   voicePressActive = false;
   voiceRecordBtn?.classList.remove("recording");
   stopVoiceRecording();
-  voiceJustFinished = true;
-  setTimeout(() => { voiceJustFinished = false; }, 250);
 };
 
 voiceRecordBtn?.addEventListener("pointerdown", async e => {
   if (e.button !== 0 && e.pointerType !== "touch") return;
   e.preventDefault();
+  if (voiceSending) return;
   voicePressActive = true;
   voicePointerId = e.pointerId;
   voiceRecordBtn.setPointerCapture?.(e.pointerId);
@@ -3778,18 +4060,52 @@ voiceRecordBtn?.addEventListener("pointerup", async e => {
   await endVoicePress();
   voicePointerId = null;
 });
-voiceRecordBtn?.addEventListener("pointercancel", endVoicePress);
-voiceRecordBtn?.addEventListener("lostpointercapture", () => {
-  if (voicePressActive) endVoicePress();
-});
+voiceRecordBtn?.addEventListener("pointercancel", () => { endVoicePress(); voicePointerId=null; });
+voiceRecordBtn?.addEventListener("lostpointercapture", () => { if (voicePressActive) endVoicePress(); });
 voiceRecordBtn?.addEventListener("contextmenu", e => e.preventDefault());
 
-voiceMessageCancel?.addEventListener("click",()=>{ finishVoiceRecording(); clearVoiceDraft(); if(voiceRecordBtn) voiceRecordBtn.classList.remove("recording"); });
+voiceMessageCancel?.addEventListener("click",()=>{ finishVoiceRecording(true); if(voiceRecordBtn) voiceRecordBtn.classList.remove("recording"); });
 voiceMessageSend?.addEventListener("click",async()=>{
-  if(!voiceDraft || !activeUser) return;
-  const draft=voiceDraft; voiceMessageSend.disabled=true; if(voiceMessageState) voiceMessageState.textContent="Sending…";
-  try { await PF.sendVoiceMessage(activeUser,draft.blob,draft.duration); clearVoiceDraft(); await loadConversations(); await refreshOpenThread(); }
-  catch(err){ if(voiceMessageState) voiceMessageState.textContent="Failed — press Send voice to retry"; voiceMessageSend.disabled=false; notify(err.message||"Could not send voice message","error"); }
+  if(!voiceDraft || voiceSending) return;
+  const draft=voiceDraft;
+  voiceSending=true;
+  voiceMessageSend.disabled=true;
+  if(voiceMessageState) voiceMessageState.textContent="Sending voice…";
+  try {
+    await PF.sendVoiceMessage(draft.receiverUsername,draft.blob,draft.duration,draft.clientMessageKey);
+    clearVoiceDraft();
+    await loadConversations();
+    if (activeUser === draft.receiverUsername) await refreshOpenThread();
+  } catch(err) {
+    voiceSending=false;
+    if(voiceMessageState) voiceMessageState.textContent="Not sent — tap Send voice to retry";
+    voiceMessageSend.disabled=false;
+    notify(err.message||"Could not send voice message","error");
+  }
+});
+
+messageImageBtn?.addEventListener("click", () => {
+  if (!activeUser || imageSending || input.disabled) return;
+  messageImageInput?.click();
+});
+messageImageInput?.addEventListener("change", async () => {
+  const file = messageImageInput.files?.[0];
+  if (!file || !activeUser || imageSending) { if(messageImageInput)messageImageInput.value=""; return; }
+  const target = activeUser;
+  imageSending = true;
+  messageImageBtn.disabled = true;
+  messageImageBtn.setAttribute("aria-busy", "true");
+  try {
+    await PF.sendImageMessage(target, file);
+    await loadConversations();
+    if (activeUser === target) await refreshOpenThread();
+  } catch (err) { notify(err.message || "Could not send photo", "error"); }
+  finally {
+    imageSending = false;
+    if(messageImageInput)messageImageInput.value="";
+    messageImageBtn.disabled = input.disabled;
+    messageImageBtn.removeAttribute("aria-busy");
+  }
 });
 
     let resyncing = false;
@@ -3806,7 +4122,24 @@ voiceMessageSend?.addEventListener("click",async()=>{
         if (active?.userId) activeUserId = active.userId;
         if (activeUser) {
           const messages = await PF.getMessages(activeUser);
-          [...messages].reverse().forEach(m => appendMessage(m));
+          const rows = new Map([...thread.querySelectorAll(".message-bubble[data-message-id]")]
+            .filter(el => !String(el.dataset.messageId || "").startsWith("pending-"))
+            .map(el => [String(el.dataset.messageId), el]));
+          const serverIds = new Set(messages.map(m => String(m.id)));
+          let stale = rows.size !== serverIds.size;
+          if (!stale) {
+            for (const m of messages) {
+              const row = rows.get(String(m.id));
+              if (!row || row.dataset.readAt !== String(m.read_at || "") ||
+                  row.dataset.editedAt !== String(m.edited_at || "") ||
+                  row.dataset.messageType !== String(m.message_type || "text") ||
+                  row.dataset.messageContent !== String(m.content || "")) { stale = true; break; }
+            }
+          }
+          // Avoid tearing down playback/images on every fallback heartbeat. Only
+          // rebuild when a row was added/removed or its visible state changed.
+          if (stale) renderThread(messages);
+          if (document.visibilityState === "visible") PF.markMessagesRead(activeUser).catch(() => {});
         }
       } catch {} finally { resyncing = false; }
     };
@@ -3815,24 +4148,38 @@ voiceMessageSend?.addEventListener("click",async()=>{
       if (!msg || (msg.sender_id !== me.id && msg.receiver_id !== me.id)) return;
 
       const otherId = msg.sender_id === me.id ? msg.receiver_id : msg.sender_id;
-      const isActiveConversation = Boolean(activeUser && activeUserId && otherId === activeUserId);
+      const isActiveConversation = Boolean(activeUser && activeUserId && String(otherId) === String(activeUserId));
       const isOwnEcho = msg.sender_id === me.id;
+      const eventType = msg.__rivoEventType || "INSERT";
 
       if (isActiveConversation) {
-        // Text rows arrive with their content directly; voice rows carry metadata
-        // in the companion table, so refresh the open thread to hydrate the audio.
-        if (msg.content === "[voice]") await refreshOpenThread();
-        else appendMessage({
-          id: msg.id,
-          sender_username: isOwnEcho ? me.username : activeUser,
-          receiver_username: isOwnEcho ? activeUser : me.username,
-          content: msg.content,
-          created_at: msg.created_at
-        });
+        // UPDATE contains read_at / edited_at; DELETE must remove the bubble.
+        // Reloading the open thread is bounded to active-chat events only.
+        if (eventType === "UPDATE" || eventType === "DELETE" || msg.content === "[voice]" || msg.content === "[image]") {
+          await refreshOpenThread();
+        } else {
+          appendMessage({
+            id: msg.id,
+            sender_username: isOwnEcho ? me.username : activeUser,
+            receiver_username: isOwnEcho ? activeUser : me.username,
+            content: msg.content,
+            created_at: msg.created_at,
+            read_at: msg.read_at,
+            edited_at: msg.edited_at,
+            reactions: []
+          });
+          if (!isOwnEcho && document.visibilityState === "visible") PF.markMessagesRead(activeUser).catch(() => {});
+        }
       }
 
       try {
-        await loadConversations();
+        if (eventType === "DELETE") {
+          await loadConversations();
+        } else if (eventType === "UPDATE") {
+          if (isActiveConversation) await loadConversations();
+        } else if (!updateConversationFromMessage(msg, otherId)) {
+          await loadConversations();
+        }
         const active = conversations.find(c => c.username === activeUser);
         if (active?.userId) activeUserId = active.userId;
       } catch {}
@@ -3844,14 +4191,22 @@ voiceMessageSend?.addEventListener("click",async()=>{
       try { await refreshOpenThread(); } catch {}
     });
 
-    presence = await PF.subscribePresence(me.username, evt => {
-      if (presence) presence.state = evt?.state || {};
+    presence = await ensureGlobalPresence(me.username);
+    if (presence) {
+      presence.state = window.__rivoPresenceState || presence.state || {};
       updateThreadPresence();
-    });
+    }
+    const onPresenceUpdate = evt => {
+      if (presence) presence.state = evt?.detail?.state || {};
+      updateThreadPresence();
+    };
+    document.addEventListener("rivo:presence", onPresenceUpdate);
 
     window.addEventListener("beforeunload", () => {
       try { messageUnsubscribe?.(); } catch {}
-      try { presence?.unsubscribe?.(); } catch {}
+      // The global presence channel is shared by the whole site; only remove
+      // this page's event listener here, not the shared connection.
+      document.removeEventListener("rivo:presence", onPresenceUpdate);
       try { reactionUnsubscribe?.(); } catch {}
       clearTimeout(typingTimer);
       clearTimeout(typingStopTimer);
@@ -4179,7 +4534,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
     return mins<1?"now":mins<60?`${mins}m`:hrs<24?`${hrs}h`:days<7?`${days}d`:d.toLocaleDateString(undefined,{month:"short",day:"numeric"});
   }
   function profileMini(author){
-    return author?.avatar ? `<img class="avatar-sm" src="${esc(author.avatar)}" alt="">` : `<span class="avatar-sm avatar-fallback">${esc((author?.displayName||author?.username||"U").slice(0,2).toUpperCase())}</span>`;
+    return author?.avatar ? `<img class="avatar-sm" src="${esc(author.avatar)}" alt="" loading="lazy" decoding="async">` : `<span class="avatar-sm avatar-fallback">${esc((author?.displayName||author?.username||"U").slice(0,2).toUpperCase())}</span>`;
   }
   function reactionSummary(post){
     const count=Number((post?.reactions||{})[POST_REACTION]||0);
@@ -4289,7 +4644,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
     const author=post.author||{}; const medias=Array.isArray(post.media)?post.media:[];
     const myReaction=post.my_reaction||null; const reposted=!!post.reposted_by_me;
     const repNames=Array.isArray(post.reposter_names)?post.reposter_names:[];
-    const mediaHtml=medias.length?`<div class="post-media count-${Math.min(5,medias.length)}">${medias.slice(0,5).map((m,i)=>`<button type="button" class="post-media-thumb" data-post-image="${esc(m.url)}" aria-label="Open image ${i+1}"><img src="${esc(m.url)}" alt="" loading="lazy"></button>`).join("")}</div>`:"";
+    const mediaHtml=medias.length?`<div class="post-media count-${Math.min(5,medias.length)}">${medias.slice(0,5).map((m,i)=>`<button type="button" class="post-media-thumb" data-post-image="${esc(m.url)}" aria-label="Open image ${i+1}"><img src="${esc(m.url)}" alt="" loading="lazy" decoding="async"></button>`).join("")}</div>`:"";
     const note=post.profile_reposted?`<div class="repost-note">↻ Reposted to this profile</div>`:repNames.length?`<div class="repost-note">↻ Reposted by <b>${esc(repNames[0].displayName||repNames[0].username)}</b>${repNames.length>1?` and ${repNames.length-1} more`:""}</div>`:"";
     const starActive=myReaction===POST_REACTION;
     const starIcon=`<svg class="post-star-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.7 2.55 5.16 5.7.83-4.13 4.02.98 5.68L12 16.7l-5.1 2.69.97-5.68-4.12-4.02 5.69-.83L12 3.7Z"/></svg>`;
@@ -4367,7 +4722,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
   function communityAvatar(c, sizeClass="community-avatar"){
     const fallback=esc((c?.name||"R").trim().slice(0,1).toUpperCase());
     return c?.image_url
-      ? `<span class="${sizeClass}"><img src="${esc(c.image_url)}" alt=""></span>`
+      ? `<span class="${sizeClass}"><img src="${esc(c.image_url)}" alt="" loading="lazy" decoding="async"></span>`
       : `<span class="${sizeClass} community-avatar-fallback">${fallback}</span>`;
   }
   function communityCard(c){
@@ -4482,7 +4837,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
       let imagePayload=null;
       $('#communityImagePicker',modal)?.addEventListener('change',async e=>{
         const file=e.target.files?.[0];if(!file)return;
-        try{const result=await PF.uploadCommunityImage(file);imagePayload=result;$('#communityImagePreview',modal).innerHTML=`<img src="${esc(result.url)}" alt="">`;}
+        try{const result=await PF.uploadCommunityImage(file);imagePayload=result;$('#communityImagePreview',modal).innerHTML=`<img src="${esc(result.url)}" alt="" loading="lazy" decoding="async">`;}
         catch(err){notify(err.message||'Could not upload image','error');}
       });
       $('#communityCreateForm',modal).addEventListener('submit',async e=>{
@@ -4559,15 +4914,35 @@ voiceMessageSend?.addEventListener("click",async()=>{
     </div>
     <div id="communityManageModal" class="modal-backdrop"></div>`;
 
+    const communityMessageMarkup=m=>{
+      const author=m?.author||members.find(x=>String(x.userId||'')===String(m?.user_id||''));
+      if(!m?.id||!author?.username)return '';
+      const mine=PF.normalizeUsername(author.username)===PF.normalizeUsername(me);
+      return `<article class="community-message ${mine?'mine':''}" data-community-message-id="${esc(m.id)}">${mine?'':identityLink(author,profileMini(author),'community-message-avatar-link')}<div class="community-message-stack"><div class="community-message-meta">${identityLink(author,`<b>${esc(author.displayName||author.username||'User')}</b>`)}<span>${formatSocialTime(m.created_at)}</span></div><div class="community-message-bubble">${esc(m.content)}</div></div></article>`;
+    };
+    const appendCommunityMessage=m=>{
+      const box=$('#communityMessages');
+      if(!box||!m?.id)return false;
+      const id=String(m.id);
+      if([...box.querySelectorAll('[data-community-message-id]')].some(el=>el.getAttribute('data-community-message-id')===id))return true;
+      const markup=communityMessageMarkup(m);
+      // Older deployed schemas don't return userId in the members RPC. Fall
+      // back to a normal refresh in that case; no functionality is lost.
+      if(!markup)return false;
+      if(box.querySelector('.community-chat-empty'))box.innerHTML='';
+      box.insertAdjacentHTML('beforeend',markup);
+      const rows=box.querySelectorAll('[data-community-message-id]');
+      if(rows.length>160)rows[0].remove();
+      box.scrollTop=box.scrollHeight;
+      return true;
+    };
     const renderMessages=async()=>{
       const box=$('#communityMessages');
       try{
         const msgs=await PF.getCommunityMessages(id);
         const ordered=Array.isArray(msgs)?msgs.slice().reverse():[];
-        box.innerHTML=ordered.length?ordered.map(m=>{
-          const mine=PF.normalizeUsername(m.author?.username||'')===PF.normalizeUsername(me);
-          return `<article class="community-message ${mine?'mine':''}">${mine?'':identityLink(m.author,profileMini(m.author),'community-message-avatar-link')}<div class="community-message-stack"><div class="community-message-meta">${identityLink(m.author,`<b>${esc(m.author?.displayName||m.author?.username||'User')}</b>`)}<span>${formatSocialTime(m.created_at)}</span></div><div class="community-message-bubble">${esc(m.content)}</div></div></article>`;
-        }).join(''):`<div class="community-chat-empty"><div>💬</div><h2>Start the conversation</h2><p>Messages here are visible to every community member.</p></div>`;
+        const html=ordered.map(communityMessageMarkup).filter(Boolean).join('');
+        box.innerHTML=html||`<div class="community-chat-empty"><div>💬</div><h2>Start the conversation</h2><p>Messages here are visible to every community member.</p></div>`;
         requestAnimationFrame(()=>{box.scrollTop=box.scrollHeight;});
       }catch(e){box.innerHTML=`<div class="community-chat-empty"><h2>Chat unavailable</h2><p>${esc(e.message||'Could not load messages')}</p></div>`;}
     };
@@ -4693,7 +5068,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
         const content=input?.value?.trim();
         if(!content)return;
         const send=mini.querySelector('.voice-mini-chat-send');
-        try{send.disabled=true;await PF.sendCommunityMessage(id,content);input.value='';await renderMessages();}
+        try{send.disabled=true;const sent=await PF.sendCommunityMessage(id,content);input.value='';if(!appendCommunityMessage(sent))await renderMessages();}
         catch(e){notify(e.message||'Could not send message','error');}
         finally{send.disabled=false;input.focus();}
       });
@@ -4768,7 +5143,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
       try{await liveKitRoom?.disconnect();}catch{}
       liveKitRoom=null; voiceJoined=false; activeSpeakerIds.clear(); remoteAudioState.clear();
       liveKitAudio.forEach(el=>{try{el.pause?.();el.srcObject=null;el.remove();}catch{}});
-      liveKitAudio=[]; liveKitAudioByParticipant.clear();
+      liveKitAudio=[]; liveKitAudioByParticipant.clear(); liveKitAudioByTrack.clear();
       renderVoiceParticipants(); renderVoiceBar();
       if(!silent)showVoiceInvite();
     }
@@ -4788,6 +5163,8 @@ voiceMessageSend?.addEventListener("click",async()=>{
     }
 
     const liveKitAudioByParticipant=new Map();
+    const liveKitAudioByTrack=new Map();
+    const COMMUNITY_AUDIO_CAPTURE_OPTIONS={echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1};
     let voiceAudioUnlocked=false;
     let voiceAudioContext=null;
 
@@ -4831,25 +5208,33 @@ voiceMessageSend?.addEventListener("click",async()=>{
     }
 
     function attachAudioElement(track,participant){
-      try{track.detach().forEach(x=>x.remove());}catch{}
-      const pid=String(participant?.identity||'unknown');
-      const el=document.createElement('audio');
-      el.autoplay=true;
-      el.playsInline=true;
-      el.setAttribute('autoplay','true');
-      el.setAttribute('playsinline','true');
-      el.controls=false;
-      el.muted=false;
-      el.volume=1;
-      el.className='community-voice-audio';
-      el.addEventListener('playing',()=>{voiceAudioUnlocked=true;renderVoiceBar();},{once:true});
-      track.attach(el);
-      const bucket=liveKitAudioByParticipant.get(pid)||[];
-      bucket.push(el);
-      liveKitAudioByParticipant.set(pid,bucket);
-      document.body.appendChild(el);
-      liveKitAudio.push(el);
-      el.play().catch(()=>{});
+      try{
+        const pid=String(participant?.identity||'unknown');
+        const trackKey=`${pid}:${String(track?.sid||track?.mediaStreamTrack?.id||'audio')}`;
+        const existing=liveKitAudioByTrack.get(trackKey);
+        if(existing?.isConnected)return existing;
+        if(existing){try{existing.pause?.();existing.srcObject=null;existing.remove();}catch{}liveKitAudioByTrack.delete(trackKey);liveKitAudio=liveKitAudio.filter(x=>x!==existing);}
+        const el=document.createElement('audio');
+        el.autoplay=true;
+        el.playsInline=true;
+        el.setAttribute('autoplay','true');
+        el.setAttribute('playsinline','true');
+        el.controls=false;
+        el.muted=!!remoteAudioState.get(pid);
+        el.volume=el.muted?0:1;
+        el.className='community-voice-audio';
+        el.dataset.rivoTrackKey=trackKey;
+        el.addEventListener('playing',()=>{voiceAudioUnlocked=true;renderVoiceBar();},{once:true});
+        track.attach(el);
+        const bucket=liveKitAudioByParticipant.get(pid)||[];
+        bucket.push(el);
+        liveKitAudioByParticipant.set(pid,bucket);
+        liveKitAudioByTrack.set(trackKey,el);
+        document.body.appendChild(el);
+        liveKitAudio.push(el);
+        el.play().catch(()=>{});
+        return el;
+      }catch(error){console.warn('[Rivo Community Voice] Audio attach failed',error);return null;}
     }
 
     function attachExistingAudioTracks(room){
@@ -4866,7 +5251,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
 
     function removeParticipantAudio(participantId){
       const bucket=liveKitAudioByParticipant.get(String(participantId||''))||[];
-      bucket.forEach(el=>{try{el.pause?.();el.remove();}catch{}});
+      bucket.forEach(el=>{try{el.pause?.();el.srcObject=null;el.remove();}catch{}if(el.dataset?.rivoTrackKey)liveKitAudioByTrack.delete(el.dataset.rivoTrackKey);});
       liveKitAudioByParticipant.delete(String(participantId||''));
       liveKitAudio=liveKitAudio.filter(el=>!bucket.includes(el));
     }
@@ -4912,23 +5297,28 @@ voiceMessageSend?.addEventListener("click",async()=>{
 
     function startVoicePresenceWatcher(){
       if(voicePresenceTimer)clearInterval(voicePresenceTimer);
-      voicePresenceTimer=setInterval(()=>syncVoicePresence(),3000);
+      // The room is also protected by LiveKit's empty-room timeout. Ten-second
+      // reconciliation reduces edge-function/room-service traffic by ~70%.
+      voicePresenceTimer=setInterval(()=>syncVoicePresence(),10000);
     }
 
     async function joinVoice(){
       if(!voiceRoom?.active){notify('There is no active voice room.','error');return;}
       if(liveKitRoom){renderVoiceParticipants();await enableVoiceAudio(true);return;}
       if(voiceJoinBusy)return;
-      const LK=window.LivekitClient;
-      if(!LK){notify('Live voice is not loaded. Refresh the page and try again.','error');return;}
       voiceJoinBusy=true;
       try{
         await primeVoiceAudio();
-        const d=await getLiveKitToken(voiceRoom.room_name,me);
+        const [LK,d]=await Promise.all([
+          loadLiveKitClient(), getLiveKitToken(voiceRoom.room_name,me)
+        ]);
         const room=new LK.Room({adaptiveStream:true,dynacast:true,stopLocalTrackOnUnpublish:true});
         room.on(LK.RoomEvent.TrackSubscribed,(track,publication,participant)=>{if(track.kind==='audio'){attachAudioElement(track,participant);renderVoiceParticipants();}});
         room.on(LK.RoomEvent.TrackUnsubscribed,(track,publication,participant)=>{try{track.detach().forEach(x=>x.remove());}catch{} if(participant?.identity)removeParticipantAudio(participant.identity);renderVoiceParticipants();});
-        room.on(LK.RoomEvent.TrackSubscriptionFailed,(trackSid,participant)=>notify(`Could not receive audio from ${participantLabel(participant)}. Reconnecting…`,'error'));
+        room.on(LK.RoomEvent.TrackSubscriptionFailed,async(trackSid,participant)=>{
+          try{const publication=participant?.getTrackPublication?.(trackSid);if(publication?.setSubscribed)await publication.setSubscribed(true);}catch{}
+          notify(`Could not receive audio from ${participantLabel(participant)}. Tap Audio to retry.`,'error');
+        });
         room.on(LK.RoomEvent.ParticipantPermissionChanged,()=>renderVoiceParticipants());
         room.on(LK.RoomEvent.ParticipantConnected,(participant)=>{renderVoiceParticipants();notify(`${participantLabel(participant)} joined voice`,'success');});
         room.on(LK.RoomEvent.ParticipantDisconnected,(participant)=>{activeSpeakerIds.delete(participant?.identity);removeParticipantAudio(participant?.identity);renderVoiceParticipants();notify(`${participantLabel(participant)} left voice`,'success');});
@@ -4945,7 +5335,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
         });
         room.on(LK.RoomEvent.Disconnected,()=>{
           const disconnectedRoomName=room.name||voiceRoom?.room_name||'';
-          liveKitRoom=null;voiceJoined=false;liveKitAudio.forEach(x=>{try{x.pause?.();x.remove();}catch{}});liveKitAudio=[];liveKitAudioByParticipant.clear();renderVoiceBar();renderVoiceParticipants();showVoiceInvite();
+          liveKitRoom=null;voiceJoined=false;liveKitAudio.forEach(x=>{try{x.pause?.();x.srcObject=null;x.remove();}catch{}});liveKitAudio=[];liveKitAudioByParticipant.clear();liveKitAudioByTrack.clear();renderVoiceBar();renderVoiceParticipants();showVoiceInvite();
           syncVoicePresence(disconnectedRoomName,0);
           setTimeout(()=>syncVoicePresence(disconnectedRoomName,0),350);
         });
@@ -4953,7 +5343,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
         liveKitRoom=room; voiceJoined=true;
         await enableVoiceAudio(false);
         attachExistingAudioTracks(room);
-        try{await room.localParticipant.setMicrophoneEnabled(true);}catch(e){notify('Joined voice, but microphone permission was denied. You can still listen.','error');}
+        try{await room.localParticipant.setMicrophoneEnabled(true,COMMUNITY_AUDIO_CAPTURE_OPTIONS);}catch(e){notify('Joined voice, but microphone permission or publishing is blocked. You can still listen.','error');}
         startVoicePresenceWatcher();
         renderVoiceParticipants();renderVoiceBar();showVoiceInvite();
         notify('You joined the community voice room','success');
@@ -4973,9 +5363,14 @@ voiceMessageSend?.addEventListener("click",async()=>{
       try{
         const lp=liveKitRoom.localParticipant;
         const muted=participantIsMuted(lp);
-        // Personal microphone control is independent from the community's
-        // voice-start policy. Only a server-enforced moderation mute blocks enable.
-        await lp.setMicrophoneEnabled(muted);
+        const canPublish = lp?.permissions?.canPublish;
+        // A moderator-enforced mute revokes publish permission on the server.
+        // Do not repeatedly call setMicrophoneEnabled(true) while that remains true.
+        if(muted && canPublish === false){
+          notify('A community moderator has muted your microphone. You can unmute after they allow speaking.','error');
+          return;
+        }
+        await lp.setMicrophoneEnabled(muted,COMMUNITY_AUDIO_CAPTURE_OPTIONS);
         renderVoiceParticipants();
       }catch(e){
         const msg=String(e?.message||'');
@@ -4988,6 +5383,9 @@ voiceMessageSend?.addEventListener("click",async()=>{
       try{
         primeVoiceAudio();
         if(voiceRoom?.active){return joinVoice();}
+        // Finish loading the voice client before opening a server room, preventing
+        // slow CDN/mobile connections from leaving an empty room during startup.
+        await loadLiveKitClient();
         voiceRoom=await PF.startCommunityVoice(id);
         renderVoiceBar();
         showVoiceInvite();
@@ -5003,7 +5401,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
 
     $('#communityCompose').addEventListener('submit',async e=>{
       e.preventDefault();const input=$('#communityInput');const content=input.value.trim();if(!content)return;
-      try{input.disabled=true;await PF.sendCommunityMessage(id,content);input.value='';await renderMessages();}
+      try{input.disabled=true;const sent=await PF.sendCommunityMessage(id,content);input.value='';if(!appendCommunityMessage(sent))await renderMessages();}
       catch(err){notify(err.message||'Could not send message','error');}
       finally{input.disabled=false;input.focus();}
     });
@@ -5029,7 +5427,7 @@ voiceMessageSend?.addEventListener("click",async()=>{
 
     await renderMessages();
     await refreshCommunity();
-    chatStop=await PF.subscribeCommunityMessages(id,async()=>{try{await renderMessages();}catch{}});
+    chatStop=await PF.subscribeCommunityMessages(id,async message=>{try{if(!appendCommunityMessage(message))await renderMessages();}catch{}});
     let lastVoiceActive=!!voiceRoom?.active;
     voiceStop=await PF.subscribeCommunityVoice(id,async()=>{
       try{
