@@ -1,5 +1,11 @@
 # Rivo — Cloud Edition
 
+## Performance and safe deployment notes
+
+- Review `docs/PERFORMANCE-SECURITY-CHANGES.md` for the front-end optimizations and their limits.
+- Review `docs/DEPLOYMENT-CHECKLIST.md` before deploying or testing calls, messaging, image uploads, and community voice.
+- **Existing production database:** do not rerun the complete `supabase_schema.sql` just to deploy these front-end changes. The new `supabase_community_message_incremental_safety_v1.sql` is a separate, reviewable migration; it is not executed by the website and does not edit user/content rows. Apply it only after backing up and reviewing the deployment order.
+
 Rivo is now a **GitHub Pages + Supabase** project.
 
 GitHub Pages hosts the HTML/CSS/JavaScript. Supabase provides the shared backend:
