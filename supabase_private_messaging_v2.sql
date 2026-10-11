@@ -131,10 +131,13 @@ begin
   if p_client_message_key is null then raise exception 'Missing client message key'; end if;
   perform pg_advisory_xact_lock(hashtext(auth.uid()::text), hashtext(p_client_message_key::text));
 
-  select v, m into voice, msg
-  from public.rivo_voice_messages v join public.rivo_messages m on m.id = v.message_id
+  -- Keep each composite row variable as the sole INTO target of its query.
+  -- PostgreSQL rejects a record/composite target mixed with another target here.
+  select v.* into voice
+  from public.rivo_voice_messages v
   where v.sender_id = auth.uid() and v.client_message_key = p_client_message_key;
   if voice.message_id is not null then
+    select * into msg from public.rivo_messages where id = voice.message_id;
     select * into target from public.profiles where id = voice.receiver_id;
     return jsonb_build_object('id',msg.id,'sender_username',(select username from public.profiles where id=msg.sender_id),
       'receiver_username',target.username,'content','','message_type','voice','voice_path',voice.storage_path,
