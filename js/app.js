@@ -1843,16 +1843,23 @@
       }
 
       const a = e.target.closest?.("[data-call-action]");
-      const messageCallUser = window.__rivoActiveMessageUser || "";
-      if (a && messageCallUser) {
-        try {
-          await beginCall(
-            messageCallUser,
-            a.dataset.callAction || "audio"
-          );
-        } catch (err) {
-          notifyCall(err.message || "Could not call", "error");
-        }
+      if (!a) return;
+      e.preventDefault();
+      const messageCallUser = PF.normalizeUsername(a.dataset.callTarget || window.__rivoActiveMessageUser || "");
+      if (!messageCallUser) {
+        notifyCall("Choose a conversation before starting a call.", "error");
+        return;
+      }
+      if (a.dataset.callPending === "true") return;
+      a.dataset.callPending = "true";
+      a.disabled = true;
+      try {
+        await beginCall(messageCallUser, a.dataset.callAction || "audio");
+      } catch (err) {
+        notifyCall(err.message || "Could not call", "error");
+      } finally {
+        delete a.dataset.callPending;
+        a.disabled = !a.dataset.callTarget;
       }
     });
 
@@ -3235,6 +3242,7 @@ async function initProfile() {
     // requests. Those are enhancements, not prerequisites for opening a page.
     root.innerHTML = renderProfileCard(p, { isMe, friendProfiles, relationship }) + `<section class="profile-posts-wrap"><div class="section-head profile-posts-head"><div><div class="section-kicker">POSTS</div><h2>المنشورات</h2></div>${isMe ? `<a class="btn btn-sm" href="posts.html">+ New post</a>` : ""}</div><div id="profilePostFeed" class="post-feed"><div class="empty-state glass"><h2>Loading posts…</h2></div></div></section>`;
     bindPlayer(root);
+    try { window.dispatchEvent(new CustomEvent("rivo:profile-rendered", { detail: { username: p.username } })); } catch {}
     if (!isMe) await bindProfilePresence(p.username).catch(() => {});
     bindProfileActions(p);
     $(`[data-friends-open]`)?.addEventListener("click", () => openFriendsModal(friendProfiles));
@@ -3481,6 +3489,22 @@ async function initProfile() {
     const messagesLayout = document.querySelector(".messages-layout");
     const mobileBack = $("#messageMobileBack");
     if (!list || !thread || !title || !form || !input || !status || !messagesLayout) return;
+    const messageCallButtons = $$("[data-call-action]", messagesLayout);
+    const setMessageCallTarget = username => {
+      const target = PF.normalizeUsername(username || "");
+      messageCallButtons.forEach(button => {
+        if (target) {
+          button.dataset.callTarget = target;
+          button.disabled = false;
+          button.removeAttribute("aria-disabled");
+        } else {
+          delete button.dataset.callTarget;
+          button.disabled = true;
+          button.setAttribute("aria-disabled", "true");
+        }
+      });
+    };
+    setMessageCallTarget("");
 
     let activeUser = "";
     let activeUserId = "";
@@ -3514,6 +3538,59 @@ async function initProfile() {
 
     const scrollThread = () => { thread.scrollTop = thread.scrollHeight; };
     const isNearThreadBottom = () => (thread.scrollHeight - thread.scrollTop - thread.clientHeight) < 96;
+    const patchRealtimeMessage = message => {
+      const id = String(message?.id ?? "");
+      const cached = renderedMessageData.get(id);
+      if (!id || !cached) return { patched: false, contentChanged: false, editedChanged: false };
+
+      const previousContent = String(cached.content || "");
+      const previousEditedAt = String(cached.edited_at || "");
+      const isTransportMarker = message.content === "[voice]" || message.content === "[image]";
+      const contentChanged = message.content !== undefined && !isTransportMarker && String(message.content || "") !== previousContent;
+      const editedChanged = message.edited_at !== undefined && String(message.edited_at || "") !== previousEditedAt;
+
+      if (message.read_at !== undefined) cached.read_at = message.read_at;
+      if (message.edited_at !== undefined) cached.edited_at = message.edited_at;
+      if (contentChanged) cached.content = message.content;
+
+      const bubble = thread.querySelector(`.message-bubble[data-message-id="${CSS.escape(id)}"]`);
+      if (!bubble) return { patched: false, contentChanged, editedChanged };
+      bubble.dataset.readAt = String(cached.read_at || "");
+      bubble.dataset.editedAt = String(cached.edited_at || "");
+
+      if (contentChanged) {
+        const content = bubble.querySelector(".message-content");
+        if (!content || cached.message_type === "image" || cached.message_type === "voice") {
+          return { patched: false, contentChanged, editedChanged };
+        }
+        content.textContent = PF.normalizeMessageText(cached.content);
+        content.classList.toggle("emoji-only", PF.isEmojiOnly(cached.content));
+      }
+
+      const meta = bubble.querySelector(".message-meta");
+      if (!meta) return { patched: false, contentChanged, editedChanged };
+      let editedLabel = meta.querySelector(".message-edited-label");
+      if (cached.edited_at && !editedLabel) {
+        editedLabel = document.createElement("span");
+        editedLabel.className = "message-edited-label";
+        editedLabel.textContent = "Edited";
+        const time = meta.querySelector("time");
+        if (time) meta.insertBefore(editedLabel, time); else meta.appendChild(editedLabel);
+      } else if (!cached.edited_at && editedLabel) {
+        editedLabel.remove();
+      }
+
+      const readState = meta.querySelector(".message-read-state");
+      if (readState) {
+        const isRead = Boolean(cached.read_at);
+        readState.classList.toggle("is-read", isRead);
+        readState.classList.toggle("is-sent", !isRead);
+        readState.textContent = isRead ? "✓✓" : "✓";
+        readState.setAttribute("aria-label", isRead ? "Read" : "Sent");
+        readState.title = isRead ? "Read" : "Sent";
+      }
+      return { patched: true, contentChanged, editedChanged };
+    };
     const compareMessageDesc = (a, b) => {
       const timeDiff = Date.parse(b?.created_at || 0) - Date.parse(a?.created_at || 0);
       if (Number.isFinite(timeDiff) && timeDiff !== 0) return timeDiff;
@@ -4050,14 +4127,29 @@ async function initProfile() {
       } else scrollThread();
     };
 
+    let pagingSetupNoticeShown = false;
     async function loadOlderMessages() {
-      if (!activeUser || !messagePageRpcAvailable || !hasOlderMessages || !olderMessageCursor || loadingOlderMessages) return;
+      if (!activeUser || loadingOlderMessages) return;
+      if (!messagePageRpcAvailable) {
+        if (!pagingSetupNoticeShown) {
+          pagingSetupNoticeShown = true;
+          notify("Older messages need the Rivo v4 message-history database migration.", "error");
+        }
+        return;
+      }
+      if (!hasOlderMessages || !olderMessageCursor) return;
       const username = activeUser;
       const requestToken = threadLoadToken;
       const cursor = { ...olderMessageCursor };
       loadingOlderMessages = true;
       const beforeHeight = thread.scrollHeight;
       const beforeTop = thread.scrollTop;
+      const loader = document.createElement("div");
+      loader.className = "message-history-loader";
+      loader.setAttribute("role", "status");
+      loader.setAttribute("aria-live", "polite");
+      loader.textContent = "Loading older messages…";
+      thread.prepend(loader);
       try {
         const raw = await PF.getMessagesPage(username, cursor, MESSAGE_PAGE_SIZE);
         if (activeUser !== username || requestToken !== threadLoadToken) return;
@@ -4073,13 +4165,20 @@ async function initProfile() {
         const fragment = document.createDocumentFragment();
         newRows.forEach(row => fragment.appendChild(row));
         thread.prepend(fragment);
-        thread.scrollTop = Math.max(0, beforeTop + (thread.scrollHeight - beforeHeight));
+        loader.remove();
+        const addedHeight = Math.max(0, thread.scrollHeight - beforeHeight);
+        const userMovedWhileLoading = Math.abs(thread.scrollTop - beforeTop) > 12;
+        const anchorTop = userMovedWhileLoading ? thread.scrollTop : beforeTop;
+        thread.scrollTop = Math.max(0, anchorTop + addedHeight);
         hasOlderMessages = page.length > MESSAGE_PAGE_SIZE;
         if (rows.length) olderMessageCursor = { created_at: rows[rows.length - 1].created_at, id: rows[rows.length - 1].id };
         else { hasOlderMessages = false; olderMessageCursor = null; }
       } catch (error) {
         notify(error?.message || "Could not load older messages.", "error");
-      } finally { loadingOlderMessages = false; }
+      } finally {
+        loader.remove();
+        loadingOlderMessages = false;
+      }
     }
 
     async function loadConversations() {
@@ -4147,6 +4246,7 @@ async function initProfile() {
       if (window.innerWidth <= 760) document.body.classList.add("rivo-chat-fullscreen");
       window.__rivoActiveMessageUser = PF.normalizeUsername(username);
       activeUser = PF.normalizeUsername(username);
+      setMessageCallTarget(activeUser);
       const c = conversations.find(x => x.username === activeUser);
       activeUserId = c?.userId || "";
       clearTimeout(typingStopTimer);
@@ -4191,7 +4291,10 @@ async function initProfile() {
         renderThread(messages);
         updateThreadPresence();
         applyComposeLock(peerProfile);
-        PF.markMessagesRead(nextUsername).then(changed => { if (changed > 0 && activeUser === nextUsername && requestToken === threadLoadToken) refreshOpenThread(); }).catch(() => {});
+        // Marking incoming messages read only affects read receipts on the sender's
+        // side. Do not redraw the whole thread here; realtime patches those receipts
+        // in place, which keeps scroll position stable on mobile.
+        PF.markMessagesRead(nextUsername).catch(() => {});
         if (!input.disabled) input.focus();
       } catch (e) { if (requestToken === threadLoadToken) { thread.innerHTML = `<div class="message-list-empty">Could not load messages. ${esc(e.message || "Try again.")}</div>`; notify(e.message, "error"); } }
     }
@@ -4279,6 +4382,7 @@ async function initProfile() {
       document.body.classList.remove("rivo-chat-fullscreen");
       activeUser = "";
       activeUserId = "";
+      setMessageCallTarget("");
       threadLoadToken++;
       olderMessageCursor = null;
       hasOlderMessages = false;
@@ -4499,22 +4603,22 @@ messageImageInput?.addEventListener("change", async () => {
       const isOwnEcho = msg.sender_id === me.id;
       const eventType = msg.__rivoEventType || "INSERT";
 
+      let refreshConversationList = eventType === "DELETE";
       if (isActiveConversation) {
-        // Remove deleted rows from the local paged-history cache, otherwise a refresh
-        // could re-render an already hidden/deleted older message from memory.
+        // Keep the current DOM and scroll position for normal read-receipt and text-edit
+        // UPDATE events. Rebuilding the entire thread for each read_at write made mobile
+        // scrolling flash/jump and could look like the chat was reloading.
         if (eventType === "DELETE") {
           renderedMessageData.delete(String(msg.id));
           renderedMessageIds.delete(String(msg.id));
           thread.querySelector(`[data-message-id="${CSS.escape(String(msg.id))}"]`)?.closest(".message-row")?.remove();
         } else if (eventType === "UPDATE") {
-          const cached = renderedMessageData.get(String(msg.id));
-          if (cached) {
-            if (msg.edited_at !== undefined) cached.edited_at = msg.edited_at;
-            if (msg.read_at !== undefined) cached.read_at = msg.read_at;
-            if (msg.content && msg.content !== "[voice]" && msg.content !== "[image]") cached.content = msg.content;
+          const patch = patchRealtimeMessage(msg);
+          refreshConversationList = patch.contentChanged || patch.editedChanged;
+          if (msg.content === "[voice]" || msg.content === "[image]" || (!patch.patched && renderedMessageData.has(String(msg.id)))) {
+            await refreshOpenThread();
           }
-        }
-        if (eventType === "UPDATE" || eventType === "DELETE" || msg.content === "[voice]" || msg.content === "[image]") {
+        } else if (msg.content === "[voice]" || msg.content === "[image]") {
           await refreshOpenThread();
         } else {
           appendMessage({
@@ -4535,7 +4639,9 @@ messageImageInput?.addEventListener("change", async () => {
         if (eventType === "DELETE") {
           await loadConversations();
         } else if (eventType === "UPDATE") {
-          if (isActiveConversation) await loadConversations();
+          // A read receipt does not change conversation previews. Avoid a redundant
+          // conversation-list round trip for every message marked as read.
+          if (refreshConversationList || !isActiveConversation) await loadConversations();
         } else if (!updateConversationFromMessage(msg, otherId)) {
           await loadConversations();
         }
