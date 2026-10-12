@@ -7330,3 +7330,15 @@ html[data-template="pixel-arcade"] .section-block{
  .message-image-viewer>img{max-width:96vw;max-height:calc(84dvh - 54px)}
  .message-image-viewer-download{font-size:12px;padding:0 12px}
 }
+
+
+/* Rivo v4 — clear space between the post composer and the first Home feed card. */
+#postComposer + #postFeed{margin-top:16px;}
+#postFeed{display:grid;gap:16px;}
+
+/* Messenger-style private-photo viewer zoom controls. */
+.message-image-viewer-stage{width:100%;height:100%;min-height:0;display:grid;place-items:center;overflow:auto;overscroll-behavior:contain;touch-action:pan-x pan-y;}
+.message-image-viewer-stage>img{display:block;max-width:min(96vw,1400px);max-height:calc(88dvh - 88px);object-fit:contain;transform-origin:center center;transition:transform .08s linear;user-select:none;-webkit-user-drag:none;}
+.message-image-viewer-tools .message-image-viewer-zoom{pointer-events:auto;min-width:42px;height:44px;padding:0 10px;border:1px solid rgba(255,255,255,.22);border-radius:13px;background:rgba(20,20,20,.9);color:#fff;font:inherit;font-size:16px;font-weight:800;cursor:pointer;}
+.message-image-viewer-tools .message-image-viewer-zoom:disabled{opacity:.45;cursor:not-allowed;}
+@media(max-width:600px){.message-image-viewer-tools{gap:5px;left:8px;right:8px}.message-image-viewer-tools .message-image-viewer-zoom{min-width:36px;height:40px;padding-inline:7px}.message-image-viewer-download{padding-inline:9px!important;font-size:11px!important}.message-image-viewer-tools .message-image-viewer-close{width:40px;height:40px;flex:0 0 40px}.message-image-viewer-stage>img{max-width:96vw;max-height:calc(84dvh - 75px)}}
