@@ -293,3 +293,9 @@ Run `supabase_communities_v6_mobile_voice_security.sql` after the Communities V5
 
 ### V31 Profile Animation
 The Profile Editor now treats `Profile Animation` as an independent cosmetic slot from `Avatar Frame`. Six premium profile animations are available: Meteor Shower, Lightning, Petal Drift, Moneyfall, Ocean Spray and Astral Dust. Existing internal IDs/store ownership records remain stable. Run `supabase_profile_animations_v31.sql` after the existing economy/profile migrations.
+
+## Chat & Call Fix v4 (staging-first)
+
+This build hardens direct-call signaling with participant-only `rivo_call_sessions` rows and server RPC transitions, prevents concurrent duplicate LiveKit connection setup, restores missed call state after a tab/network resumes, paginates private conversation history on upward scroll, and adds mouse-wheel/button/pinch zoom for private-message images. Home's composer/feed now has a clear gap.
+
+Before testing these features, review `docs/RIVO_V4_DEPLOYMENT_AR.md`. Apply `supabase_private_messaging_v2.sql` only if it has not already been applied successfully; then test `supabase_rivo_v4_call_security_message_pagination.sql` on staging. Redeploy `supabase/functions/rivo-livekit-token/index.ts`. This ZIP was not connected to the live Supabase project and no SQL was executed as part of the build.
