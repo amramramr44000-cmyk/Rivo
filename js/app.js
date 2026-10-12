@@ -646,6 +646,9 @@
     let qualityTimer = null;
     let callStartedAt = 0;
     let inboxClose = null;
+    let callStartPending = false;
+    let callEndingPromise = null;
+    let incomingOfferPendingId = "";
 
     const ensureUI = () => {
       let h = $("#rivoCallUI");
@@ -1300,6 +1303,16 @@
     async function connectMedia() {
       const callState = active;
       if (!callState?.roomName) throw new Error("Call room is missing.");
+      if (callState.connected) return true;
+      if (callState.connectPromise) return callState.connectPromise;
+      const promise = connectMediaAttempt(callState);
+      callState.connectPromise = promise;
+      try { return await promise; }
+      finally { if (callState.connectPromise === promise) callState.connectPromise = null; }
+    }
+
+    async function connectMediaAttempt(callState) {
+      if (!callState?.roomName || active !== callState) return false;
       if (!LK) LK = await loadLiveKitClient();
       if (!LK) throw new Error("LiveKit client failed to load.");
       if (active !== callState) return false;
@@ -1346,6 +1359,10 @@
             if (publication?.source === LK.Track.Source.Microphone) {
               callState.micAvailable = true;
               callState.micTrack = publication.track || callState.micTrack;
+              if (callState.connected) state("Connected", true);
+              const muteButton = E().mute;
+              muteButton?.classList.remove("is-off");
+              muteButton?.setAttribute("aria-label", "Mute microphone");
             }
           } catch {}
         });
@@ -1356,7 +1373,16 @@
           if (!stillCurrent()) return;
           try {
             if (publication?.source === LK.Track.Source.Microphone && callState.micEnabled !== false) {
-              setTimeout(() => { if (stillCurrent()) ensureMicrophonePublished(room, callState); }, 250);
+              callState.micAvailable = false;
+              if (callState.connected) state("Connected · restoring microphone…");
+              setTimeout(async () => {
+                if (!stillCurrent()) return;
+                const restored = await ensureMicrophonePublished(room, callState);
+                if (stillCurrent() && !restored) {
+                  state("Connected · microphone unavailable");
+                  notifyCall("Your microphone stopped publishing. Check device permission or select another microphone.", "error");
+                }
+              }, 250);
             } else if (publication?.source === LK.Track.Source.Camera) {
               E().stage.querySelectorAll(".call-local-video.live").forEach(video => {
                 try { video.pause?.(); video.srcObject = null; video.remove(); } catch {}
@@ -1534,88 +1560,96 @@
       return true;
     }
 
-    async function beginCall(username, type = "audio") {
-      if (active) return notifyCall("A call is already active.", "error");
-
-      // Fetch the SDK and resolve the participants concurrently to reduce the
-      // connection-start delay without downloading the SDK on ordinary page views.
-      const [me, peer, liveKitClient] = await Promise.all([
-        PF.currentProfile(), PF.getCallUser(username), loadLiveKitClient()
-      ]);
-      LK = liveKitClient;
-      if (!LK) throw new Error("Call system is unavailable.");
-      const isVideo = type === "video";
-      const callId = crypto.randomUUID();
-      const roomName = `rivo-${callId}`;
-
-      const e = E();
-      person(peer);
-      e.title.textContent = isVideo ? "Starting video call" : "Starting voice call";
-      e.sub.textContent = isVideo
-        ? "Video · waiting for answer"
-        : "Voice · waiting for answer";
-      state("Ringing…");
-      e.incoming.classList.add("hidden");
-      show();
-
-      active = {
-        role: "caller",
-        meId: me.id,
-        peerId: peer.userId,
-        peer,
-        callId,
-        isVideo,
-        roomName,
-        connected: false,
-        inbox: null,
-        channel: null,
-        room: null,
-        audioEls: [],
-        remoteAudioEl: null,
-        remoteAudioTrack: null,
-        remoteAudioFallbackEl: null,
-        micTrack: null,
-        micEnabled: true,
-        inputDeviceId: "default",
-        outputDeviceId: "default"
-      };
-
+    async function sendBusyForOffer(msg, meId) {
+      if (!msg?.callId || !msg?.from || !meId || !msg?.payload?.roomName) return;
+      // Never trust a client-provided offer alone: verify the matching pending
+      // session before changing its status through the authenticated RPC.
       try {
-        active.channel = await PF.openCallChannel(
-          `rivo-call-${callId}`,
-          handleSignal
-        );
-
-        active.inbox = await PF.openCallChannel(
-          `rivo-call-inbox-${peer.userId}`,
-          handleSignal
-        );
-
-        await active.inbox.send({
-          callId,
-          from: me.id,
-          to: peer.userId,
-          type: "offer",
-          payload: {
-            isVideo,
-            roomName,
-            displayName: me.displayName || me.username,
-            avatar: me.avatar || "",
-            username: me.username
-          }
-        });
+        const valid = await PF.validateIncomingCallSession(msg.callId, msg.from, msg.payload.roomName, msg.payload.username, msg.payload.isVideo);
+        if (!valid) return;
+      } catch { return; }
+      // The authenticated RPC updates only this participant's pending session;
+      // Postgres Changes notifies the caller without opening a writable broadcast topic.
+      try {
+        const updated = await PF.updateCallSession(msg.callId, "busy");
+        if (!updated) console.info("[Rivo Calls] Pending call was already handled.");
       } catch (err) {
-        notifyCall(err.message || "Could not start the call", "error");
-        endCall(false);
+        console.warn("[Rivo Calls] Could not mark incoming call busy", err);
+      }
+    }
+
+    async function beginCall(username, type = "audio") {
+      if (active || callStartPending) return notifyCall("A call is already active or starting.", "error");
+      if (callEndingPromise) { try { await callEndingPromise; } catch {} }
+      if (active || callStartPending) return notifyCall("A call is already active or starting.", "error");
+      callStartPending = true;
+      let callState = null;
+      try {
+        // Keep one call transition at a time. This prevents a second click from
+        // creating another room while participant/profile requests are pending.
+        const [me, peer, liveKitClient] = await Promise.all([
+          PF.currentProfile(), PF.getCallUser(username), loadLiveKitClient()
+        ]);
+        if (active) throw new Error("A call is already active.");
+        LK = liveKitClient;
+        if (!LK) throw new Error("Call system is unavailable.");
+        const isVideo = type === "video";
+        const callId = crypto.randomUUID();
+        const roomName = `rivo-${callId}`;
+
+        const e = E();
+        person(peer);
+        e.title.textContent = isVideo ? "Starting video call" : "Starting voice call";
+        e.sub.textContent = isVideo ? "Video · waiting for answer" : "Voice · waiting for answer";
+        state("Ringing…");
+        e.incoming.classList.add("hidden");
+        show();
+
+        callState = {
+          role: "caller", meId: me.id, peerId: peer.userId, peer, callId, isVideo, roomName,
+          connected: false, inbox: null, channel: null, room: null, audioEls: [],
+          remoteAudioEl: null, remoteAudioTrack: null, remoteAudioFallbackEl: null,
+          micTrack: null, micEnabled: true, inputDeviceId: "default", outputDeviceId: "default"
+        };
+        active = callState;
+
+        await PF.createCallSession(callId, peer.username || username, roomName, isVideo);
+        if (active === callState) {
+          callState.ringTimer = setTimeout(() => {
+            if (active === callState && callState.role === "caller" && !callState.connected) {
+              notifyCall("No answer. The call was ended.");
+              endCall(true);
+            }
+          }, 60000);
+        }
+        if (active !== callState) {
+          try { await PF.updateCallSession(callId, "ended"); } catch {}
+          return;
+        }
+        // The insert into rivo_call_sessions is the only offer signal. It is
+        // visible to authenticated participants only under RLS; no public topic.
+      } catch (err) {
+        const message = err?.message || "Could not start the call";
+        if (active === callState && callState) {
+          await endCall(false);
+          notifyCall(message, "error");
+        } else notifyCall(message, "error");
+      } finally {
+        callStartPending = false;
       }
     }
 
     async function handleSignal(msg) {
       const callState = active;
-      if (!callState || msg?.callId !== callState.callId) return;
+      if (!callState || msg?.callId !== callState.callId || active !== callState) return;
+      if (String(msg.from || "") !== String(callState.peerId || "") || String(msg.to || "") !== String(callState.meId || "")) return;
 
       if (msg.type === "accept" && callState.role === "caller") {
         try {
+          clearTimeout(callState.ringTimer);
+          callState.ringTimer = null;
+          // The callee's authenticated status transition to 'active' is the
+          // accept signal; do not write 'active' again from the caller.
           state("Connecting…");
           await connectMedia();
         } catch (err) {
@@ -1625,107 +1659,71 @@
         }
       } else if ((msg.type === "decline" || msg.type === "hangup") && active === callState) {
         notifyCall(msg.type === "decline" ? "Call declined." : "Call ended.");
-        await endCall(false);
+        await endCall(false, false);
       } else if (msg.type === "busy" && active === callState) {
         notifyCall("This person is already on a call.", "error");
-        await endCall(false);
+        await endCall(false, false);
       }
     }
 
     async function showIncoming(msg) {
       const me = await PF.currentProfile();
       const u = msg.payload?.username || "";
-
-      if (!u || !(await PF.canReceiveCallFrom(u))) return;
-
+      const roomName = String(msg.payload?.roomName || "");
+      if (!u || !msg?.callId || !msg?.from || msg.to !== me?.id ||
+          !(await PF.canReceiveCallFrom(u)) ||
+          !(await PF.validateIncomingCallSession(msg.callId, msg.from, roomName, u, msg.payload?.isVideo))) {
+        await sendBusyForOffer(msg, me?.id);
+        return;
+      }
+      // Async profile/privacy checks may finish after another call started.
+      if (active || callStartPending || callEndingPromise) {
+        await sendBusyForOffer(msg, me.id);
+        return;
+      }
       const peer = await PF.getProfile(u).catch(() => null);
+      if (active || callStartPending || callEndingPromise) {
+        await sendBusyForOffer(msg, me.id);
+        return;
+      }
       const e = E();
-
-      person(
-        peer || {
-          username: u,
-          displayName: msg.payload?.displayName || "Contact",
-          avatar: msg.payload?.avatar || ""
-        }
-      );
-
-      e.title.textContent = msg.payload?.isVideo
-        ? "Incoming video call"
-        : "Incoming voice call";
-
+      person(peer || { username: u, displayName: msg.payload?.displayName || "Contact", avatar: msg.payload?.avatar || "" });
+      e.title.textContent = msg.payload?.isVideo ? "Incoming video call" : "Incoming voice call";
       e.sub.textContent = "Incoming call";
       state("Calling…");
       e.incoming.classList.remove("hidden");
       show();
 
       active = {
-        role: "callee",
-        meId: me.id,
-        peerId: msg.from,
-        peer: peer || {
-          username: u,
-          displayName: msg.payload?.displayName || "Contact"
-        },
-        callId: msg.callId,
-        isVideo: !!msg.payload?.isVideo,
-        roomName: msg.payload?.roomName,
-        connected: false,
-        inbox: null,
-        channel: null,
-        room: null,
-        audioEls: [],
-        remoteAudioEl: null,
-        remoteAudioTrack: null,
-        remoteAudioFallbackEl: null,
-        micTrack: null,
-        micEnabled: true,
-        inputDeviceId: "default",
-        outputDeviceId: "default"
+        role: "callee", meId: me.id, peerId: msg.from,
+        peer: peer || { username: u, displayName: msg.payload?.displayName || "Contact" },
+        callId: msg.callId, isVideo: !!msg.payload?.isVideo, roomName,
+        connected: false, inbox: null, channel: null, room: null, audioEls: [],
+        remoteAudioEl: null, remoteAudioTrack: null, remoteAudioFallbackEl: null,
+        micTrack: null, micEnabled: true, inputDeviceId: "default", outputDeviceId: "default"
       };
     }
 
     async function acceptIncoming() {
       const callState = active;
-      if (!callState || callState.role !== "callee" || callState.accepting) return;
+      if (!callState || callState.role !== "callee" || callState.accepting || callState.ending) return;
       callState.accepting = true;
-
       const e = E();
       const acceptButton = e.incoming.querySelector("[data-call-accept]");
       if (acceptButton) { acceptButton.disabled = true; acceptButton.textContent = "Connecting…"; }
       e.incoming.classList.add("hidden");
       state(callState.isVideo ? "Preparing video call…" : "Preparing voice call…");
-
       try {
         if (!LK) LK = await loadLiveKitClient();
         if (active !== callState) return;
         if (!LK) throw new Error("Call system is unavailable.");
-
-        callState.channel = await PF.openCallChannel(
-          `rivo-call-${callState.callId}`,
-          handleSignal
-        );
-        if (active !== callState) {
-          await callState.channel?.close?.();
-          return;
-        }
-
-        await callState.channel.send({
-          callId: callState.callId,
-          from: callState.meId,
-          to: callState.peerId,
-          type: "accept"
-        });
+        const updated = await PF.updateCallSession(callState.callId, "active");
         if (active !== callState) return;
-
+        if (!updated) throw new Error("This call expired. Ask the caller to call again.");
         await connectMedia();
-        if (active === callState) {
-          try { await callState.room?.startAudio?.(); } catch {}
-        }
+        if (active === callState) { try { await callState.room?.startAudio?.(); } catch {} }
       } catch (err) {
-        if (active === callState) {
-          notifyCall(err.message || "Could not accept the call", "error");
-          await endCall(true);
-        }
+        if (active === callState) { notifyCall(err.message || "Could not accept the call", "error"); await endCall(true); }
       } finally {
         callState.accepting = false;
         if (acceptButton) { acceptButton.disabled = false; acceptButton.textContent = "Accept"; }
@@ -1735,51 +1733,37 @@
     async function declineIncoming() {
       const callState = active;
       if (!callState || callState.role !== "callee") return;
-      try {
-        const box = await PF.openCallChannel(`rivo-call-inbox-${callState.peerId}`);
-        if (active !== callState) { await box.close(); return; }
-        await box.send({
-          callId: callState.callId,
-          from: callState.meId,
-          to: callState.peerId,
-          type: "decline"
-        });
-        await box.close();
-      } catch {}
-      if (active === callState) await endCall(false);
+      try { await PF.updateCallSession(callState.callId, "declined"); }
+      catch (err) { console.warn("[Rivo Calls] Could not decline call", err); }
+      if (active === callState) await endCall(false, false);
     }
 
-    async function endCall(send = true) {
+    async function endCall(_send = true, updateSession = true) {
+      if (callEndingPromise) return callEndingPromise;
       const old = active;
+      if (!old) return;
+      old.ending = true;
+      if (old.ringTimer) clearTimeout(old.ringTimer);
+      old.ringTimer = null;
       active = null;
-
-      try {
-        if (send && old?.channel) {
-          await old.channel.send({
-            callId: old.callId,
-            from: old.meId,
-            to: old.peerId,
-            type: "hangup"
-          });
+      const cleanup = (async () => {
+        // Session status itself is the hangup event. Remote-originated status
+        // changes pass updateSession=false to avoid writing the same event back.
+        if (updateSession && old.callId) {
+          try { await PF.updateCallSession(old.callId, "ended"); }
+          catch (error) { console.warn("[Rivo Calls] Could not finalize call session", error); }
         }
-      } catch {}
-
-      try {
-        closeRouteMenu();
-        if (old?.audioEls?.length) {
-          old.audioEls.forEach(el => {
-            try { el.srcObject = null; el.remove(); } catch {}
-          });
-        }
-        await cleanupRemoteAudio(old);
-        try { old?.micTrack?.stop?.(); } catch {}
-
-        await old?.inbox?.close?.();
-        await old?.channel?.close?.();
-        await old?.room?.disconnect?.();
-      } catch {}
-
-      closeUI();
+        try { closeRouteMenu(); } catch {}
+        try { old.audioEls?.forEach(el => { try { el.srcObject = null; el.remove(); } catch {} }); } catch {}
+        try { await cleanupRemoteAudio(old); } catch {}
+        try { old.micTrack?.stop?.(); } catch {}
+        try { await old.inbox?.close?.(); } catch {}
+        try { await old.channel?.close?.(); } catch {}
+        try { await old.room?.disconnect?.(); } catch {}
+        if (!active) closeUI();
+      })();
+      callEndingPromise = cleanup;
+      try { await cleanup; } finally { if (callEndingPromise === cleanup) callEndingPromise = null; }
     }
 
     async function toggleMute() {
@@ -1882,19 +1866,54 @@
         const me = await PF.currentProfile();
         if (!me?.id) return;
 
-        inboxClose = await PF.subscribeCallInbox(
-          me.id,
-          async msg => {
-            if (msg.type === "offer" && msg.to === me.id) {
-              await showIncoming(msg);
-            } else if (active && msg.callId === active.callId) {
-              await handleSignal(msg);
-            }
+        const dispatchOffer = async msg => {
+          if (!msg || msg.type !== "offer" || String(msg.to) !== String(me.id)) return;
+          if (active?.callId === msg.callId || incomingOfferPendingId === msg.callId) return;
+          if (active || callStartPending || callEndingPromise || incomingOfferPendingId) {
+            await sendBusyForOffer(msg, me.id);
+            return;
           }
-        );
+          incomingOfferPendingId = String(msg.callId);
+          try { await showIncoming(msg); }
+          finally { if (incomingOfferPendingId === String(msg.callId)) incomingOfferPendingId = ""; }
+        };
+        inboxClose = await PF.subscribeCallInbox(me.id, async msg => {
+          if (msg.type === "offer") await dispatchOffer(msg);
+          else if (active && msg.callId === active.callId) await handleSignal(msg);
+        });
 
+        // Reconcile once after subscribing and on resume/network restoration in case
+        // the browser was asleep or disconnected when the INSERT event was emitted.
+        let pendingCallCheck = false;
+        const recoverPendingCall = async () => {
+          if (pendingCallCheck || document.visibilityState === "hidden") return;
+          pendingCallCheck = true;
+          try {
+            const currentCall = active;
+            if (currentCall?.callId && typeof PF.getCallSessionStatus === "function") {
+              const row = await PF.getCallSessionStatus(currentCall.callId);
+              if (active === currentCall && row?.updated_by && String(row.updated_by) !== String(me.id)) {
+                const type = row.status === "active" ? "accept" : row.status === "declined" ? "decline" : row.status === "busy" ? "busy" : row.status === "ended" ? "hangup" : "";
+                const to = String(row.updated_by) === String(row.caller_id) ? row.callee_id : row.caller_id;
+                if (type && String(to) === String(me.id) && (type !== "accept" || !currentCall.connected)) {
+                  await handleSignal({
+                    callId: String(row.call_id), from: String(row.updated_by), to: String(to), type,
+                    payload: { roomName: row.room_name, username: row.caller_username, isVideo: !!row.is_video }
+                  });
+                }
+              }
+            }
+            const pending = await PF.getPendingCall();
+            if (pending) await dispatchOffer(pending);
+          } catch (error) { console.warn("[Rivo Calls] Could not reconcile call state", error); }
+          finally { pendingCallCheck = false; }
+        };
+        await recoverPendingCall();
+        window.addEventListener("online", recoverPendingCall);
+        document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") recoverPendingCall(); });
         window.addEventListener("beforeunload", () => {
           try { inboxClose?.(); } catch {}
+          window.removeEventListener("online", recoverPendingCall);
         });
       } catch (e) {
         console.warn("[Rivo Calls] inbox unavailable", e);
@@ -3472,6 +3491,13 @@ async function initProfile() {
     let typingTimer = null;
     let typingStopTimer = null;
     const renderedMessageIds = new Set();
+    const renderedMessageData = new Map();
+    const MESSAGE_PAGE_SIZE = 40;
+    let olderMessageCursor = null;
+    let hasOlderMessages = false;
+    let loadingOlderMessages = false;
+    let messagePageRpcAvailable = true;
+    let threadLoadToken = 0;
     let mediaRecorder = null;
     let recordingStream = null;
     let recordingStartedAt = 0;
@@ -3487,6 +3513,27 @@ async function initProfile() {
     if (messageImageBtn) messageImageBtn.disabled = true;
 
     const scrollThread = () => { thread.scrollTop = thread.scrollHeight; };
+    const isNearThreadBottom = () => (thread.scrollHeight - thread.scrollTop - thread.clientHeight) < 96;
+    const compareMessageDesc = (a, b) => {
+      const timeDiff = Date.parse(b?.created_at || 0) - Date.parse(a?.created_at || 0);
+      if (Number.isFinite(timeDiff) && timeDiff !== 0) return timeDiff;
+      return (Number(b?.id) || 0) - (Number(a?.id) || 0);
+    };
+    const pageMessages = async username => {
+      if (messagePageRpcAvailable && typeof PF.getMessagesPage === "function") {
+        try {
+          const rows = await PF.getMessagesPage(username, null, MESSAGE_PAGE_SIZE);
+          return { rows: Array.isArray(rows) ? rows : [], hasMore: Array.isArray(rows) && rows.length > MESSAGE_PAGE_SIZE, paginated: true };
+        } catch (error) {
+          const missingRpc = error?.code === "PGRST202" || /rivo_get_messages_page|could not find the function|function .*does not exist/i.test(String(error?.message || ""));
+          if (!missingRpc) throw error;
+          messagePageRpcAvailable = false;
+          console.warn("[Rivo Messages] Message paging migration not installed; using legacy recent-message fetch.");
+        }
+      }
+      const rows = await PF.getMessages(username, 80);
+      return { rows: Array.isArray(rows) ? rows : [], hasMore: false, paginated: false };
+    };
     let activeMessageImageViewer = null;
     const closeMessageImageViewer = () => {
       if (!activeMessageImageViewer) return;
@@ -3514,6 +3561,21 @@ async function initProfile() {
 
         const toolbar = document.createElement("div");
         toolbar.className = "message-image-viewer-tools";
+        const zoomOut = document.createElement("button");
+        zoomOut.type = "button";
+        zoomOut.className = "message-image-viewer-zoom";
+        zoomOut.textContent = "−";
+        zoomOut.setAttribute("aria-label", "Zoom out");
+        const zoomReset = document.createElement("button");
+        zoomReset.type = "button";
+        zoomReset.className = "message-image-viewer-zoom";
+        zoomReset.textContent = "100%";
+        zoomReset.setAttribute("aria-label", "Reset zoom");
+        const zoomIn = document.createElement("button");
+        zoomIn.type = "button";
+        zoomIn.className = "message-image-viewer-zoom";
+        zoomIn.textContent = "+";
+        zoomIn.setAttribute("aria-label", "Zoom in");
         const download = document.createElement("button");
         download.type = "button";
         download.className = "message-image-viewer-download";
@@ -3530,9 +3592,51 @@ async function initProfile() {
         full.alt = "Photo message";
         full.decoding = "async";
         full.draggable = false;
-        toolbar.append(download, close);
-        viewer.append(toolbar, full);
-        const onKeyDown = event => { if (event.key === "Escape") closeMessageImageViewer(); };
+        const stage = document.createElement("div");
+        stage.className = "message-image-viewer-stage";
+        stage.appendChild(full);
+        let zoom = 1;
+        let pinchStartDistance = 0;
+        let pinchStartZoom = 1;
+        const applyZoom = value => {
+          zoom = Math.max(1, Math.min(4, Math.round(value * 100) / 100));
+          full.style.transform = `scale(${zoom})`;
+          full.style.cursor = zoom > 1 ? "zoom-in" : "default";
+          zoomReset.textContent = `${Math.round(zoom * 100)}%`;
+          zoomOut.disabled = zoom <= 1;
+          zoomIn.disabled = zoom >= 4;
+        };
+        zoomOut.onclick = () => applyZoom(zoom - 0.25);
+        zoomIn.onclick = () => applyZoom(zoom + 0.25);
+        zoomReset.onclick = () => applyZoom(1);
+        stage.addEventListener("wheel", event => {
+          // The image viewer owns the wheel while open, so desktop users can
+          // zoom naturally without needing Ctrl/Meta. The page behind it stays still.
+          event.preventDefault();
+          applyZoom(zoom + (event.deltaY < 0 ? 0.15 : -0.15));
+        }, { passive: false });
+        stage.addEventListener("touchstart", event => {
+          if (event.touches.length === 2) {
+            pinchStartDistance = Math.hypot(event.touches[0].clientX - event.touches[1].clientX, event.touches[0].clientY - event.touches[1].clientY);
+            pinchStartZoom = zoom;
+          }
+        }, { passive: true });
+        stage.addEventListener("touchmove", event => {
+          if (event.touches.length !== 2 || !pinchStartDistance) return;
+          event.preventDefault();
+          const distance = Math.hypot(event.touches[0].clientX - event.touches[1].clientX, event.touches[0].clientY - event.touches[1].clientY);
+          applyZoom(pinchStartZoom * distance / pinchStartDistance);
+        }, { passive: false });
+        stage.addEventListener("touchend", () => { pinchStartDistance = 0; }, { passive: true });
+        applyZoom(1);
+        toolbar.append(zoomOut, zoomReset, zoomIn, download, close);
+        viewer.append(toolbar, stage);
+        const onKeyDown = event => {
+          if (event.key === "Escape") closeMessageImageViewer();
+          else if (event.key === "+" || event.key === "=") applyZoom(zoom + 0.25);
+          else if (event.key === "-") applyZoom(zoom - 0.25);
+          else if (event.key === "0") applyZoom(1);
+        };
         close.onclick = closeMessageImageViewer;
         viewer.addEventListener("click", event => { if (event.target === viewer) closeMessageImageViewer(); });
         download.onclick = async () => {
@@ -3641,6 +3745,8 @@ async function initProfile() {
           (marker === "[image]" && !(m.message_type === "image" && m.image_path))) return;
       if (renderedMessageIds.has(String(m.id))) return;
       renderedMessageIds.add(String(m.id));
+      renderedMessageData.set(String(m.id), m);
+      const wasNearBottom = isNearThreadBottom();
       const row = document.createElement("div");
       row.className = `message-row ${m.sender_username === me.username ? "mine" : "theirs"}`;
       const bubble = document.createElement("div");
@@ -3828,7 +3934,7 @@ async function initProfile() {
       const placeholder = thread.querySelector(".message-empty");
       if (placeholder) thread.innerHTML = "";
       thread.appendChild(row);
-      if (keepBottom) scrollThread();
+      if (keepBottom && (wasNearBottom || m.sender_username === me.username || String(m.id).startsWith("pending-"))) scrollThread();
     };
 
     function openMessageActions(anchorEl, message, clientX = null, clientY = null) {
@@ -3894,12 +4000,34 @@ async function initProfile() {
 
     async function refreshOpenThread() {
       if (!activeUser) return;
-      const messages = await PF.getMessages(activeUser);
-      renderThread(messages);
+      const username = activeUser;
+      const requestToken = threadLoadToken;
+      const prevTop = thread.scrollTop;
+      const prevHeight = thread.scrollHeight;
+      const wasNearBottom = isNearThreadBottom();
+      const page = await pageMessages(username);
+      if (activeUser !== username || requestToken !== threadLoadToken) return;
+      const merged = new Map([...renderedMessageData.entries()].filter(([id]) => !String(id).startsWith("pending-")));
+      // Keep pending optimistic bubbles, and refresh any rows returned in the newest page.
+      for (const [id, message] of renderedMessageData.entries()) if (String(id).startsWith("pending-")) merged.set(id, message);
+      const recent = page.rows.slice(0, page.paginated ? MESSAGE_PAGE_SIZE : page.rows.length);
+      recent.forEach(message => merged.set(String(message.id), message));
+      if (!olderMessageCursor || !hasOlderMessages && merged.size <= MESSAGE_PAGE_SIZE) {
+        hasOlderMessages = page.hasMore;
+        olderMessageCursor = recent.length ? { created_at: recent[recent.length - 1].created_at, id: recent[recent.length - 1].id } : null;
+      } else {
+        hasOlderMessages = hasOlderMessages || page.hasMore;
+      }
+      const desc = [...merged.values()].sort(compareMessageDesc);
+      renderThread(desc, { preserveScroll: true, wasNearBottom, prevTop, prevHeight });
     }
 
-    const renderThread = messages => {
+    const renderThread = (messages, options = {}) => {
+      const prevTop = options.prevTop ?? thread.scrollTop;
+      const prevHeight = options.prevHeight ?? thread.scrollHeight;
+      const wasNearBottom = options.wasNearBottom ?? isNearThreadBottom();
       renderedMessageIds.clear();
+      renderedMessageData.clear();
       try { imageObserver?.disconnect(); } catch {}
       try { voiceUrlObserver?.disconnect(); } catch {}
       imageObserver = null;
@@ -3912,11 +4040,47 @@ async function initProfile() {
       const ordered = [...messages].reverse();
       if (!ordered.length) {
         thread.innerHTML = `<div class="message-empty"><div class="message-empty-icon">✉</div><h2>No messages yet</h2><p>Send the first text message.</p></div>`;
+        olderMessageCursor = null;
         return;
       }
       ordered.forEach(m => appendMessage(m, false));
-      scrollThread();
+      if (options.preserveScroll) {
+        if (wasNearBottom) scrollThread();
+        else thread.scrollTop = Math.max(0, prevTop + (thread.scrollHeight - prevHeight));
+      } else scrollThread();
     };
+
+    async function loadOlderMessages() {
+      if (!activeUser || !messagePageRpcAvailable || !hasOlderMessages || !olderMessageCursor || loadingOlderMessages) return;
+      const username = activeUser;
+      const requestToken = threadLoadToken;
+      const cursor = { ...olderMessageCursor };
+      loadingOlderMessages = true;
+      const beforeHeight = thread.scrollHeight;
+      const beforeTop = thread.scrollTop;
+      try {
+        const raw = await PF.getMessagesPage(username, cursor, MESSAGE_PAGE_SIZE);
+        if (activeUser !== username || requestToken !== threadLoadToken) return;
+        const page = Array.isArray(raw) ? raw : [];
+        const rows = page.slice(0, MESSAGE_PAGE_SIZE);
+        const chronological = rows.slice().reverse();
+        const beforeIds = new Set([...thread.querySelectorAll(".message-bubble[data-message-id]")].map(el => el.dataset.messageId));
+        chronological.forEach(message => appendMessage(message, false));
+        const newRows = [...thread.querySelectorAll(".message-row")].filter(row => {
+          const id = row.querySelector(".message-bubble[data-message-id]")?.dataset.messageId;
+          return id && !beforeIds.has(id);
+        });
+        const fragment = document.createDocumentFragment();
+        newRows.forEach(row => fragment.appendChild(row));
+        thread.prepend(fragment);
+        thread.scrollTop = Math.max(0, beforeTop + (thread.scrollHeight - beforeHeight));
+        hasOlderMessages = page.length > MESSAGE_PAGE_SIZE;
+        if (rows.length) olderMessageCursor = { created_at: rows[rows.length - 1].created_at, id: rows[rows.length - 1].id };
+        else { hasOlderMessages = false; olderMessageCursor = null; }
+      } catch (error) {
+        notify(error?.message || "Could not load older messages.", "error");
+      } finally { loadingOlderMessages = false; }
+    }
 
     async function loadConversations() {
       conversations = await PF.listConversations();
@@ -3974,6 +4138,10 @@ async function initProfile() {
 
     async function openConversation(username) {
       const nextUsername = PF.normalizeUsername(username);
+      const requestToken = ++threadLoadToken;
+      olderMessageCursor = null;
+      hasOlderMessages = false;
+      loadingOlderMessages = false;
       if (voiceDraft && nextUsername !== activeUser) clearVoiceDraft();
       messagesLayout.classList.add("conversation-open");
       if (window.innerWidth <= 760) document.body.classList.add("rivo-chat-fullscreen");
@@ -3989,6 +4157,7 @@ async function initProfile() {
       let conversation = c;
       let peerProfile = null;
       try { peerProfile = await PF.getProfile(activeUser); } catch {}
+      if (requestToken !== threadLoadToken || activeUser !== nextUsername) return;
       if (peerProfile) {
         activeUserId = peerProfile.userId || activeUserId;
         conversation = conversation || {
@@ -4012,15 +4181,19 @@ async function initProfile() {
         ? `<span class="thread-user-avatar">${identityLink(conversation, avatarMini(conversation), "thread-avatar-link")}</span><span>${identityLink(conversation, `<span><b>${esc(conversation.displayName)}</b><small>@${esc(conversation.username)}</small></span>`)}</span>`
         : `<span><b>@${esc(activeUser)}</b></span>`;
       renderConversations();
+      thread.innerHTML = `<div class="message-list-empty">Loading messages…</div>`;
       try {
-        const messages = await PF.getMessages(activeUser);
+        const page = await pageMessages(nextUsername);
+        if (requestToken !== threadLoadToken || activeUser !== nextUsername) return;
+        const messages = page.rows.slice(0, page.paginated ? MESSAGE_PAGE_SIZE : page.rows.length);
+        hasOlderMessages = page.hasMore;
+        olderMessageCursor = page.paginated && messages.length ? { created_at: messages[messages.length - 1].created_at, id: messages[messages.length - 1].id } : null;
         renderThread(messages);
         updateThreadPresence();
         applyComposeLock(peerProfile);
-        // Mark inbound messages as read after the thread has been loaded.
-        PF.markMessagesRead(activeUser).then(changed => { if (changed > 0 && activeUser === PF.normalizeUsername(username)) refreshOpenThread(); }).catch(() => {});
+        PF.markMessagesRead(nextUsername).then(changed => { if (changed > 0 && activeUser === nextUsername && requestToken === threadLoadToken) refreshOpenThread(); }).catch(() => {});
         if (!input.disabled) input.focus();
-      } catch (e) { notify(e.message, "error"); }
+      } catch (e) { if (requestToken === threadLoadToken) { thread.innerHTML = `<div class="message-list-empty">Could not load messages. ${esc(e.message || "Try again.")}</div>`; notify(e.message, "error"); } }
     }
 
     async function updateTyping(value) {
@@ -4050,6 +4223,7 @@ async function initProfile() {
 
       const dropTemp = () => {
         renderedMessageIds.delete(tempId);
+        renderedMessageData.delete(tempId);
         thread.querySelector(`[data-message-id="${tempId}"]`)?.closest(".message-row")?.remove();
       };
 
@@ -4105,6 +4279,10 @@ async function initProfile() {
       document.body.classList.remove("rivo-chat-fullscreen");
       activeUser = "";
       activeUserId = "";
+      threadLoadToken++;
+      olderMessageCursor = null;
+      hasOlderMessages = false;
+      loadingOlderMessages = false;
       window.__rivoActiveMessageUser = "";
       title.innerHTML = `<span class="thread-placeholder">Choose a conversation</span>`;
       renderThread([]);
@@ -4307,24 +4485,7 @@ messageImageInput?.addEventListener("change", async () => {
         const active = conversations.find(c => c.username === activeUser);
         if (active?.userId) activeUserId = active.userId;
         if (activeUser) {
-          const messages = await PF.getMessages(activeUser);
-          const rows = new Map([...thread.querySelectorAll(".message-bubble[data-message-id]")]
-            .filter(el => !String(el.dataset.messageId || "").startsWith("pending-"))
-            .map(el => [String(el.dataset.messageId), el]));
-          const serverIds = new Set(messages.map(m => String(m.id)));
-          let stale = rows.size !== serverIds.size;
-          if (!stale) {
-            for (const m of messages) {
-              const row = rows.get(String(m.id));
-              if (!row || row.dataset.readAt !== String(m.read_at || "") ||
-                  row.dataset.editedAt !== String(m.edited_at || "") ||
-                  row.dataset.messageType !== String(m.message_type || "text") ||
-                  row.dataset.messageContent !== String(m.content || "")) { stale = true; break; }
-            }
-          }
-          // Avoid tearing down playback/images on every fallback heartbeat. Only
-          // rebuild when a row was added/removed or its visible state changed.
-          if (stale) renderThread(messages);
+          await refreshOpenThread();
           if (document.visibilityState === "visible") PF.markMessagesRead(activeUser).catch(() => {});
         }
       } catch {} finally { resyncing = false; }
@@ -4339,8 +4500,20 @@ messageImageInput?.addEventListener("change", async () => {
       const eventType = msg.__rivoEventType || "INSERT";
 
       if (isActiveConversation) {
-        // UPDATE contains read_at / edited_at; DELETE must remove the bubble.
-        // Reloading the open thread is bounded to active-chat events only.
+        // Remove deleted rows from the local paged-history cache, otherwise a refresh
+        // could re-render an already hidden/deleted older message from memory.
+        if (eventType === "DELETE") {
+          renderedMessageData.delete(String(msg.id));
+          renderedMessageIds.delete(String(msg.id));
+          thread.querySelector(`[data-message-id="${CSS.escape(String(msg.id))}"]`)?.closest(".message-row")?.remove();
+        } else if (eventType === "UPDATE") {
+          const cached = renderedMessageData.get(String(msg.id));
+          if (cached) {
+            if (msg.edited_at !== undefined) cached.edited_at = msg.edited_at;
+            if (msg.read_at !== undefined) cached.read_at = msg.read_at;
+            if (msg.content && msg.content !== "[voice]" && msg.content !== "[image]") cached.content = msg.content;
+          }
+        }
         if (eventType === "UPDATE" || eventType === "DELETE" || msg.content === "[voice]" || msg.content === "[image]") {
           await refreshOpenThread();
         } else {
@@ -4397,6 +4570,10 @@ messageImageInput?.addEventListener("change", async () => {
       clearTimeout(typingTimer);
       clearTimeout(typingStopTimer);
     });
+
+    thread.addEventListener("scroll", () => {
+      if (thread.scrollTop <= 72) loadOlderMessages();
+    }, { passive: true });
 
     await loadConversations();
     input.disabled = true;

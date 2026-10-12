@@ -761,6 +761,62 @@
   async function getMessages(username, limit = 80) {
     return callRpc("rivo_get_messages", { p_other_username: normalizeUsername(username), p_limit: Math.max(1, Math.min(Number(limit) || 80, 200)) });
   }
+  // Keyset pagination avoids reloading the entire conversation when the user
+  // scrolls upward. Requires supabase_rivo_v4_call_security_message_pagination.sql.
+  async function getMessagesPage(username, before = null, limit = 40) {
+    const cursor = before && typeof before === "object" ? before : null;
+    return callRpc("rivo_get_messages_page", {
+      p_other_username: normalizeUsername(username),
+      p_before_created_at: cursor?.created_at || null,
+      p_before_id: cursor?.id == null ? null : String(cursor.id),
+      p_limit: Math.max(10, Math.min(Number(limit) || 40, 80))
+    }, "MESSAGE_HISTORY_PAGE");
+  }
+  async function createCallSession(callId, calleeUsername, roomName, isVideo = false) {
+    return callRpc("rivo_create_call_session", {
+      p_call_id: String(callId), p_callee_username: normalizeUsername(calleeUsername),
+      p_room_name: String(roomName), p_is_video: !!isVideo
+    }, "CALL_SESSION_CREATE");
+  }
+  async function updateCallSession(callId, status) {
+    return callRpc("rivo_update_call_session", { p_call_id: String(callId), p_status: status }, "CALL_SESSION_UPDATE");
+  }
+  async function getCallSessionStatus(callId) {
+    requireClient();
+    const session = (await sb.auth.getSession()).data?.session;
+    if (!session?.user?.id || !callId) return null;
+    const { data, error } = await sb.from("rivo_call_sessions")
+      .select("call_id,room_name,caller_id,callee_id,caller_username,is_video,status,updated_by,expires_at")
+      .eq("call_id", String(callId))
+      .maybeSingle();
+    if (error) throw error;
+    return data || null;
+  }
+  async function getPendingCall() {
+    requireClient();
+    const session = (await sb.auth.getSession()).data?.session;
+    if (!session?.user?.id) return null;
+    const { data, error } = await sb.from("rivo_call_sessions")
+      .select("call_id,room_name,caller_id,callee_id,caller_username,is_video,status,expires_at")
+      .eq("callee_id", session.user.id)
+      .eq("status", "ringing")
+      .gt("expires_at", new Date().toISOString())
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return {
+      callId: String(data.call_id), from: String(data.caller_id), to: String(data.callee_id), type: "offer",
+      payload: { roomName: String(data.room_name), username: String(data.caller_username), isVideo: !!data.is_video }
+    };
+  }
+  async function validateIncomingCallSession(callId, callerId, roomName, callerUsername, isVideo = false) {
+    return !!(await callRpc("rivo_validate_incoming_call_session", {
+      p_call_id: String(callId), p_caller_id: String(callerId), p_room_name: String(roomName || ""),
+      p_caller_username: normalizeUsername(callerUsername), p_is_video: !!isVideo
+    }, "CALL_SESSION_VALIDATE"));
+  }
   async function deleteMessage(messageId, scope = "everyone") {
     const id = Number(messageId);
     if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid message");
@@ -944,52 +1000,73 @@
     return !!(await callRpc("rivo_can_receive_call", { p_caller_username: normalizeUsername(username) }));
   }
 
-  async function openCallChannel(channelName, onSignal) {
-    requireClient();
-    const session = (await sb.auth.getSession()).data?.session;
-    if (!session?.user?.id) throw new Error("Please sign in to call.");
-    await syncRealtimeAuth(session);
-    const channel = sb.channel(String(channelName), { config: { broadcast: { self: false } } });
-    channel.on("broadcast", { event: "signal" }, ({ payload }) => {
-      try { onSignal?.(payload || {}); } catch {}
-    });
-    try {
-      await new Promise((resolve, reject) => {
-        let finished = false;
-        const timer = setTimeout(() => {
-          if (finished) return;
-          finished = true;
-          reject(new Error("The call signaling channel did not connect. Check your network and try again."));
-        }, 12000);
-        channel.subscribe(status => {
-          if (finished) return;
-          if (status === "SUBSCRIBED") {
-            finished = true; clearTimeout(timer); resolve();
-          } else if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) {
-            finished = true; clearTimeout(timer);
-            reject(new Error("Could not establish call signaling. Please try again."));
-          }
-        });
-      });
-    } catch (error) {
-      try { await sb.removeChannel(channel); } catch {}
-      throw error;
-    }
-    return {
-      send: async payload => {
-        const result = await channel.send({ type: "broadcast", event: "signal", payload });
-        if (result !== "ok" && result?.status !== "ok") throw new Error("Could not send call signal. Please check your connection and retry.");
-        return result;
-      },
-      close: async () => { try { await sb.removeChannel(channel); } catch {} }
-    };
-  }
-
   async function subscribeCallInbox(userId, onSignal) {
+    requireClient();
     const id = String(userId || "").trim();
-    if (!id) return async () => {};
-    const box = await openCallChannel(`rivo-call-inbox-${id}`, onSignal);
-    return box.close;
+    if (!id || typeof onSignal !== "function") return async () => {};
+    const session = (await sb.auth.getSession()).data?.session;
+    if (!session?.user?.id || String(session.user.id) !== id) {
+      throw new Error("Call notifications require the signed-in account.");
+    }
+    await syncRealtimeAuth(session);
+    const channelName = `rivo-call-sessions-${id}-${(globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`)}`;
+    const channel = sb.channel(channelName);
+    let stopped = false;
+    const deliver = row => {
+      if (stopped || !row || (row.caller_id !== id && row.callee_id !== id)) return;
+      // Ignore our own status updates; this listener exists to notify the other peer.
+      if (row.updated_by && String(row.updated_by) === id) return;
+      const meta = {
+        callId: String(row.call_id || ""),
+        from: String(row.status === "ringing" ? row.caller_id : row.updated_by || ""),
+        to: String(row.status === "ringing" ? row.callee_id : (String(row.updated_by) === String(row.caller_id) ? row.callee_id : row.caller_id)),
+        payload: {
+          roomName: String(row.room_name || ""),
+          username: String(row.caller_username || ""),
+          isVideo: !!row.is_video
+        }
+      };
+      if (!meta.callId) return;
+      if (row.status === "ringing") meta.type = "offer";
+      else if (row.status === "active") meta.type = "accept";
+      else if (row.status === "declined") meta.type = "decline";
+      else if (row.status === "busy") meta.type = "busy";
+      else if (row.status === "ended") meta.type = "hangup";
+      else return;
+      // On an INSERT, updated_by is null and both peers receive the row; only
+      // callee should act on the offer. For an UPDATE, only the peer should act.
+      if (meta.to === id) {
+        try { Promise.resolve(onSignal(meta)).catch(error => console.warn("[Rivo Calls] Signal handler failed", error)); }
+        catch (error) { console.warn("[Rivo Calls] Signal handler failed", error); }
+      }
+    };
+    channel
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "rivo_call_sessions", filter: `callee_id=eq.${id}` }, payload => deliver(payload.new))
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rivo_call_sessions", filter: `caller_id=eq.${id}` }, payload => deliver(payload.new))
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rivo_call_sessions", filter: `callee_id=eq.${id}` }, payload => deliver(payload.new));
+    // We subscribe to INSERT events for incoming calls only; caller INSERT rows
+    // are not needed by the caller and are never treated as inbound offers.
+    await new Promise((resolve, reject) => {
+      let finished = false;
+      const timer = setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        reject(new Error("Call notifications could not connect. Check Realtime and database permissions."));
+      }, 15000);
+      channel.subscribe(status => {
+        if (finished) return;
+        if (status === "SUBSCRIBED") { finished = true; clearTimeout(timer); resolve(); }
+        else if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) {
+          finished = true; clearTimeout(timer);
+          reject(new Error("Call notifications are unavailable. Confirm the call-session SQL migration and Supabase Realtime publication."));
+        }
+      });
+    }).catch(async error => { try { await sb.removeChannel(channel); } catch {} throw error; });
+    return async () => {
+      if (stopped) return;
+      stopped = true;
+      try { await sb.removeChannel(channel); } catch {}
+    };
   }
 
   async function subscribePresence(username, onChange) {
@@ -2286,10 +2363,10 @@ async function getVoiceUrl(path) {
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
     updateProfile, saveProfile, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
     removeFriend, cancelFriendRequest, toggleFollow, isFollowing, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
-    listConversations, getMessages, deleteMessage, editMessage, markMessagesRead, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
+    listConversations, getMessages, getMessagesPage, deleteMessage, editMessage, markMessagesRead, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminSetCoins, adminDeleteUser, adminUpdateUser, adminGetUserDetails,
-    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, deletePostComment, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, getSocialLinkStatus, purchaseSocialLinkSlot, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCommunityVoice, startCommunityVoice, endCommunityVoice, setCommunityVoicePolicy, setCommunityModerator, setCommunityVoiceMute, moderateCommunityVoice, subscribeCommunityVoice, getCallUser, canReceiveCallFrom, openCallChannel, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl, sendImageMessage, getMessageImageUrl, getMessageImageDownloadUrl,
+    setProfileViewPreference, getStory, listStoryStatuses, createStoryFromFile, deleteStory, toggleStoryLike, initials, escapeHtml, safeUrl, uploadPostImage, uploadCommunityImage, listPosts, getPost, createPost, deletePost, reactPost, commentPost, deletePostComment, reportPost, repostPost, getCoinBalance, listStoreItems, listMyInventory, purchaseStoreItem, getSocialLinkStatus, purchaseSocialLinkSlot, transferCoinsByUsername, rewardAdCoins, equipStoreItem, getEquippedStoreItems, createCommunity, deleteCommunity, listCommunities, getCommunity, joinCommunity, leaveCommunity, listCommunityMembers, listCommunityRequests, respondCommunityRequest, kickCommunityMember, getCommunityMessages, sendCommunityMessage, myCommunityCount, subscribeCommunityMessages, getCommunityVoice, startCommunityVoice, endCommunityVoice, setCommunityVoicePolicy, setCommunityModerator, setCommunityVoiceMute, moderateCommunityVoice, subscribeCommunityVoice, getCallUser, canReceiveCallFrom, createCallSession, updateCallSession, getCallSessionStatus, getPendingCall, validateIncomingCallSession, subscribeCallInbox, uploadVoiceBlob, sendVoiceMessage, getVoiceUrl, sendImageMessage, getMessageImageUrl, getMessageImageDownloadUrl,
     NAV_I18N, I18N, currentLanguage, translateString, applyI18n, applySavedLanguage
   };
 })();
