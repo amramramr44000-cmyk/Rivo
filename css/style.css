@@ -7342,3 +7342,131 @@ html[data-template="pixel-arcade"] .section-block{
 .message-image-viewer-tools .message-image-viewer-zoom{pointer-events:auto;min-width:42px;height:44px;padding:0 10px;border:1px solid rgba(255,255,255,.22);border-radius:13px;background:rgba(20,20,20,.9);color:#fff;font:inherit;font-size:16px;font-weight:800;cursor:pointer;}
 .message-image-viewer-tools .message-image-viewer-zoom:disabled{opacity:.45;cursor:not-allowed;}
 @media(max-width:600px){.message-image-viewer-tools{gap:5px;left:8px;right:8px}.message-image-viewer-tools .message-image-viewer-zoom{min-width:36px;height:40px;padding-inline:7px}.message-image-viewer-download{padding-inline:9px!important;font-size:11px!important}.message-image-viewer-tools .message-image-viewer-close{width:40px;height:40px;flex:0 0 40px}.message-image-viewer-stage>img{max-width:96vw;max-height:calc(84dvh - 75px)}}
+
+
+/* v5 chat stability: compact in-thread history loading and a balanced mobile send action. */
+.message-thread{overflow-anchor:none;}
+.message-history-loader{
+  position:sticky;
+  top:4px;
+  z-index:4;
+  align-self:center;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:7px;
+  max-width:calc(100% - 20px);
+  margin:0 auto 7px;
+  padding:7px 11px;
+  border:1px solid rgba(255,255,255,.09);
+  border-radius:999px;
+  background:rgba(13,17,25,.94);
+  color:#9aa5b6;
+  font-size:10px;
+  line-height:1.2;
+  box-shadow:0 8px 24px rgba(0,0,0,.16);
+  pointer-events:none;
+}
+.message-history-loader::before{
+  content:"";
+  width:11px;
+  height:11px;
+  flex:0 0 11px;
+  border:1.5px solid rgba(150,160,180,.28);
+  border-top-color:var(--accent,#7488ff);
+  border-radius:50%;
+  animation:rivoHistorySpin .72s linear infinite;
+}
+@keyframes rivoHistorySpin{to{transform:rotate(360deg)}}
+.message-send-inside{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  box-sizing:border-box;
+  white-space:nowrap;
+  box-shadow:0 8px 24px color-mix(in srgb,var(--accent,#7488ff) 22%,transparent);
+  transition:transform .16s ease,filter .16s ease,box-shadow .16s ease;
+}
+.message-send-inside:hover:not(:disabled){filter:brightness(1.06);box-shadow:0 10px 26px color-mix(in srgb,var(--accent,#7488ff) 28%,transparent);}
+.message-send-inside:active:not(:disabled){transform:translateY(-50%) scale(.97);}
+.message-send-icon{display:block;width:16px;height:16px;flex:0 0 16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+.message-send-inside:disabled{opacity:.48;box-shadow:none;}
+.thread-call-actions .call-action:disabled{opacity:.38;cursor:not-allowed;box-shadow:none;}
+@media(max-width:760px){
+  body.rivo-chat-fullscreen .message-compose{grid-template-columns:52px 38px minmax(0,1fr) 46px;}
+  body.rivo-chat-fullscreen .message-send-inside{
+    position:static;
+    width:46px;
+    min-width:46px;
+    height:46px;
+    min-height:46px;
+    padding:0;
+    border-radius:15px;
+    transform:none;
+  }
+  body.rivo-chat-fullscreen .message-send-inside:active:not(:disabled){transform:scale(.96);}
+  body.rivo-chat-fullscreen .message-send-inside>span{display:none;}
+  body.rivo-chat-fullscreen .message-send-icon{width:19px;height:19px;flex-basis:19px;}
+}
+@media(max-width:390px){
+  body.rivo-chat-fullscreen .message-compose{grid-template-columns:46px 34px minmax(0,1fr) 44px;}
+  body.rivo-chat-fullscreen .message-send-inside{width:44px;min-width:44px;height:44px;min-height:44px;border-radius:14px;}
+}
+@media(prefers-reduced-motion:reduce){
+  .message-history-loader::before{animation:none;}
+  .message-send-inside{transition:none;}
+}
+
+
+/* Rivo Spotify presence v1 */
+.spotify-settings-card{position:relative;overflow:hidden}
+.spotify-settings-title{display:flex;align-items:flex-start;gap:12px;margin-bottom:14px}
+.spotify-settings-title h2{margin:0 0 5px;font-size:15px}
+.spotify-settings-title .muted{margin:0}
+.spotify-brand-mark{display:grid;place-items:center;flex:0 0 38px;width:38px;height:38px;border-radius:12px;background:rgba(29,185,84,.12);color:#1ed760;font-size:27px;line-height:1}
+.spotify-settings-connection{display:flex;align-items:center;gap:9px;padding:11px 12px;border:1px solid var(--border);border-radius:12px;background:rgba(255,255,255,.025);margin-bottom:4px}
+.spotify-settings-connection p{margin:0;color:var(--muted);font-size:12px;line-height:1.55;overflow-wrap:anywhere}
+.spotify-settings-connection p[data-state="success"]{color:#8fe2b1}
+.spotify-settings-connection p[data-state="error"]{color:#ffadb9}
+.spotify-connection-indicator{flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:#788394;box-shadow:0 0 0 4px rgba(120,131,148,.09)}
+.spotify-settings-connection:has(p[data-state="success"]) .spotify-connection-indicator{background:#1ed760;box-shadow:0 0 0 4px rgba(30,215,96,.1)}
+.spotify-settings-connection:has(p[data-state="error"]) .spotify-connection-indicator{background:#ff7187;box-shadow:0 0 0 4px rgba(255,113,135,.1)}
+.spotify-privacy-row{align-items:center;gap:14px}
+.spotify-privacy-row>span{display:grid;gap:5px;min-width:0}
+.spotify-privacy-row strong{font-size:12px;font-weight:650}
+.spotify-privacy-row small{color:var(--muted);font-size:11px;line-height:1.55}
+.spotify-toggle{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;cursor:pointer;font-size:11px;color:var(--muted)}
+.spotify-toggle input{position:absolute;opacity:0;pointer-events:none}
+.spotify-toggle-track{width:39px;height:23px;border:1px solid var(--border);border-radius:99px;background:#1a202b;position:relative;transition:background .18s,border-color .18s}
+.spotify-toggle-track:after{content:"";position:absolute;left:3px;top:3px;width:15px;height:15px;border-radius:50%;background:#a5adbb;transition:transform .18s,background .18s}
+.spotify-toggle input:checked+.spotify-toggle-track{background:#146e37;border-color:#1ed760}
+.spotify-toggle input:checked+.spotify-toggle-track:after{transform:translateX(16px);background:#fff}
+.spotify-toggle input:focus-visible+.spotify-toggle-track{outline:2px solid var(--accent);outline-offset:3px}
+.spotify-toggle input:disabled+.spotify-toggle-track{opacity:.48;cursor:not-allowed}
+.spotify-settings-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:14px}
+.spotify-settings-actions .btn{min-height:40px}
+.spotify-setup-hint{padding:10px 12px;border:1px solid rgba(255,190,100,.16);border-radius:11px;background:rgba(255,190,100,.045);margin:12px 0 0;font-size:11px}
+.spotify-setup-hint[hidden]{display:none}
+.spotify-policy-note{margin:10px 0 0;font-size:10px}
+.spotify-live-section{overflow:hidden;border-color:rgba(30,215,96,.20)!important;background:linear-gradient(140deg,rgba(30,215,96,.055),transparent 60%),var(--panel,rgba(20,24,32,.72))}
+.spotify-live-kicker{display:flex;align-items:center;gap:8px}
+.spotify-live-dot{width:7px;height:7px;border-radius:50%;background:#1ed760;box-shadow:0 0 11px rgba(30,215,96,.55);animation:rivoSpotifyPulse 2s ease-in-out infinite}
+.rivo-spotify-now-row{display:flex;align-items:center;gap:13px;margin:13px 0 14px;min-width:0}
+.rivo-spotify-cover{width:70px;height:70px;flex:0 0 70px;border-radius:12px;overflow:hidden;background:rgba(255,255,255,.055);display:grid;place-items:center;color:#1ed760;font-size:28px}
+.rivo-spotify-cover img{width:100%;height:100%;object-fit:cover;display:block}
+.rivo-spotify-track-meta{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.rivo-spotify-track-meta strong{color:var(--text,#f7f8fb);font-size:14px;line-height:1.4;overflow-wrap:anywhere}
+.rivo-spotify-track-meta span{color:var(--muted);font-size:12px;line-height:1.45;overflow-wrap:anywhere}
+.rivo-spotify-track-meta small{font-size:10px;color:var(--muted);overflow-wrap:anywhere}
+.rivo-spotify-open{width:max-content;max-width:100%;font-size:11px;color:#1ed760;text-decoration:none;font-weight:700;margin-top:3px}
+.rivo-spotify-open:hover{text-decoration:underline}
+.rivo-spotify-mark{align-self:flex-start;color:#1ed760;font-size:22px;line-height:1;flex:0 0 auto}
+.rivo-spotify-embed-wrap{width:100%;border-radius:13px;overflow:hidden;line-height:0}
+.rivo-spotify-embed-wrap iframe{display:block;max-width:100%;background:#121212}
+.rivo-spotify-player-note,.rivo-spotify-attribution{color:var(--muted);font-size:10px;line-height:1.55;margin:9px 0 0}
+@keyframes rivoSpotifyPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(.82)}}
+@media(max-width:560px){.spotify-settings-card{padding:15px}.spotify-settings-actions .btn{flex:1}.rivo-spotify-cover{width:60px;height:60px;flex-basis:60px}.rivo-spotify-track-meta strong{font-size:13px}.rivo-spotify-mark{font-size:18px}}
+@media(prefers-reduced-motion:reduce){.spotify-live-dot{animation:none}.spotify-toggle-track,.spotify-toggle-track:after{transition:none}}
+
+.spotify-settings-actions button[hidden]{display:none!important}
