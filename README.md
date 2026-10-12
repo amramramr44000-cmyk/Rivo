@@ -299,3 +299,12 @@ The Profile Editor now treats `Profile Animation` as an independent cosmetic slo
 This build hardens direct-call signaling with participant-only `rivo_call_sessions` rows and server RPC transitions, prevents concurrent duplicate LiveKit connection setup, restores missed call state after a tab/network resumes, paginates private conversation history on upward scroll, and adds mouse-wheel/button/pinch zoom for private-message images. Home's composer/feed now has a clear gap.
 
 Before testing these features, review `docs/RIVO_V4_DEPLOYMENT_AR.md`. Apply `supabase_private_messaging_v2.sql` only if it has not already been applied successfully; then test `supabase_rivo_v4_call_security_message_pagination.sql` on staging. Redeploy `supabase/functions/rivo-livekit-token/index.ts`. This ZIP was not connected to the live Supabase project and no SQL was executed as part of the build.
+
+
+## Spotify Now Playing presence
+
+- See `docs/SPOTIFY_NOW_PLAYING_SETUP_AR.md` for the Spotify OAuth setup and deployment steps.
+- Apply `supabase_rivo_spotify_presence_v1.sql` as a separate reviewed migration for an existing database; do not rerun the full schema for this feature.
+- Put only the public Spotify Client ID in `js/supabase-config.js`. Never put a Spotify Client Secret in browser code.
+- Spotify authorization codes are exchanged server-side; refresh tokens are stored only in the server-restricted `rivo_spotify_connections` table, and access tokens are never returned to the browser. Deploy `supabase/functions/rivo-spotify-presence`, set the `SPOTIFY_CLIENT_ID` Edge Function secret, and apply `supabase_rivo_spotify_presence_v1.sql` after testing on Staging. Public presence expires after 90 seconds without a fresh update.
+- The profile embeds Spotify's official track player; each visitor starts playback independently. Rivo does not relay or synchronize the owner’s audio.
