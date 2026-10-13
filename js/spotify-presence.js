@@ -341,9 +341,58 @@
     };
   }
 
+  function formatTrackTime(value) {
+    const totalSeconds = Math.max(0, Math.floor(Number(value || 0) / 1000));
+    return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`;
+  }
+
+  function pauseManualPlayer(section) {
+    const audio = section?.querySelector?.("[data-player-audio]");
+    if (!audio || audio.paused) return false;
+    audio.pause();
+    const button = section.querySelector("[data-player-play]");
+    if (button) button.textContent = "▶";
+    return true;
+  }
+
+  function resumeManualPlayer(section) {
+    const audio = section?.querySelector?.("[data-player-audio]");
+    const button = section?.querySelector?.("[data-player-play]");
+    if (!audio || !button) return;
+    // Resuming is best-effort: some browsers may require another user gesture.
+    Promise.resolve(audio.play()).then(() => {
+      button.textContent = "Ⅱ";
+    }).catch(() => {
+      button.textContent = "▶";
+    });
+  }
+
+  function updateSpotifyCardProgress(card, track) {
+    const bar = card.querySelector("[data-rivo-spotify-progress-bar]");
+    const elapsed = card.querySelector("[data-rivo-spotify-elapsed]");
+    const durationLabel = card.querySelector("[data-rivo-spotify-duration]");
+    const progressElement = card.querySelector("[data-rivo-spotify-progress]");
+    if (!bar || !elapsed || !durationLabel || !progressElement) return;
+
+    const duration = Number(track.duration_ms);
+    const progress = Number(track.progress_ms);
+    if (!Number.isFinite(duration) || duration <= 0) {
+      progressElement.hidden = true;
+      return;
+    }
+    const safeProgress = Number.isFinite(progress) ? Math.min(duration, Math.max(0, progress)) : 0;
+    const percent = Math.max(0, Math.min(100, (safeProgress / duration) * 100));
+    bar.style.width = `${percent}%`;
+    progressElement.setAttribute("aria-valuemax", String(duration));
+    progressElement.setAttribute("aria-valuenow", String(safeProgress));
+    elapsed.textContent = formatTrackTime(safeProgress);
+    durationLabel.textContent = formatTrackTime(duration);
+    progressElement.hidden = false;
+  }
+
   function makeSpotifyCard(track) {
     const card = document.createElement("section");
-    card.className = "section-block music-section rivo-spotify-live-section";
+    card.className = "section-block music-section spotify-live-section rivo-spotify-live-section";
     const id = /^[A-Za-z0-9]{22}$/.test(String(track.track_id || "")) ? String(track.track_id) : "";
     const cover = /^https:\/\/(i\.scdn\.co|image-cdn-ak\.spotifycdn\.com)\//i.test(String(track.album_art_url || "")) ? track.album_art_url : "";
     const link = /^https:\/\/open\.spotify\.com\/track\/[A-Za-z0-9]{22}(?:\?.*)?$/i.test(String(track.track_url || ""))
@@ -356,8 +405,13 @@
         <div class="rivo-spotify-track-meta"><strong>${esc(track.track_name || "Unknown track")}</strong><span>${esc(track.artist_names || "Unknown artist")}</span>${track.album_name ? `<small>${esc(track.album_name)}</small>` : ""}<a class="rivo-spotify-open" href="${esc(link)}" target="_blank" rel="noopener noreferrer">Open in Spotify ↗</a></div>
         <span class="rivo-spotify-mark" aria-label="Spotify">●</span>
       </div>
+      <div class="rivo-spotify-progress-wrap" data-rivo-spotify-progress role="progressbar" aria-label="Track playback progress" aria-valuemin="0" aria-valuemax="${Math.max(0, Number(track.duration_ms) || 0)}" aria-valuenow="${Math.max(0, Number(track.progress_ms) || 0)}">
+        <div class="rivo-spotify-progress-track"><span data-rivo-spotify-progress-bar></span></div>
+        <div class="rivo-spotify-progress-times"><span data-rivo-spotify-elapsed>${formatTrackTime(track.progress_ms)}</span><span data-rivo-spotify-duration>${formatTrackTime(track.duration_ms)}</span></div>
+      </div>
       ${id ? `<div class="rivo-spotify-embed-wrap"><iframe title="Official Spotify player: ${esc(track.track_name || "track")}" src="https://open.spotify.com/embed/track/${id}?utm_source=generator&theme=0" width="100%" height="152" style="border:0;border-radius:12px" loading="lazy" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>` : `<p class="rivo-spotify-player-note">${translate("Open the track in Spotify to listen.")}</p>`}
       <p class="rivo-spotify-attribution">${translate("Track information provided by Spotify. Each visitor starts playback independently.")}</p>`;
+    updateSpotifyCardProgress(card, track);
     return card;
   }
 
@@ -375,45 +429,57 @@
     profilePollBusy = true;
     try {
       let data = null;
-      let edgeRefreshSucceeded = false;
       try {
         const refreshed = await callSpotifyFunction("refresh_public", { username });
-        edgeRefreshSucceeded = true;
         if (refreshed?.playing && refreshed?.track) data = refreshed.track;
       } catch (error) {
-        console.warn("[Rivo Spotify] Server refresh is unavailable; trying the fresh public row.", error?.message || error);
+        console.warn("[Rivo Spotify] Server refresh is unavailable; trying the saved public row.", error?.message || error);
       }
-      if (!edgeRefreshSucceeded) {
+
+      // An HTTP-success response can still have no track (for example, a cached
+      // no-playback result). Read the fresh public row as well so the profile can
+      // still use metadata already saved by the backend instead of stopping early.
+      if (!data) {
         const cutoff = new Date(Date.now() - PUBLIC_FRESH_MS).toISOString();
         const { data: row, error } = await sb.from(TABLE)
           .select("username,track_id,track_name,artist_names,album_name,album_art_url,track_url,spotify_uri,progress_ms,duration_ms,updated_at")
           .eq("username", username).eq("show_on_profile", true).eq("is_playing", true).gte("updated_at", cutoff).maybeSingle();
         if (error) {
           if (!/does not exist|schema cache|permission denied/i.test(String(error.message || ""))) console.warn("[Rivo Spotify] Public presence lookup failed", error.message);
+          // Don't drop a working card because a secondary read failed transiently.
           return;
         }
         data = row;
       }
+
       const existing = sections.querySelector(".rivo-spotify-live-section");
       if (!data) {
         if (existing) {
-          const savedManual = existing.__rivoManualOuterHTML || "";
-          if (savedManual) existing.insertAdjacentHTML("beforebegin", savedManual);
-          existing.remove();
-          if (savedManual) window.PF?.applyI18n?.(sections);
+          // Keep the original DOM node rather than serializing outerHTML: that
+          // preserves the manual player's event listeners and its live state.
+          const savedManual = existing.__rivoManualSection || null;
+          if (savedManual) {
+            existing.replaceWith(savedManual);
+            if (existing.__rivoManualWasPlaying) resumeManualPlayer(savedManual);
+          } else existing.remove();
         }
         return;
       }
       const fingerprint = `${data.track_id || ""}|${data.track_name || ""}|${data.artist_names || ""}|${data.album_art_url || ""}`;
-      if (existing && existing.dataset.trackFingerprint === fingerprint) return;
+      if (existing && existing.dataset.trackFingerprint === fingerprint) {
+        updateSpotifyCardProgress(existing, data);
+        return;
+      }
       const freshCard = makeSpotifyCard(data);
       freshCard.dataset.trackFingerprint = fingerprint;
       if (existing) {
-        freshCard.__rivoManualOuterHTML = existing.__rivoManualOuterHTML || "";
+        freshCard.__rivoManualSection = existing.__rivoManualSection || null;
+        freshCard.__rivoManualWasPlaying = existing.__rivoManualWasPlaying === true;
         existing.replaceWith(freshCard);
       } else {
         const manual = sections.querySelector(":scope > .music-section:not(.rivo-spotify-live-section)");
-        freshCard.__rivoManualOuterHTML = manual ? manual.outerHTML : "";
+        freshCard.__rivoManualSection = manual || null;
+        freshCard.__rivoManualWasPlaying = pauseManualPlayer(manual);
         if (manual) manual.replaceWith(freshCard); else sections.prepend(freshCard);
       }
     } catch (error) {
