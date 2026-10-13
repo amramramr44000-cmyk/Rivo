@@ -7462,6 +7462,11 @@ html[data-template="pixel-arcade"] .section-block{
 .rivo-spotify-open{width:max-content;max-width:100%;font-size:11px;color:#1ed760;text-decoration:none;font-weight:700;margin-top:3px}
 .rivo-spotify-open:hover{text-decoration:underline}
 .rivo-spotify-mark{align-self:flex-start;color:#1ed760;font-size:22px;line-height:1;flex:0 0 auto}
+.rivo-spotify-progress-wrap{display:grid;gap:5px;margin:-3px 0 13px;min-width:0}
+.rivo-spotify-progress-wrap[hidden]{display:none!important}
+.rivo-spotify-progress-track{height:4px;overflow:hidden;border-radius:99px;background:rgba(255,255,255,.12)}
+.rivo-spotify-progress-track>span{display:block;width:0;height:100%;border-radius:inherit;background:#1ed760;transition:width .35s ease}
+.rivo-spotify-progress-times{display:flex;justify-content:space-between;gap:10px;color:var(--muted);font-size:10px;font-variant-numeric:tabular-nums}
 .rivo-spotify-embed-wrap{width:100%;border-radius:13px;overflow:hidden;line-height:0}
 .rivo-spotify-embed-wrap iframe{display:block;max-width:100%;background:#121212}
 .rivo-spotify-player-note,.rivo-spotify-attribution{color:var(--muted);font-size:10px;line-height:1.55;margin:9px 0 0}
