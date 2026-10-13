@@ -59,6 +59,24 @@
     el.dataset.state = kind;
     el.setAttribute("role", kind === "error" ? "alert" : "status");
   }
+  function playbackIssueMessage(issue) {
+    switch (String(issue || "")) {
+      case "spotify_access_denied":
+        return translate("Spotify denied playback access (403). Check that the Spotify app owner has Premium and this account is authorized in the developer dashboard; then disconnect and reconnect Spotify to grant the requested permissions.");
+      case "spotify_api_unauthorized":
+        return translate("Spotify rejected the playback token. Disconnect and reconnect Spotify to refresh authorization.");
+      case "connection_expired":
+        return translate("Spotify authorization expired. Disconnect and reconnect Spotify.");
+      case "spotify_rate_limited":
+        return translate("Spotify is rate-limiting playback requests. Keep Spotify connected and try again shortly.");
+      case "spotify_unavailable":
+        return translate("Spotify playback service is temporarily unavailable. Try again shortly.");
+      case "spotify_playback_unavailable":
+        return translate("Spotify did not return readable playback data. Reconnect Spotify and try playing a track again.");
+      default:
+        return "";
+    }
+  }
   function updateSettingsButtons(connected, backendReady = true, sessionReady = true) {
     const connect = document.getElementById("spotifyConnect");
     const disconnect = document.getElementById("spotifyDisconnect");
@@ -233,7 +251,7 @@
       const profile = await window.PF?.currentProfile?.().catch(() => null);
       const username = normalizeUser(profile?.username || window.PF?.currentUsername?.());
       if (!username) return;
-      const result = await callSpotifyFunction("refresh_self");
+      const result = await callSpotifyFunction("refresh_self", { force: !!force });
       if (result?.connected === false) {
         localStorage.removeItem(CONNECTION_KEY);
         saveSharePref(false);
@@ -242,7 +260,11 @@
         return;
       }
       if (result?.show_on_profile !== undefined) saveSharePref(!!result.show_on_profile);
-      if (force && result?.playing && result?.track?.track_name) {
+      if (result?.issue) {
+        const message = playbackIssueMessage(result.issue);
+        if (message && document.getElementById("spotifyStatus")) setSettingsStatus(message, "error");
+        else if (message) console.warn("[Rivo Spotify] Playback issue:", result.issue);
+      } else if (force && result?.playing && result?.track?.track_name) {
         setSettingsStatus(`${translate("Connected · Now playing:")} ${result.track.track_name}`, "success");
       }
     } catch (error) {
@@ -258,7 +280,16 @@
     const connection = readConnection();
     if (!session?.user?.id || connection?.rivoUserId !== session.user.id) throw new Error("Reconnect Spotify to change profile visibility.");
     const result = await callSpotifyFunction("visibility", { show_on_profile: !!enabled });
-    if (!result?.connected) throw new Error("Spotify connection was not found. Reconnect Spotify in Settings.");
+    if (!result?.connected) {
+      if (result?.issue === "connection_expired") {
+        localStorage.removeItem(CONNECTION_KEY);
+        saveSharePref(false);
+        const privacy = document.getElementById("spotifyVisibility");
+        if (privacy) privacy.checked = false;
+        updateSettingsButtons(false, true, true);
+      }
+      throw new Error(playbackIssueMessage(result?.issue) || "Spotify connection was not found. Reconnect Spotify in Settings.");
+    }
     saveSharePref(!!result.show_on_profile);
     return result;
   }
@@ -326,9 +357,13 @@
       privacy.disabled = true;
       try {
         const result = await saveVisibilityPreference(privacy.checked);
-        setSettingsStatus(result.show_on_profile
-          ? translate("Your Spotify activity can appear on your public profile while playing.")
-          : translate("Spotify activity is hidden from your public profile."), "success");
+        if (result.issue && result.show_on_profile) {
+          setSettingsStatus(`${translate("Profile sharing is enabled, but Spotify playback could not be read.")} ${playbackIssueMessage(result.issue)}`.trim(), "error");
+        } else {
+          setSettingsStatus(result.show_on_profile
+            ? translate("Your Spotify activity can appear on your public profile while playing.")
+            : translate("Spotify activity is hidden from your public profile."), "success");
+        }
         await refreshProfilePresence();
       } catch (error) {
         privacy.checked = readSharePref();
@@ -517,7 +552,10 @@
       return;
     }
     await finishOAuthCallback();
-    await initSettings(false);
+    // A Settings visit should perform a fresh owner-side playback check so a
+    // saved-but-broken Spotify connection is diagnosed immediately, not after
+    // the regular 30-second background poll.
+    await initSettings(!!document.getElementById("spotifySettingsCard"));
     try {
       const rawNotice = sessionStorage.getItem("rivo_spotify_oauth_notice_v1");
       if (rawNotice) {

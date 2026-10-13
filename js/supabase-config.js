@@ -35,6 +35,6 @@ window.RIVO_CALL_CONFIG = {
 /* Spotify public OAuth configuration. The Client ID is public; NEVER place a Spotify Client Secret here.
    Add the exact pages/spotify-callback.html URL as a Redirect URI in Spotify for Developers. */
 window.RIVO_SPOTIFY_CONFIG = {
-  clientId: "3f86739808d24391a0e7f1e2bb659736",
+  clientId: "PASTE_SPOTIFY_CLIENT_ID_HERE",
   redirectUri: "" // Defaults to the sibling /pages/spotify-callback.html URL.
 };
