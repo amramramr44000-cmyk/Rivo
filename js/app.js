@@ -898,55 +898,24 @@
 
     async function token(roomName, participantName) {
       const cfg = window.RIVO_CALL_CONFIG || {};
-      const sb = window.__rivoSupabase;
-      if (!cfg.tokenUrl || !sb?.auth) {
+      const session = (await window.__rivoSupabase?.auth.getSession())?.data?.session;
+      if (!cfg.tokenUrl || !session?.access_token) {
         throw new Error("Call service is not configured.");
       }
 
-      // A call may be answered after the browser tab has been idle for a while.
-      // Refresh near-expiry sessions before asking the Edge Function for a token.
-      let session = (await sb.auth.getSession())?.data?.session || null;
-      const expiresAt = Number(session?.expires_at || 0) * 1000;
-      if (!session?.access_token || (expiresAt && expiresAt <= Date.now() + 60000)) {
-        const refreshed = await sb.auth.refreshSession();
-        if (!refreshed.error && refreshed.data?.session?.access_token) {
-          session = refreshed.data.session;
-        }
-      }
-      if (!session?.access_token) {
-        throw new Error("Your Rivo login session expired. Sign in again before starting a call.");
-      }
-
-      const publicKey = String(window.RIVO_SUPABASE?.anonKey || "").trim();
-      const requestToken = accessToken => fetch(cfg.tokenUrl, {
+      const r = await fetch(cfg.tokenUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(publicKey ? { "apikey": publicKey } : {}),
-          "Authorization": `Bearer ${accessToken}`
+          "Authorization": `Bearer ${session.access_token}`
         },
         body: JSON.stringify({ roomName, participantName })
       });
 
-      let r = await requestToken(session.access_token);
-      let d = await r.json().catch(() => ({}));
-
-      // Retry only once after a 401. Never weaken backend authorization or retry
-      // non-auth errors such as call permission, room, or LiveKit configuration.
-      if (r.status === 401) {
-        const refreshed = await sb.auth.refreshSession();
-        const freshSession = !refreshed.error ? refreshed.data?.session : null;
-        if (freshSession?.access_token && freshSession.access_token !== session.access_token) {
-          r = await requestToken(freshSession.access_token);
-          d = await r.json().catch(() => ({}));
-        }
-      }
+      const d = await r.json().catch(() => ({}));
 
       if (!r.ok) {
-        if (r.status === 401) {
-          throw new Error("The call service rejected your Rivo session (401). Sign out and back in; if it continues, redeploy the updated rivo-livekit-token function.");
-        }
-        throw new Error(d.error || `Could not authorize the call (${r.status}).`);
+        throw new Error(d.error || "Could not authorize the call.");
       }
 
       return d;
