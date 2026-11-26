@@ -2,9 +2,9 @@
 
 ## Performance and safe deployment notes
 
-- Review `docs/PERFORMANCE-SECURITY-CHANGES.md` for the front-end optimizations and their limits.
-- Review `docs/DEPLOYMENT-CHECKLIST.md` before deploying or testing calls, messaging, image uploads, and community voice.
-- **Existing production database:** do not rerun the complete `supabase_schema.sql` just to deploy these front-end changes. The new `supabase_community_message_incremental_safety_v1.sql` is a separate, reviewable migration; it is not executed by the website and does not edit user/content rows. Apply it only after backing up and reviewing the deployment order.
+- Read `docs/DEPLOYMENT-CHECKLIST.md` before deploying database or Edge Function changes.
+- Read `docs/PERFORMANCE-SECURITY-CHANGES.md` for the current security and performance boundaries.
+- **Existing database:** do not rerun the full `supabase_schema.sql` as a general update. Identify the installed migration level, back up the database, and apply only reviewed migrations that are still missing.
 
 Rivo is now a **GitHub Pages + Supabase** project.
 
@@ -19,7 +19,7 @@ GitHub Pages hosts the HTML/CSS/JavaScript. Supabase provides the shared backend
 Create a project at https://supabase.com/.
 
 ### 2. Create the database
-Open **SQL Editor** and run the entire `supabase_schema.sql` file.
+For a new Supabase project, open **SQL Editor** and run `supabase_schema.sql` once. Then follow the feature prerequisites in `docs/DEPLOYMENT-CHECKLIST.md` before enabling paid features, direct calls, or signup protection.
 
 ### 3. Configure Auth
 In **Authentication → Providers → Email**, turn **Confirm email** OFF for this version of Rivo.  
@@ -113,27 +113,12 @@ If an already-deployed project shows `Could not find the function public.rivo_cr
 This restores the exact `rivo_create_post(text, jsonb)` RPC already used by `js/core.js`; no frontend changes are required and existing posts/data are preserved.
 
 ## Calling privacy
-Calls support Everyone / Friends only / Nobody under Settings → Calls. The call permission is enforced by Supabase RPC.
+Calls support Everyone / Friends only / Nobody under Settings → Calls. Supabase enforces the rule both when a call is created and when it is accepted. Saving a stricter setting also closes pending rings that no longer meet it.
 
 
-## Rivo Calls — cross-network reliability
+## Calls — current transport
 
-The call client now supports TURN credentials and ICE restart. This is important when two users are on different networks/NATs: STUN can discover routes, while TURN provides a relay when direct ICE candidates cannot connect.
-
-### Supabase Edge Function
-Deploy `supabase/functions/rivo-turn/index.ts` as the `rivo-turn` function.
-
-Set these server-side Supabase Function Secrets:
-- `CLOUDFLARE_ACCOUNT_ID`
-- `CLOUDFLARE_TURN_KEY_ID`
-- `CLOUDFLARE_TURN_API_TOKEN`
-
-Create a Cloudflare Realtime TURN key first. Do NOT place the Cloudflare API token in `js/supabase-config.js` or any browser code.
-
-The browser is configured to call:
-`https://stfjcrcualeggmiygqur.supabase.co/functions/v1/rivo-turn`
-
-The client falls back to STUN if TURN credentials are unavailable, but reliable calls between restrictive/mobile networks require the TURN function to be deployed and configured.
+The active call client uses LiveKit. The old Cloudflare TURN instructions are not part of this archive and should not be used for deployment.
 
 ## Rivo Calls — LiveKit Cloud
 
@@ -298,13 +283,14 @@ The Profile Editor now treats `Profile Animation` as an independent cosmetic slo
 
 This build hardens direct-call signaling with participant-only `rivo_call_sessions` rows and server RPC transitions, prevents concurrent duplicate LiveKit connection setup, restores missed call state after a tab/network resumes, paginates private conversation history on upward scroll, and adds mouse-wheel/button/pinch zoom for private-message images. Home's composer/feed now has a clear gap.
 
-Before testing these features, review `docs/RIVO_V4_DEPLOYMENT_AR.md`. Apply `supabase_private_messaging_v2.sql` only if it has not already been applied successfully; then test `supabase_rivo_v4_call_security_message_pagination.sql` on staging. Redeploy `supabase/functions/rivo-livekit-token/index.ts`. This ZIP was not connected to the live Supabase project and no SQL was executed as part of the build.
+Before testing these features, follow `docs/RIVO_V4_DEPLOYMENT_AR.md`. Apply `supabase_private_messaging_v2.sql` only if it is not already installed, then apply `supabase_rivo_v4_call_security_message_pagination.sql` on staging. Redeploy `supabase/functions/rivo-livekit-token/index.ts`. These files do not update the live Supabase project automatically.
 
 
 ## Spotify Now Playing presence
 
-- See `docs/SPOTIFY_NOW_PLAYING_SETUP_AR.md` for the Spotify OAuth setup and deployment steps.
-- Apply `supabase_rivo_spotify_presence_v1.sql` as a separate reviewed migration for an existing database; do not rerun the full schema for this feature.
-- Put only the public Spotify Client ID in `js/supabase-config.js`. Never put a Spotify Client Secret in browser code.
-- Spotify authorization codes are exchanged server-side; refresh tokens are stored only in the server-restricted `rivo_spotify_connections` table, and access tokens are never returned to the browser. Deploy `supabase/functions/rivo-spotify-presence`, set the `SPOTIFY_CLIENT_ID` Edge Function secret, and apply `supabase_rivo_spotify_presence_v1.sql` after testing on Staging. Public presence expires after 90 seconds without a fresh update.
-- The profile embeds Spotify's official track player; each visitor starts playback independently. Rivo does not relay or synchronize the owner’s audio.
+Spotify Now Playing is an optional feature intentionally left inactive until you are ready to configure it. The browser integration and SQL migration are present, but the `rivo-spotify-presence` Edge Function source is not included in this archive. No Spotify setup is required for the rest of Rivo. Keep this feature inactive until you decide to implement and deploy its server function; never put Spotify client secrets in browser files.
+
+### V33 Profile Animations and Template Art Direction
+The editor adds Ember Rise, Firefly Drift, and Orbital Passage as three independent profile animations. They remain transparent, low-cost, and compatible with reduced-motion preferences. The 17 existing profile templates also receive a cleaner, individually tuned color and banner finish without changing their IDs or profile data.
+
+Run `supabase_profile_animations_v33.sql` after `supabase_profile_animations_v32.sql` and the existing economy/profile migrations. The V33 migration seeds the three exact store item names and updates the paid-profile validation trigger to enforce ownership for the new animation IDs.

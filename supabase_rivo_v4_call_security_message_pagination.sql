@@ -13,13 +13,19 @@ begin
      or to_regclass('public.rivo_message_attachments') is null
      or to_regclass('public.rivo_message_hidden') is null
      or to_regclass('public.rivo_message_reactions') is null
-     or to_regprocedure('public.rivo_can_call_user(text)') is null then
+     or to_regprocedure('public.rivo_can_call_user(text)') is null
+     or to_regprocedure('public.rivo_can_receive_call(text)') is null then
     raise exception 'Rivo v4 requires the existing core schema and the corrected supabase_private_messaging_v2.sql migration first.';
   end if;
   if not exists (select 1 from information_schema.columns where table_schema='public' and table_name='rivo_messages' and column_name='read_at')
      or not exists (select 1 from information_schema.columns where table_schema='public' and table_name='rivo_messages' and column_name='edited_at')
      or not exists (select 1 from information_schema.columns where table_schema='public' and table_name='profiles' and column_name='is_banned') then
     raise exception 'Rivo v4 requires read_at and edited_at from private messaging v2 and is_banned from the core schema.';
+  end if;
+  if to_regclass('public.rivo_call_sessions') is not null
+     and exists (select 1 from information_schema.columns where table_schema='public' and table_name='rivo_call_sessions' and column_name='id')
+     and not exists (select 1 from information_schema.columns where table_schema='public' and table_name='rivo_call_sessions' and column_name='call_id') then
+    raise exception 'A legacy Phase 2 call-session table is installed. Do not apply v4 directly; convert it on staging first.';
   end if;
 end;
 $preflight$;
@@ -111,6 +117,20 @@ begin
   perform pg_advisory_xact_lock(hashtextextended(least(v_me::text, v_callee::text), 0));
   perform pg_advisory_xact_lock(hashtextextended(greatest(v_me::text, v_callee::text), 0));
 
+  -- Re-read privacy after locking both users. A privacy change racing with the
+  -- initial lookups must win before a new ring is inserted.
+  select coalesce(private_data->'callSettings'->>'whoCanCall','everyone'),
+         coalesce(public_data->'friends','[]'::jsonb)
+    into v_callee_setting, v_callee_friends
+    from public.profiles where id = v_callee;
+  if coalesce(public.rivo_can_call_user(v_username), false) is not true then
+    raise exception 'This user is not accepting calls from you';
+  end if;
+  if v_callee_setting = 'nobody' then raise exception 'This user is not accepting calls'; end if;
+  if v_callee_setting = 'friends' and not (coalesce(v_callee_friends,'[]'::jsonb) ? v_caller_username) then
+    raise exception 'Only this user''s friends can call them';
+  end if;
+
   -- Historical call-session rows are deliberately retained in this migration.
   -- A retention/cleanup job should be added only after the owner approves a policy.
 
@@ -131,6 +151,42 @@ $$;
 revoke all on function public.rivo_create_call_session(uuid,text,text,boolean) from public, anon;
 grant execute on function public.rivo_create_call_session(uuid,text,text,boolean) to authenticated;
 
+-- Changing call privacy immediately closes pending rings that no longer meet
+-- the selected rule. The per-user advisory lock serializes this with call start.
+create or replace function public.rivo_set_call_setting(p_who_can_call text)
+returns text language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_me uuid := auth.uid();
+  v text := case
+    when p_who_can_call = 'friends' then 'friends'
+    when p_who_can_call = 'nobody' then 'nobody'
+    else 'everyone'
+  end;
+begin
+  if v_me is null then raise exception 'Not signed in'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(v_me::text, 0));
+  update public.profiles
+     set private_data = jsonb_set(coalesce(private_data,'{}'::jsonb), '{callSettings,whoCanCall}', to_jsonb(v), true),
+         updated_at = now()
+   where id = v_me;
+  if not found then raise exception 'Profile not found'; end if;
+
+  if v <> 'everyone' then
+    update public.rivo_call_sessions s
+       set status = 'declined', updated_by = v_me, updated_at = now(), expires_at = now()
+     where s.callee_id = v_me
+       and s.status = 'ringing'
+       and s.expires_at > now()
+       and (v = 'nobody' or not coalesce(public.rivo_can_receive_call((
+         select caller.username from public.profiles caller where caller.id = s.caller_id
+       )), false));
+  end if;
+  return v;
+end;
+$$;
+revoke all on function public.rivo_set_call_setting(text) from public, anon;
+grant execute on function public.rivo_set_call_setting(text) to authenticated;
+
 create or replace function public.rivo_update_call_session(p_call_id uuid, p_status text)
 returns boolean
 language plpgsql security definer
@@ -146,6 +202,17 @@ begin
   if p_status = 'active' then
     -- Only the callee may accept; the caller cannot mark its own outgoing call
     -- as accepted and force the recipient into a room without consent.
+    if not coalesce(public.rivo_can_receive_call((
+      select caller.username
+      from public.rivo_call_sessions s
+      join public.profiles caller on caller.id = s.caller_id
+      where s.call_id = p_call_id
+        and s.callee_id = v_me
+        and s.status = 'ringing'
+        and s.expires_at > now()
+    )), false) then
+      raise exception 'You are not accepting calls from this user';
+    end if;
     update public.rivo_call_sessions
        set status = 'active', updated_by = v_me, updated_at = now(), expires_at = now() + interval '8 hours'
      where call_id = p_call_id

@@ -10,7 +10,7 @@ const corsHeaders = {
 function json(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
 }
 
@@ -39,10 +39,16 @@ Deno.serve(async (req: Request) => {
     if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey) return json({ error: "Supabase configuration is missing" }, 500);
     if (!livekitUrl || !livekitApiKey || !livekitApiSecret) return json({ error: "LiveKit is not configured on the server" }, 500);
 
+    // `getUser(token)` validates the bearer token, but does not attach that
+    // token to later RPC requests. Keep the caller token on this client so
+    // auth.uid() and the database's member/call checks see the real user.
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: `Bearer ${bearerToken}` } },
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
     });
-    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey);
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
 
     // Validate the exact bearer token supplied by the client. Do not rely on
     // browser/session storage inside this stateless Edge Function.

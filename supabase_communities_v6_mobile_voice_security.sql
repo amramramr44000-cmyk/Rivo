@@ -85,5 +85,5 @@ begin
   return found;
 end;
 $$;
-revoke all on function public.rivo_cleanup_empty_community_voice(text) from public;
+revoke all on function public.rivo_cleanup_empty_community_voice(text) from public, anon, authenticated;
 grant execute on function public.rivo_cleanup_empty_community_voice(text) to service_role;

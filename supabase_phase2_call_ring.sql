@@ -1,5 +1,9 @@
--- Rivo Phase 2: persistent call signaling / ringing
--- Non-destructive migration. Keeps existing LiveKit/media code intact.
+-- LEGACY call-session format from the earlier Phase 2 build.
+-- The current frontend uses the v4 schema in
+-- supabase_rivo_v4_call_security_message_pagination.sql. Do not apply this
+-- legacy table and the v4 migration to the same database: their table columns
+-- and status values are incompatible. If this legacy migration was already
+-- applied, use a reviewed conversion migration on staging before upgrading.
 
 create table if not exists public.rivo_call_sessions (
   id uuid primary key,
