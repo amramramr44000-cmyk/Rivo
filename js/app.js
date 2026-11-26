@@ -2386,7 +2386,10 @@
     aurora: "Astral Dust",
     rainfall: "Rainfall",
     leaves: "Autumn Leaves",
-    frost: "Frost Spark"
+    frost: "Frost Spark",
+    embers: "Ember Rise",
+    fireflies: "Firefly Drift",
+    orbit: "Orbital Passage"
   };
   const profileAnimationStoreNames = {
     rain: "Rainfall",
@@ -2397,7 +2400,10 @@
     aurora: "Royal Aurora",
     rainfall: "Pure Rainfall",
     leaves: "Autumn Leaves",
-    frost: "Frost Spark"
+    frost: "Frost Spark",
+    embers: "Ember Rise",
+    fireflies: "Firefly Drift",
+    orbit: "Orbital Passage"
   };
   const profileAnimationIds = new Set(Object.keys(profileAnimationLabels));
 

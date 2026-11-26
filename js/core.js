@@ -7,6 +7,18 @@
 (() => {
   "use strict";
 
+  // Resolve the worker from this script URL so the root scope also works when
+  // GitHub Pages serves Rivo beneath a repository subpath.
+  if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+    const coreScriptUrl = document.currentScript?.src;
+    if (coreScriptUrl) {
+      const workerUrl = new URL("../sw.js", coreScriptUrl);
+      const workerScope = new URL("../", coreScriptUrl).pathname;
+      navigator.serviceWorker.register(workerUrl.href, { scope: workerScope })
+        .catch(error => console.warn("[Rivo] Service worker registration failed", error));
+    }
+  }
+
   const cfg = window.RIVO_SUPABASE || {};
   const READY = !!(window.supabase && cfg.url && cfg.anonKey &&
     !String(cfg.url).includes("YOUR_SUPABASE") &&
@@ -1492,7 +1504,7 @@
     "+ Add link":"+ إضافة رابط",
     "Accent outline":"إطار اللون المميز",
     "Account details and the safe sign-out area.":"تفاصيل الحساب ومنطقة تسجيل الخروج الآمنة.",
-    "Accounts, friends and profiles are saved on your device — fast, private, and available offline.":"الحسابات والأصدقاء والملفات الشخصية محفوظة على جهازك — بسرعة وخصوصية ومتاحة دون اتصال.",
+    "Accounts, friends and profiles sync through the cloud and are available across devices.":"تتزامن الحسابات والأصدقاء والملفات الشخصية عبر السحابة وتتوفر على أجهزتك المختلفة.",
     "Accounts, friends, profiles, media and settings persist in the shared cloud database.":"الحسابات والأصدقاء والملفات الشخصية والوسائط والإعدادات محفوظة في قاعدة البيانات السحابية المشتركة.",
     "Compact navigation, controlled preview sizes and responsive profile cards.":"تنقل مدمج وأحجام معاينة مضبوطة وبطاقات ملفات شخصية متجاوبة.",
     "Create your Rivo account with secure authentication.":"أنشئ حساب Rivo الخاص بك بمصادقة آمنة.",
