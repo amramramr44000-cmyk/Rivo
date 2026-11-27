@@ -130,9 +130,40 @@
     if (u) localStorage.setItem(CACHE_KEY, u); else localStorage.removeItem(CACHE_KEY);
   }
   function setSession(username) { cacheUsername(username); }
+  const SAVED_ACCOUNT_KEY = "rivo_saved_accounts_v1";
+  function savedAccounts() {
+    try { const value = JSON.parse(localStorage.getItem(SAVED_ACCOUNT_KEY) || "[]"); return Array.isArray(value) ? value.filter(x => x?.userId && x?.accessToken && x?.refreshToken).slice(0, 3) : []; }
+    catch { return []; }
+  }
+  function writeSavedAccounts(accounts) { localStorage.setItem(SAVED_ACCOUNT_KEY, JSON.stringify(accounts.slice(0, 3))); }
+  async function rememberCurrentAccount() {
+    if (!sb) return [];
+    const { data } = await sb.auth.getSession(); const session = data?.session;
+    if (!session?.user?.id) return savedAccounts();
+    const username = currentUsername() || normalizeUsername(session.user.user_metadata?.username || session.user.email?.split("@")[0]);
+    if (!username) return savedAccounts();
+    const rows = savedAccounts().filter(x => x.userId !== session.user.id);
+    rows.unshift({ userId: session.user.id, username, accessToken: session.access_token, refreshToken: session.refresh_token, expiresAt: session.expires_at || null });
+    writeSavedAccounts(rows);
+    return rows;
+  }
+  async function switchSavedAccount(userId) {
+    const target = savedAccounts().find(x => x.userId === userId);
+    if (!target) throw new Error("This saved account is no longer available.");
+    await rememberCurrentAccount();
+    const { data, error } = await sb.auth.setSession({ access_token: target.accessToken, refresh_token: target.refreshToken });
+    if (error || !data?.session) throw error || new Error("Could not restore this account session. Please sign in again.");
+    cacheDelete(CURRENT_PROFILE_CACHE_KEY); cacheUsername(target.username);
+    const profile = await currentProfile({ force: true });
+    if (!profile) throw new Error("Account restored, but its profile is still loading.");
+    await rememberCurrentAccount();
+    return profile;
+  }
   async function clearSession() {
     // Clear browser-side identity data BEFORE navigation so a later login
     // can never hydrate a stale account from the previous session.
+    const activeUserId = (await sb?.auth.getSession())?.data?.session?.user?.id;
+    if (activeUserId) writeSavedAccounts(savedAccounts().filter(x => x.userId !== activeUserId));
     cacheUsername("");
     cacheDelete(CURRENT_PROFILE_CACHE_KEY);
     try { sessionStorage.removeItem("rivo_profiles_list_v2"); } catch {}
@@ -148,6 +179,9 @@
     // The live balance belongs to profiles.coins_balance, never public_data.
     delete p.coinsBalance;
     delete p.coins_balance;
+    delete p.messageSettings;
+    delete p.callSettings;
+    delete p.friendRequestSettings;
     return p;
   }
   function mergeProfile(row, includePrivate = false) {
@@ -161,6 +195,7 @@
       p.friendRequests = priv.friendRequests || { incoming: [], outgoing: [] };
       p.messageSettings = { whoCanMessage: ["friends","nobody"].includes(priv.messageSettings?.whoCanMessage) ? priv.messageSettings.whoCanMessage : "everyone" };
       p.callSettings = { whoCanCall: ["friends","nobody"].includes(priv.callSettings?.whoCanCall) ? priv.callSettings.whoCanCall : "everyone" };
+      p.friendRequestSettings = { whoCanRequest: ["friends","nobody"].includes(priv.friendRequestSettings?.whoCanRequest) ? priv.friendRequestSettings.whoCanRequest : "everyone" };
       p.birthDate = typeof priv.birthDate === "string" ? priv.birthDate : (p.birthDate || "");
     }
     return p;
@@ -373,6 +408,9 @@
       return data;
     });
     if (!data) return null;
+    // Privacy controls are private_data only. Strip any legacy copies that may
+    // have been written to public_data by older editor versions.
+    delete data.messageSettings; delete data.callSettings; delete data.friendRequestSettings;
     cacheWrite(PROFILE_CACHE_PREFIX + u, data);
     return data;
   }
@@ -596,6 +634,12 @@
     if (!u) throw new Error("Enter your username.");
     const passwordValue = String(password || "");
     if (!passwordValue) throw new Error("Enter your password.");
+    const activeSession = (await sb.auth.getSession()).data?.session;
+    if (activeSession?.user?.id) await rememberCurrentAccount();
+    const savedBeforeLogin = savedAccounts();
+    if (!savedBeforeLogin.some(x => x.username === u) && savedBeforeLogin.length >= 3) {
+      throw new Error("You can keep up to three accounts on this device. Sign out of a saved account first.");
+    }
 
     // The auth email is deterministic from the username, so do not query
     // public.profiles while signed out. RLS correctly blocks that query for
@@ -627,6 +671,7 @@
       cacheUsername("");
       throw new Error("Your account was authenticated, but the profile data is still syncing. Please try again.");
     }
+    await rememberCurrentAccount();
     return profile;
   }
 
@@ -742,6 +787,7 @@
     const v = normalizeWhoCanCall(value);
     await callRpc("rivo_set_call_setting", { p_who_can_call: v });
     invalidateProfileCache(currentUsername());
+    await currentProfile({ force: true });
     return v;
   }
   async function getMessageSettings() {
@@ -755,6 +801,14 @@
     // the "Messages closed" state shows up immediately on anyone viewing this
     // profile, instead of waiting out the old cached copy.
     invalidateProfileCache(currentUsername());
+    await currentProfile({ force: true });
+    return v;
+  }
+  async function setFriendRequestSetting(value) {
+    const v = value === "friends" ? "friends" : value === "nobody" ? "nobody" : "everyone";
+    await callRpc("rivo_set_friend_request_setting", { p_who_can_request: v });
+    invalidateProfileCache(currentUsername());
+    await currentProfile({ force: true });
     return v;
   }
   async function sendMessage(username, content) {
@@ -1368,6 +1422,10 @@
     "Home":"الرئيسية","Posts":"المنشورات","Communities":"المجتمعات","Explore":"استكشاف","Search":"بحث",
     "Messages":"الرسائل","Friends":"الأصدقاء","Profile":"الملف الشخصي","Editor":"المحرر","Edit profile":"تعديل الملف الشخصي",
     "Settings":"الإعدادات","Sign in":"تسجيل الدخول","Sign out":"تسجيل الخروج","Create profile":"إنشاء حساب",
+    "Switch account":"تبديل الحساب","Add or sign in to another account":"إضافة حساب آخر أو تسجيل الدخول إليه","Current account":"الحساب الحالي","Switch to this account":"التبديل إلى هذا الحساب","Friend requests":"طلبات الصداقة","Choose who can send you a friend request.":"اختر من يمكنه إرسال طلب صداقة إليك.","Who can request to be your friend?":"من يمكنه إرسال طلب صداقة؟","Friends of friends":"أصدقاء الأصدقاء","Save friend request privacy":"حفظ خصوصية طلبات الصداقة",
+    "Up to three signed-in accounts are kept on this device.":"يمكن حفظ ثلاثة حسابات مسجلة كحد أقصى على هذا الجهاز.","Account sessions stay on this device. Passwords are never saved by this feature.":"تظل جلسات الحسابات على هذا الجهاز. لا تحفظ هذه الميزة كلمات المرور.",
+    "Share screen":"مشاركة الشاشة","Stop sharing screen":"إيقاف مشاركة الشاشة","Connect the call before sharing your screen.":"اتصل أولًا قبل مشاركة الشاشة.","Screen sharing is not supported by this browser. Try a recent desktop browser over HTTPS.":"مشاركة الشاشة غير مدعومة في هذا المتصفح. جرّب متصفح كمبيوتر حديثًا عبر HTTPS.",
+    "Minimize call":"تصغير المكالمة","Call active":"المكالمة مستمرة","Call connecting":"جارٍ الاتصال","Call is active in another Rivo tab.":"المكالمة مستمرة في تبويب Rivo آخر.","Return to call":"العودة للمكالمة","Call opened in another tab to keep this call connected.":"فتحت الصفحة في تبويب آخر للحفاظ على استمرار المكالمة.",
     "Contact support":"تواصل مع الدعم","Rivo Support":"دعم Rivo","Get help from the Rivo support team.":"احصل على المساعدة من فريق دعم Rivo.","Open support website":"فتح موقع الدعم",
     "Create your profile":"أنشئ ملفك الشخصي","Create my profile":"إنشاء ملفي الشخصي","Already have a profile?":"لديك ملف شخصي بالفعل؟",
     "New here?":"جديد هنا؟","Verify":"تحقق","Verified":"تم التحقق","Save":"حفظ","Send":"إرسال","Cancel":"إلغاء",
@@ -1410,7 +1468,7 @@
     "Account details and the safe sign-out area.":"تفاصيل الحساب ومنطقة تسجيل الخروج الآمنة.",
     "Choose the interface theme for this device. Your profile design stays unchanged.":"اختر مظهر الواجهة لهذا الجهاز. يظل تصميم ملفك الشخصي كما هو.",
     "Choose your preferred language. This translates navigation and is saved across pages — full in-page content translation is coming soon.":"اختر لغتك المفضلة. سيتم حفظها وتطبيقها على واجهة التطبيق.",
-    "Who can call you?":"من يمكنه الاتصال بك؟","Who can message you?":"من يمكنه مراسلتك؟",
+    "Who can call you?":"من يمكنه الاتصال بك؟","Who can message you?":"من يمكنه مراسلتك؟","Save call privacy":"حفظ خصوصية المكالمات","Save message privacy":"حفظ خصوصية الرسائل",
     "Save call privacy":"حفظ خصوصية المكالمات","Save message privacy":"حفظ خصوصية الرسائل",
     "Private conversations with voice and video calling.":"محادثات خاصة مع المكالمات الصوتية والمرئية.",
     "Choose who is allowed to start a voice or video call with you.":"اختر من يمكنه بدء مكالمة صوتية أو مرئية معك.",
@@ -2395,8 +2453,9 @@ async function getVoiceUrl(path) {
   window.PF = {
     defaults, badgeCatalog, templates, getProfile, listProfiles, putProfile: saveProfile, deleteProfile,
     normalizeUsername, validUsername, currentUsername, currentProfile, createAccount, login, clearSession,
+    getSavedAccounts: savedAccounts, rememberCurrentAccount, switchSavedAccount,
     updateProfile, saveProfile, searchUsers, getProfiles, sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
-    removeFriend, cancelFriendRequest, toggleFollow, isFollowing, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, sendMessage,
+    removeFriend, cancelFriendRequest, toggleFollow, isFollowing, toggleLike, friendshipState, addView, getMessageSettings, setMessageSetting, getCallSettings, setCallSetting, setFriendRequestSetting, sendMessage,
     listConversations, getMessages, getMessagesPage, deleteMessage, editMessage, markMessagesRead, subscribeMessages, subscribePresence, ensureDemoAccount, compressImage, readAudio,
     REACTION_SET, isEmojiOnly, normalizeMessageText, toggleMessageReaction, listNotifications, markNotificationRead, markAllNotificationsRead,
     subscribeNotifications, subscribeMessageReactions, notificationsEnabled, setNotificationsEnabled, listProfileVisitors, isAdminProfile, adminStatus, adminListUsers, adminSetBanned, adminSetStats, adminSetCoins, adminDeleteUser, adminUpdateUser, adminGetUserDetails,

@@ -649,6 +649,16 @@
     let callStartPending = false;
     let callEndingPromise = null;
     let incomingOfferPendingId = "";
+    const CALL_OWNER_KEY = "rivo_active_call_owner_v1";
+    const callTabId = window.name.startsWith("rivo-call-") ? window.name : (window.name = `rivo-call-${crypto.randomUUID()}`);
+    const callChannel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("rivo_call_focus_v1") : null;
+    const persistCallOwner = call => {
+      if (!call?.callId) return;
+      try { localStorage.setItem(CALL_OWNER_KEY, JSON.stringify({ owner: callTabId, callId: call.callId, username: call.peer?.username || "", displayName: call.peer?.displayName || call.peer?.username || "Contact", updatedAt: Date.now() })); } catch {}
+    };
+    const clearCallOwner = call => {
+      try { const saved = JSON.parse(localStorage.getItem(CALL_OWNER_KEY) || "null"); if (saved?.owner === callTabId && (!call?.callId || saved.callId === call.callId)) localStorage.removeItem(CALL_OWNER_KEY); } catch {}
+    };
 
     const ensureUI = () => {
       let h = $("#rivoCallUI");
@@ -656,6 +666,7 @@
 
       h = document.createElement("div");
       h.id = "rivoCallUI";
+      const tr = value => PF.translateString?.(value) || value;
       h.innerHTML = `
         <div class="call-backdrop" data-call-backdrop>
           <section class="call-panel glass" role="dialog" aria-modal="true" aria-label="Rivo call">
@@ -677,6 +688,7 @@
                     <path d="M12 4v2"></path>
                   </svg>
                 </button>
+                <button class="icon-btn" type="button" data-call-minimize aria-label="${esc(tr("Minimize call"))}" title="${esc(tr("Minimize call"))}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
                 <button class="icon-btn" type="button" data-call-close aria-label="Close">×</button>
               </div>
             </header>
@@ -709,6 +721,10 @@
                 </svg>
               </button>
 
+              <button class="call-control call-screen-share" type="button" data-call-screen-share aria-label="Share screen" title="Share screen">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8M12 17v4M8 10l3 3 5-5"></path></svg>
+              </button>
+
               <button class="call-control end" type="button" data-call-end aria-label="End call">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M7.4 4.5 10 4l1.4 4-2.1 1.4a11.6 11.6 0 0 0 5.3 5.3l1.4-2.1 4 1.4-.5 2.6a2.2 2.2 0 0 1-2.4 1.8C10.2 17.5 6.5 13.8 5.6 6.9a2.2 2.2 0 0 1 1.8-2.4Z"></path>
@@ -722,6 +738,8 @@
             </div>
           </section>
         </div>`;
+
+      h.insertAdjacentHTML("beforeend", `<div class="call-mini-pill hidden" data-call-mini><button type="button" data-call-restore><span class="call-mini-live-dot"></span><span data-call-mini-label>${esc(tr("Call active"))}</span></button><button type="button" data-call-mini-end aria-label="End call">×</button></div><div class="call-other-tab-banner hidden" data-call-other-tab><span>${esc(tr("Call is active in another Rivo tab."))}</span><button type="button" data-call-focus-owner>${esc(tr("Return to call"))}</button></div>`);
 
       document.body.appendChild(h);
 
@@ -759,6 +777,11 @@
       $("[data-call-end]", h).onclick = () => endCall(true);
       $("[data-call-mute]", h).onclick = toggleMute;
       $("[data-call-camera]", h).onclick = toggleCamera;
+      $("[data-call-screen-share]", h).onclick = toggleScreenShare;
+      $("[data-call-minimize]", h).onclick = minimizeCall;
+      $("[data-call-restore]", h).onclick = () => show();
+      $("[data-call-mini-end]", h).onclick = () => endCall(true);
+      $("[data-call-focus-owner]", h).onclick = () => callChannel?.postMessage({ type: "focus", owner: JSON.parse(localStorage.getItem(CALL_OWNER_KEY) || "null")?.owner });
       $("[data-call-accept]", h).onclick = acceptIncoming;
       $("[data-call-decline]", h).onclick = declineIncoming;
       h.addEventListener("click", ev => {
@@ -776,6 +799,9 @@
       return {
         h,
         b: $("[data-call-backdrop]", h),
+        mini: $(`[data-call-mini]`, h),
+        miniLabel: $(`[data-call-mini-label]`, h),
+        otherTabBanner: $(`[data-call-other-tab]`, h),
         panel: $(".call-panel", h),
         title: $("[data-call-title]", h),
         sub: $("[data-call-subtitle]", h),
@@ -789,12 +815,25 @@
         incoming: $("[data-call-incoming]", h),
         mute: $("[data-call-mute]", h),
         camera: $("[data-call-camera]", h),
+        screenShare: $("[data-call-screen-share]", h),
         quality: $("[data-call-quality]", h),
         qualityText: $("[data-call-quality-text]", h),
         audioRoute: $("[data-call-audio-route]", h),
         routeMenu: $("[data-call-route-menu]", h),
       };
     };
+
+    const syncOtherTabBanner = () => {
+      let owner = null;
+      try { owner = JSON.parse(localStorage.getItem(CALL_OWNER_KEY) || "null"); } catch {}
+      if (owner && Date.now() - Number(owner.updatedAt || 0) > 8 * 60 * 60 * 1000) { clearCallOwner({ callId: owner.callId }); owner = null; }
+      E().otherTabBanner?.classList.toggle("hidden", !owner?.owner || owner.owner === callTabId);
+    };
+    callChannel?.addEventListener("message", event => {
+      if (event.data?.type === "focus" && event.data?.owner === callTabId) { try { window.focus(); } catch {} }
+    });
+    window.addEventListener("storage", event => { if (event.key === CALL_OWNER_KEY) syncOtherTabBanner(); });
+    window.addEventListener("pagehide", () => clearCallOwner(active));
 
     const closeRouteMenu = () => {
       const e = E();
@@ -806,10 +845,16 @@
       const e = E();
       closeRouteMenu();
       e.b.classList.remove("open");
+      e.mini?.classList.add("hidden");
       e.remote.classList.remove("live");
       e.local.classList.remove("live");
       e.remote.srcObject = null;
       e.local.srcObject = null;
+      e.stage.querySelectorAll(".call-remote-screen.live,.call-local-screen.live,.call-remote-video.live,.call-local-video.live").forEach(video => { try { video.pause?.(); video.srcObject = null; video.remove(); } catch {} });
+      e.stage.classList.remove("has-remote-screen", "has-local-screen");
+      e.screenShare?.classList.remove("is-sharing");
+      e.screenShare?.setAttribute("aria-label", "Share screen");
+      if (e.screenShare) e.screenShare.disabled = false;
       if (callTimer) clearInterval(callTimer);
       if (qualityTimer) clearInterval(qualityTimer);
       callTimer = null;
@@ -821,7 +866,13 @@
       e.quality.className = "call-quality";
     };
 
-    const show = () => E().b.classList.add("open");
+    const show = () => { const e = E(); e.b.classList.add("open"); e.mini?.classList.add("hidden"); if (active) active.minimized = false; };
+    const minimizeCall = () => {
+      if (!active) return;
+      const e = E(); active.minimized = true; e.b.classList.remove("open"); e.mini?.classList.remove("hidden");
+      if (e.miniLabel) e.miniLabel.textContent = `${PF.translateString?.(active.connected ? "Call active" : "Call connecting") || (active.connected ? "Call active" : "Call connecting")} · ${active.peer?.displayName || active.peer?.username || "Contact"}`;
+    };
+    syncOtherTabBanner();
 
     const state = (t, connected = false) => {
       const e = E();
@@ -898,24 +949,33 @@
 
     async function token(roomName, participantName) {
       const cfg = window.RIVO_CALL_CONFIG || {};
-      const session = (await window.__rivoSupabase?.auth.getSession())?.data?.session;
+      const auth = window.__rivoSupabase?.auth;
+      let session = (await auth?.getSession())?.data?.session;
       if (!cfg.tokenUrl || !session?.access_token) {
         throw new Error("Call service is not configured.");
       }
-
-      const r = await fetch(cfg.tokenUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({ roomName, participantName })
-      });
-
+      if (session.expires_at && session.expires_at * 1000 < Date.now() + 60000) {
+        const refreshed = await auth.refreshSession();
+        if (refreshed.error || !refreshed.data?.session) throw new Error("Your Rivo login expired. Sign in again, then restart the call.");
+        session = refreshed.data.session;
+      }
+      const headers = { "Content-Type": "application/json", "Authorization": `Bearer ${session.access_token}` };
+      const publishableKey = window.RIVO_SUPABASE?.anonKey;
+      if (publishableKey) headers.apikey = publishableKey;
+      const request = () => fetch(cfg.tokenUrl, { method: "POST", headers, body: JSON.stringify({ roomName, participantName }) });
+      let r = await request();
+      if (r.status === 401 && auth) {
+        const refreshed = await auth.refreshSession();
+        if (!refreshed.error && refreshed.data?.session?.access_token) {
+          session = refreshed.data.session;
+          headers.Authorization = `Bearer ${session.access_token}`;
+          r = await request();
+        }
+      }
       const d = await r.json().catch(() => ({}));
 
       if (!r.ok) {
-        throw new Error(d.error || "Could not authorize the call.");
+        throw new Error(d.error || `Call authorization failed (${r.status}).`);
       }
 
       return d;
@@ -1300,6 +1360,22 @@
       } catch (err) { console.warn("[Rivo Calls] Could not attach local camera", err); }
     };
 
+    const attachLocalScreen = (track) => {
+      if (!track) return;
+      const e = E();
+      try {
+        const old = e.stage.querySelector(".call-local-screen.live");
+        if (old) { try { old.pause?.(); old.srcObject = null; old.remove(); } catch {} }
+        const media = track.attach();
+        media.className = "call-local-screen live";
+        media.autoplay = true; media.muted = true; media.playsInline = true;
+        media.setAttribute("playsinline", "");
+        e.stage.appendChild(media);
+        e.stage.classList.add("has-local-screen");
+        media.play?.().catch(() => {});
+      } catch (err) { console.warn("[Rivo Calls] Could not attach local screen share", err); }
+    };
+
     async function connectMedia() {
       const callState = active;
       if (!callState?.roomName) throw new Error("Call room is missing.");
@@ -1344,7 +1420,7 @@
               videoCodec: "vp8",
               degradationPreference: "maintain-framerate"
             }
-          : { ...AUDIO_PUBLISH_OPTIONS() }
+          : { ...AUDIO_PUBLISH_OPTIONS(), videoCodec: "vp8", simulcast: false, degradationPreference: "maintain-framerate" }
       });
 
       if (LK.RoomEvent.LocalTrackPublished) {
@@ -1353,6 +1429,11 @@
           try {
             if (publication?.source === LK.Track.Source.Camera && publication.track) {
               attachLocalVideo(publication.track);
+            }
+            if (publication?.source === LK.Track.Source.ScreenShare && publication.track) {
+              attachLocalScreen(publication.track);
+              E().screenShare?.classList.add("is-sharing");
+              E().screenShare?.setAttribute("aria-label", "Stop sharing screen");
             }
           } catch {}
           try {
@@ -1387,23 +1468,30 @@
               E().stage.querySelectorAll(".call-local-video.live").forEach(video => {
                 try { video.pause?.(); video.srcObject = null; video.remove(); } catch {}
               });
+            } else if (publication?.source === LK.Track.Source.ScreenShare) {
+              E().stage.querySelectorAll(".call-local-screen.live").forEach(video => { try { video.pause?.(); video.srcObject = null; video.remove(); } catch {} });
+              E().stage.classList.remove("has-local-screen");
+              E().screenShare?.classList.remove("is-sharing");
+              E().screenShare?.setAttribute("aria-label", "Share screen");
             }
           } catch {}
         });
       }
 
-      room.on(LK.RoomEvent.TrackSubscribed, async track => {
+      room.on(LK.RoomEvent.TrackSubscribed, async (track, publication) => {
         if (!stillCurrent()) { try { track?.detach?.().forEach?.(x => x.remove()); } catch {} return; }
         if (track?.kind === LK.Track.Kind.Video) {
           try {
             const media = track.attach();
-            media.className = "call-remote-video live";
+            const isScreenShare = publication?.source === LK.Track.Source.ScreenShare || track?.source === LK.Track.Source.ScreenShare;
+            media.className = `${isScreenShare ? "call-remote-screen" : "call-remote-video"} live`;
             media.autoplay = true;
             media.playsInline = true;
             media.setAttribute("playsinline", "");
-            const old = e.stage.querySelector(".call-remote-video.live");
+            const old = e.stage.querySelector(isScreenShare ? ".call-remote-screen.live" : ".call-remote-video.live");
             if (old) { try { old.pause?.(); old.srcObject = null; old.remove(); } catch {} }
             e.stage.appendChild(media);
+            if (isScreenShare) e.stage.classList.add("has-remote-screen");
             try { await media.play(); } catch {}
             if (!stillCurrent()) { try { track.detach(media); media.remove(); } catch {} }
           } catch (error) { console.warn("[Rivo Calls] Could not attach remote video:", error); }
@@ -1413,7 +1501,7 @@
         }
       });
 
-      room.on(LK.RoomEvent.TrackUnsubscribed, track => {
+      room.on(LK.RoomEvent.TrackUnsubscribed, (track, publication) => {
         if (track?.kind === LK.Track.Kind.Audio && callState.remoteAudioTrack === track) {
           try { track.detach(callState.remoteAudioEl); } catch {}
           try { track.detach(); } catch {}
@@ -1425,7 +1513,9 @@
             }
           } catch {}
         } else {
+          const isScreenShare = publication?.source === LK.Track.Source.ScreenShare || track?.source === LK.Track.Source.ScreenShare;
           try { track?.detach?.().forEach(x => x.remove()); } catch {}
+          if (isScreenShare) e.stage.classList.remove("has-remote-screen");
         }
       });
 
@@ -1490,12 +1580,17 @@
       if (!d.server_url || !d.participant_token) throw new Error("LiveKit authorization failed.");
       try { room.prepareConnection(d.server_url, d.participant_token); } catch {}
 
-      await room.connect(d.server_url, d.participant_token, {
-        autoSubscribe: true,
-        maxRetries: 6,
-        peerConnectionTimeout: 20000,
-        websocketTimeout: 20000
-      });
+      try {
+        await room.connect(d.server_url, d.participant_token, {
+          autoSubscribe: true,
+          maxRetries: 6,
+          peerConnectionTimeout: 20000,
+          websocketTimeout: 20000
+        });
+      } catch (error) {
+        console.warn("[Rivo Calls] LiveKit rejected the room connection", error?.name || "Error", error?.message || error);
+        throw new Error(`LiveKit connection failed: ${error?.message || "Unauthorized"}`);
+      }
       if (await disconnectIfStale(room)) return false;
       try { await room.startAudio?.(); } catch {}
       if (!stillCurrent()) { await disconnectIfStale(room); return false; }
@@ -1612,6 +1707,7 @@
           micTrack: null, micEnabled: true, inputDeviceId: "default", outputDeviceId: "default"
         };
         active = callState;
+        persistCallOwner(callState);
 
         await PF.createCallSession(callId, peer.username || username, roomName, isVideo);
         if (active === callState) {
@@ -1702,6 +1798,7 @@
         remoteAudioEl: null, remoteAudioTrack: null, remoteAudioFallbackEl: null,
         micTrack: null, micEnabled: true, inputDeviceId: "default", outputDeviceId: "default"
       };
+      persistCallOwner(active);
     }
 
     async function acceptIncoming() {
@@ -1747,6 +1844,7 @@
       old.ringTimer = null;
       active = null;
       const cleanup = (async () => {
+        clearCallOwner(old);
         // Session status itself is the hangup event. Remote-originated status
         // changes pass updateSession=false to avoid writing the same event back.
         if (updateSession && old.callId) {
@@ -1819,12 +1917,67 @@
       e.camera.setAttribute("aria-label", currentlyEnabled ? "Turn camera on" : "Turn camera off");
     }
 
+    async function toggleScreenShare() {
+      const callState = active;
+      const e = E();
+      if (!callState?.room || !callState.connected) {
+        notifyCall("Connect the call before sharing your screen.", "error");
+        return;
+      }
+      const participant = callState.room.localParticipant;
+      if (typeof participant.setScreenShareEnabled !== "function") {
+        notifyCall("Screen sharing is not supported by this browser. Try a recent desktop browser over HTTPS.", "error");
+        return;
+      }
+      if (callState.screenShareBusy) return;
+      const wasEnabled = !!participant.isScreenShareEnabled;
+      callState.screenShareBusy = true;
+      if (e.screenShare) { e.screenShare.disabled = true; e.screenShare.classList.add("is-loading"); }
+      try {
+        await participant.setScreenShareEnabled(!wasEnabled);
+        if (active !== callState) return;
+        const enabled = !!participant.isScreenShareEnabled;
+        e.screenShare?.classList.toggle("is-sharing", enabled);
+        e.screenShare?.setAttribute("aria-label", enabled ? "Stop sharing screen" : "Share screen");
+        if (enabled) {
+          const publication = participant.getTrackPublication?.(LK.Track.Source.ScreenShare);
+          if (publication?.track) attachLocalScreen(publication.track);
+          state("Sharing your screen", true);
+        } else {
+          e.stage.querySelectorAll(".call-local-screen.live").forEach(video => { try { video.pause?.(); video.srcObject = null; video.remove(); } catch {} });
+          e.stage.classList.remove("has-local-screen");
+          state("Connected", true);
+        }
+      } catch (error) {
+        if (active !== callState) return;
+        const message = String(error?.message || "");
+        if (!/cancel|denied|permission/i.test(message)) notifyCall(message || "Screen sharing could not start. Check browser permission and try again.", "error");
+      } finally {
+        callState.screenShareBusy = false;
+        if (active === callState && e.screenShare) { e.screenShare.disabled = false; e.screenShare.classList.remove("is-loading"); }
+      }
+    }
+
     window.addEventListener("offline", () => {
       if (active?.connected) state("Offline · reconnecting…");
     });
 
     window.addEventListener("online", () => {
       if (active?.connected) state("Reconnecting…");
+    });
+
+    document.addEventListener("click", e => {
+      if (!active?.connected || !active.minimized || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const link = e.target.closest?.("a[href]");
+      if (!link || link.target || link.hasAttribute("download") || link.closest("#rivoCallUI")) return;
+      const url = new URL(link.href, location.href);
+      if (url.origin !== location.origin || (url.pathname === location.pathname && url.search === location.search)) return;
+      // Keep the LiveKit document alive in its current tab. Native navigation
+      // remains user initiated, but opens the destination in a second tab.
+      const oldTarget = link.getAttribute("target"), oldRel = link.getAttribute("rel");
+      link.setAttribute("target", "_blank");
+      link.setAttribute("rel", `${oldRel || ""} noopener`.trim());
+      setTimeout(() => { if (oldTarget == null) link.removeAttribute("target"); else link.setAttribute("target", oldTarget); if (oldRel == null) link.removeAttribute("rel"); else link.setAttribute("rel", oldRel); }, 0);
     });
 
     document.addEventListener("click", async e => {
@@ -2444,6 +2597,7 @@
 
   async function initEditor() {
     const me = await PF.currentProfile(); if (!me) { location.href = "login.html"; return; }
+    await PF.rememberCurrentAccount?.();
     const state = structuredClone(me);
     state.animation = profileAnimationIds.has(state.animation) ? state.animation : "none";
     state.template = templates[state.template] ? state.template : "discord-noir";
@@ -4751,6 +4905,7 @@ messageImageInput?.addEventListener("change", async () => {
 
   async function initSettings() {
     const me = await PF.currentProfile(); if (!me) { location.href = "login.html"; return; }
+    await PF.rememberCurrentAccount?.();
     $("#settingsUsername") && ($("#settingsUsername").textContent = "@" + me.username);
     $("#settingsDisplay") && ($("#settingsDisplay").textContent = me.displayName || me.username); $("#settingsBirthDate") && ($("#settingsBirthDate").textContent = me.birthDate ? new Date(me.birthDate+"T00:00:00").toLocaleDateString(undefined,{year:"numeric",month:"long",day:"numeric"}) : "Not set");
     $("#settingsLogout")?.addEventListener("click", async () => { await PF.clearSession(); location.href = "../index.html"; });
@@ -4760,6 +4915,7 @@ messageImageInput?.addEventListener("change", async () => {
     const callSelect = $("#callPrivacy");
     const callSave = $("#callPrivacySave");
     const callHint = $("#callPrivacyHint");
+    const friendSelect = $("#friendRequestPrivacy"), friendSave = $("#friendRequestPrivacySave"), friendHint = $("#friendRequestPrivacyHint");
     const messageHint = v => v === "nobody"
       ? "Nobody can message you — not even friends. Your profile shows a \u201cMessages closed\u201d badge instead of a Message button."
       : v === "friends"
@@ -4769,6 +4925,7 @@ messageImageInput?.addEventListener("change", async () => {
       : me.messageSettings?.whoCanMessage === "nobody" ? "nobody" : "everyone";
     const currentCallSetting = me.callSettings?.whoCanCall === "friends" ? "friends"
       : me.callSettings?.whoCanCall === "nobody" ? "nobody" : "everyone";
+    const currentFriendSetting = me.friendRequestSettings?.whoCanRequest === "friends" ? "friends" : me.friendRequestSettings?.whoCanRequest === "nobody" ? "nobody" : "everyone";
     const callHintText = v => v === "nobody" ? "Nobody can start a voice or video call with you." : v === "friends" ? "Only your accepted friends can start a call with you." : "Anyone with a Rivo account can start a call with you.";
     const mode = localStorage.getItem("rivo_color_scheme") || "dark";
     $("#themeDark") && ($("#themeDark").checked = mode === "dark");
@@ -4985,6 +5142,9 @@ messageImageInput?.addEventListener("change", async () => {
     if (hint) hint.textContent = messageHint(currentSetting);
     if (callSelect) callSelect.value = currentCallSetting;
     if (callHint) callHint.textContent = callHintText(currentCallSetting);
+    if (friendSelect) friendSelect.value = currentFriendSetting;
+    const friendHintText = v => v === "nobody" ? "Friend requests are closed." : v === "friends" ? "Only people who share a friend with you can send a request." : "Anyone with a Rivo account can send you a request.";
+    if (friendHint) friendHint.textContent = friendHintText(currentFriendSetting);
     callSelect?.addEventListener("change", () => { if (callHint) callHint.textContent = callHintText(callSelect.value); });
     save?.addEventListener("click", async () => {
       try {
@@ -5000,6 +5160,33 @@ messageImageInput?.addEventListener("change", async () => {
       try { callSave.disabled=true; callSave.textContent="Saving…"; const v=await PF.setCallSetting(callSelect.value); if(callHint) callHint.textContent=callHintText(v); notify("Call privacy saved","success"); }
       catch(e){ notify(e.message,"error"); }
       finally { callSave.disabled=false; callSave.textContent="Save call privacy"; }
+    });
+    friendSelect?.addEventListener("change", () => { if (friendHint) friendHint.textContent = friendHintText(friendSelect.value); });
+    friendSave?.addEventListener("click", async () => {
+      try { friendSave.disabled = true; friendSave.textContent = "Saving…"; const v = await PF.setFriendRequestSetting(friendSelect.value); if (friendHint) friendHint.textContent = friendHintText(v); notify("Friend request privacy saved", "success"); }
+      catch (e) { notify(e.message || "Could not save friend request privacy", "error"); }
+      finally { friendSave.disabled = false; friendSave.textContent = "Save friend request privacy"; }
+    });
+    const switchButton = $("#switchAccountButton");
+    switchButton?.addEventListener("click", async () => {
+      const modal = document.createElement("div"); modal.className = "account-switch-modal";
+      const tr = value => PF.translateString?.(value) || value;
+      const draw = () => {
+        const rows = PF.getSavedAccounts();
+        modal.innerHTML = `<div class="account-switch-backdrop" data-account-close></div><section class="account-switch-dialog glass" role="dialog" aria-modal="true" aria-labelledby="accountSwitchTitle"><button class="icon-btn account-switch-close" data-account-close aria-label="Close">×</button><span class="eyebrow">RIVO ACCOUNTS</span><h2 id="accountSwitchTitle">${esc(tr("Switch account"))}</h2><p class="muted">${esc(tr("Up to three signed-in accounts are kept on this device."))}</p><div class="account-switch-list">${rows.map(x => `<button type="button" class="account-switch-option" data-account-id="${esc(x.userId)}"><span class="avatar-fallback">${esc((x.username || "R").slice(0,2).toUpperCase())}</span><span><b>@${esc(x.username)}</b><small>${esc(tr(x.userId === me.id ? "Current account" : "Switch to this account"))}</small></span>${x.userId === me.id ? "✓" : "↗"}</button>`).join("")}</div><a class="btn btn-primary account-add-button" href="login.html">${esc(tr("Add or sign in to another account"))}</a><p class="section-sub">${esc(tr("Account sessions stay on this device. Passwords are never saved by this feature."))}</p></section>`;
+      };
+      draw(); document.body.appendChild(modal); document.body.classList.add("account-switch-open");
+      let onEsc;
+      const close = () => { modal.remove(); document.body.classList.remove("account-switch-open"); document.removeEventListener("keydown", onEsc); };
+      modal.addEventListener("click", async e => {
+        if (e.target.closest("[data-account-close]")) { close(); return; }
+        const option = e.target.closest("[data-account-id]"); if (!option || option.dataset.accountId === me.id) return;
+        option.disabled = true; option.classList.add("loading");
+        try { await PF.switchSavedAccount(option.dataset.accountId); location.reload(); }
+        catch (err) { notify(err.message || "Could not switch account", "error"); option.disabled = false; option.classList.remove("loading"); }
+      });
+      onEsc = e => { if (e.key === "Escape" && modal.isConnected) close(); };
+      document.addEventListener("keydown", onEsc);
     });
   }
   const POST_REACTION = "⭐";
@@ -5625,10 +5812,15 @@ messageImageInput?.addEventListener("change", async () => {
 
     async function getLiveKitToken(roomName,participantName){
       const cfg=window.RIVO_CALL_CONFIG||{};
-      const session=(await window.__rivoSupabase?.auth.getSession())?.data?.session;
+      const auth=window.__rivoSupabase?.auth;
+      let session=(await auth?.getSession())?.data?.session;
       if(!cfg.tokenUrl||!session?.access_token)throw new Error('Voice service is not configured or your session expired.');
+      if(session.expires_at&&session.expires_at*1000<Date.now()+60000){const refreshed=await auth.refreshSession();if(refreshed.error||!refreshed.data?.session)throw new Error('Your Rivo login expired. Sign in again, then reconnect.');session=refreshed.data.session;}
+      const headers={'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`};
+      const publishableKey=window.RIVO_SUPABASE?.anonKey;if(publishableKey)headers.apikey=publishableKey;
+      const request=()=>fetch(cfg.tokenUrl,{method:'POST',headers,body:JSON.stringify({roomName,participantName})});
       let r;
-      try{r=await fetch(cfg.tokenUrl,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},body:JSON.stringify({roomName,participantName})});}
+      try{r=await request();if(r.status===401){const refreshed=await auth?.refreshSession();if(!refreshed?.error&&refreshed?.data?.session?.access_token){session=refreshed.data.session;headers.Authorization=`Bearer ${session.access_token}`;r=await request();}}}
       catch(e){throw new Error('Could not reach the voice service. Check your connection and try again.');}
       const d=await r.json().catch(()=>({}));
       voicePresenceAccessToken=session.access_token;
