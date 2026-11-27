@@ -1695,7 +1695,7 @@
         const e = E();
         person(peer);
         e.title.textContent = isVideo ? "Starting video call" : "Starting voice call";
-        e.sub.textContent = isVideo ? "Video · waiting for answer" : "Voice · waiting for answer";
+      e.sub.textContent = isVideo ? "Camera starts after the other person accepts" : "Voice · waiting for answer";
         state("Ringing…");
         e.incoming.classList.add("hidden");
         show();
@@ -1785,8 +1785,10 @@
       const e = E();
       person(peer || { username: u, displayName: msg.payload?.displayName || "Contact", avatar: msg.payload?.avatar || "" });
       e.title.textContent = msg.payload?.isVideo ? "Incoming video call" : "Incoming voice call";
-      e.sub.textContent = "Incoming call";
-      state("Calling…");
+      e.sub.textContent = msg.payload?.isVideo ? "Camera and microphone start only after you accept" : "Incoming call · tap Accept to join";
+      state(msg.payload?.isVideo ? "Review before turning on your camera" : "Waiting for your answer");
+      const acceptButton = e.incoming.querySelector("[data-call-accept]");
+      if (acceptButton) acceptButton.textContent = msg.payload?.isVideo ? "Accept video call" : "Accept";
       e.incoming.classList.remove("hidden");
       show();
 
@@ -1823,7 +1825,7 @@
         if (active === callState) { notifyCall(err.message || "Could not accept the call", "error"); await endCall(true); }
       } finally {
         callState.accepting = false;
-        if (acceptButton) { acceptButton.disabled = false; acceptButton.textContent = "Accept"; }
+        if (acceptButton) { acceptButton.disabled = false; acceptButton.textContent = callState.isVideo ? "Accept video call" : "Accept"; }
       }
     }
 
@@ -1929,18 +1931,25 @@
         notifyCall("Screen sharing is not supported by this browser. Try a recent desktop browser over HTTPS.", "error");
         return;
       }
+      if (!window.isSecureContext || typeof navigator.mediaDevices?.getDisplayMedia !== "function") {
+        notifyCall("This phone browser does not support screen sharing here. Try an updated Chrome/Edge browser over HTTPS or use a computer.", "error");
+        return;
+      }
       if (callState.screenShareBusy) return;
-      const wasEnabled = !!participant.isScreenShareEnabled;
+      let existingScreenPublication = null;
+      try { existingScreenPublication = participant.getTrackPublication?.(LK.Track.Source.ScreenShare); } catch {}
+      const wasEnabled = !!participant.isScreenShareEnabled || !!existingScreenPublication?.track;
       callState.screenShareBusy = true;
       if (e.screenShare) { e.screenShare.disabled = true; e.screenShare.classList.add("is-loading"); }
       try {
+        if (e.screenShare) e.screenShare.title = "Choose your screen in the system picker, then tap Start sharing";
         await participant.setScreenShareEnabled(!wasEnabled);
         if (active !== callState) return;
-        const enabled = !!participant.isScreenShareEnabled;
+        const publication = participant.getTrackPublication?.(LK.Track.Source.ScreenShare);
+        const enabled = !!participant.isScreenShareEnabled || !!publication?.track;
         e.screenShare?.classList.toggle("is-sharing", enabled);
         e.screenShare?.setAttribute("aria-label", enabled ? "Stop sharing screen" : "Share screen");
         if (enabled) {
-          const publication = participant.getTrackPublication?.(LK.Track.Source.ScreenShare);
           if (publication?.track) attachLocalScreen(publication.track);
           state("Sharing your screen", true);
         } else {
@@ -1954,7 +1963,7 @@
         if (!/cancel|denied|permission/i.test(message)) notifyCall(message || "Screen sharing could not start. Check browser permission and try again.", "error");
       } finally {
         callState.screenShareBusy = false;
-        if (active === callState && e.screenShare) { e.screenShare.disabled = false; e.screenShare.classList.remove("is-loading"); }
+        if (active === callState && e.screenShare) { e.screenShare.disabled = false; e.screenShare.classList.remove("is-loading"); e.screenShare.title = e.screenShare.classList.contains("is-sharing") ? "Stop sharing screen" : "Share screen"; }
       }
     }
 
@@ -4403,7 +4412,10 @@ async function initProfile() {
       loadingOlderMessages = false;
       if (voiceDraft && nextUsername !== activeUser) clearVoiceDraft();
       messagesLayout.classList.add("conversation-open");
-      if (window.innerWidth <= 760) document.body.classList.add("rivo-chat-fullscreen");
+      if (window.innerWidth <= 760) {
+        document.body.classList.add("rivo-chat-fullscreen");
+        document.documentElement.classList.add("rivo-chat-active");
+      }
       window.__rivoActiveMessageUser = PF.normalizeUsername(username);
       activeUser = PF.normalizeUsername(username);
       setMessageCallTarget(activeUser);
@@ -4534,12 +4546,18 @@ async function initProfile() {
     search.addEventListener("input", renderConversations);
     window.addEventListener("resize", () => {
       if (!messagesLayout.classList.contains("conversation-open")) return;
-      if (window.innerWidth <= 760) document.body.classList.add("rivo-chat-fullscreen");
-      else document.body.classList.remove("rivo-chat-fullscreen");
+      if (window.innerWidth <= 760) {
+        document.body.classList.add("rivo-chat-fullscreen");
+        document.documentElement.classList.add("rivo-chat-active");
+      } else {
+        document.body.classList.remove("rivo-chat-fullscreen");
+        document.documentElement.classList.remove("rivo-chat-active");
+      }
     }, { passive: true });
     mobileBack?.addEventListener("click", () => {
       messagesLayout.classList.remove("conversation-open");
       document.body.classList.remove("rivo-chat-fullscreen");
+      document.documentElement.classList.remove("rivo-chat-active");
       activeUser = "";
       activeUserId = "";
       setMessageCallTarget("");
@@ -5539,8 +5557,11 @@ messageImageInput?.addEventListener("change", async () => {
     let liveKitAudio=[];
     let voiceJoined=false;
     let voiceJoinBusy=false;
+    let communityScreenShareBusy=false;
     let voicePresenceTimer=null;
     let voicePresenceSyncBusy=false;
+    const communityMediaTracks=new Map();
+    let focusedCommunityMedia='';
 
     const role=()=>String(community?.my_role||'member');
     const canModerate=()=>['owner','moderator'].includes(role());
@@ -5562,6 +5583,7 @@ messageImageInput?.addEventListener("change", async () => {
     <section id="communityVoiceBar" class="community-voice-bar"></section>
     <div id="communityVoiceMini" class="community-voice-mini hidden"></div>
     <div id="communityVoiceInvite" class="community-voice-invite hidden"></div>
+    <div id="communityMediaViewer" class="community-media-viewer" aria-hidden="true"><div class="community-media-backdrop" data-community-media-close></div><section class="community-media-dialog" role="dialog" aria-modal="true" aria-label="Community video and screen streams"><header class="community-media-header"><div><span class="eyebrow">LIVE COMMUNITY</span><h2>${esc(community.name)} · Streams</h2><small data-community-media-count>0 streams</small></div><div><button class="icon-btn" type="button" data-community-media-fullscreen title="Fullscreen" aria-label="Fullscreen">⛶</button><button class="icon-btn" type="button" data-community-media-close title="Close" aria-label="Close">×</button></div></header><div class="community-media-grid" id="communityMediaGrid"></div><p class="community-media-empty" data-community-media-empty>No camera or screen streams yet.</p></section></div>
     <div class="community-chat-layout">
       <section class="community-chat-main">
         <div id="communityMessages" class="community-messages"></div>
@@ -5700,6 +5722,80 @@ messageImageInput?.addEventListener("change", async () => {
     const participantIsSpeaking=p=>activeSpeakerIds.has(p?.identity);
     const remoteAudioState=new Map();
 
+    const communityStreamSource=(track,publication)=>{
+      const source=publication?.source??track?.source;
+      const sources=window.LivekitClient?.Track?.Source||{};
+      if(source===sources.ScreenShare||String(source).toLowerCase().includes('screen'))return 'screen';
+      return 'camera';
+    };
+    const communityMediaViewer=()=>$('#communityMediaViewer');
+    const selectCommunityMedia=key=>{
+      if(!communityMediaTracks.has(key))return;
+      focusedCommunityMedia=key;
+      communityMediaTracks.forEach((item,id)=>item.card.classList.toggle('is-focused',id===key));
+    };
+    const updateCommunityMediaViewer=()=>{
+      const viewer=communityMediaViewer();
+      const count=viewer?.querySelector('[data-community-media-count]');
+      const empty=viewer?.querySelector('[data-community-media-empty]');
+      if(count)count.textContent=`${communityMediaTracks.size} live stream${communityMediaTracks.size===1?'':'s'}`;
+      if(empty)empty.hidden=communityMediaTracks.size>0;
+      if(!communityMediaTracks.size){focusedCommunityMedia='';viewer?.classList.remove('open');viewer?.setAttribute('aria-hidden','true');}
+    };
+    const attachCommunityVideo=(track,publication,participant,isLocal=false)=>{
+      if(!track||track.kind!=='video')return;
+      const source=communityStreamSource(track,publication);
+      const identity=String(participant?.identity||me);
+      const key=`${identity}:${source}:${track.sid||track.mediaStreamTrack?.id||Date.now()}`;
+      if(communityMediaTracks.has(key))return;
+      const viewer=communityMediaViewer(),grid=$('#communityMediaGrid',viewer);
+      if(!viewer||!grid)return;
+      const card=document.createElement('article');
+      card.className=`community-media-card ${source==='screen'?'is-screen':'is-camera'}`;
+      card.dataset.mediaKey=key;
+      card.innerHTML=`<div class="community-media-label"><b>${source==='screen'?'🖥️ Screen share':'📹 Camera'}</b><span>${esc(participantLabel(participant))}${isLocal?' · You':''}</span></div>`;
+      const media=track.attach();
+      media.className='community-media-video';media.autoplay=true;media.playsInline=true;media.muted=!!isLocal;media.setAttribute('playsinline','');
+      card.prepend(media);card.addEventListener('click',()=>selectCommunityMedia(key));
+      grid.appendChild(card);
+      communityMediaTracks.set(key,{key,track,publication,participant,source,isLocal,card,media});
+      if(!focusedCommunityMedia||source==='screen')selectCommunityMedia(key);
+      media.play?.().catch(()=>{});
+      updateCommunityMediaViewer();
+      if(!isLocal){
+        const message=source==='screen'?`${participantLabel(participant)} started sharing a screen`:`${participantLabel(participant)} turned on their camera`;
+        notify(message,'success');
+        try{if(document.visibilityState==='hidden'&&'Notification'in window&&Notification.permission==='granted')new Notification(`${community.name} · ${source==='screen'?'Screen share':'Camera'}`,{body:message});}catch{}
+      }
+    };
+    const detachCommunityVideo=track=>{
+      for(const [key,item] of communityMediaTracks){
+        if(item.track!==track&&item.track?.sid!==track?.sid)continue;
+        try{track.detach(item.media);}catch{}
+        item.card.remove();communityMediaTracks.delete(key);
+        if(focusedCommunityMedia===key)focusedCommunityMedia=communityMediaTracks.keys().next().value||'';
+      }
+      if(focusedCommunityMedia)selectCommunityMedia(focusedCommunityMedia);
+      updateCommunityMediaViewer();
+    };
+    const clearCommunityVideos=()=>{
+      for(const item of communityMediaTracks.values()){try{item.track.detach(item.media);}catch{}item.card.remove();}
+      communityMediaTracks.clear();focusedCommunityMedia='';updateCommunityMediaViewer();
+    };
+    const openCommunityMediaViewer=()=>{
+      if(!communityMediaTracks.size){notify('No camera or screen streams are live yet.','error');return;}
+      const viewer=communityMediaViewer();viewer?.classList.add('open');viewer?.setAttribute('aria-hidden','false');
+      if(focusedCommunityMedia)selectCommunityMedia(focusedCommunityMedia);
+    };
+    const closeCommunityMediaViewer=()=>{const viewer=communityMediaViewer();viewer?.classList.remove('open');viewer?.setAttribute('aria-hidden','true');if(document.fullscreenElement===viewer?.querySelector('.community-media-dialog'))document.exitFullscreen?.().catch?.(()=>{});};
+    const initCommunityMediaViewer=()=>{
+      const viewer=communityMediaViewer();if(!viewer||viewer.dataset.ready==='1')return;viewer.dataset.ready='1';
+      viewer.querySelectorAll('[data-community-media-close]').forEach(button=>button.addEventListener('click',closeCommunityMediaViewer));
+      viewer.querySelector('[data-community-media-fullscreen]')?.addEventListener('click',async()=>{try{const dialog=viewer.querySelector('.community-media-dialog');if(document.fullscreenElement===dialog)await document.exitFullscreen();else await dialog.requestFullscreen();}catch{notify('Fullscreen is not available in this browser.','error');}});
+      document.addEventListener('keydown',event=>{if(event.key==='Escape'&&viewer.classList.contains('open'))closeCommunityMediaViewer();});
+    };
+    initCommunityMediaViewer();
+
     const voiceParticipants=()=>liveKitRoom?[liveKitRoom.localParticipant,...liveKitRoom.remoteParticipants.values()]:[];
 
     const renderVoiceParticipants=()=>{
@@ -5710,19 +5806,26 @@ messageImageInput?.addEventListener("change", async () => {
         <div class="community-voice-mini-people">${people.slice(0,5).map(p=>{
           const pid=String(p?.identity||'');
           const speakerMuted=remoteAudioState.get(pid)===true;
+          const cameraLive=[...communityMediaTracks.values()].some(item=>String(item.participant?.identity||'')===pid&&item.source==='camera');
+          const screenLive=[...communityMediaTracks.values()].some(item=>String(item.participant?.identity||'')===pid&&item.source==='screen');
           return `<div class="community-voice-person ${participantIsMuted(p)?'muted':''} ${participantIsSpeaking(p)?'speaking':''}">
             <span class="community-voice-person-avatar">${esc(participantInitials(p))}</span>
             <span class="community-voice-person-name">${esc(participantLabel(p))}${isLocalParticipant(p)?' · You':''}</span>
+            <span class="community-voice-media-icons" title="${cameraLive?'Camera live ':''}${screenLive?'Screen sharing':''}">${cameraLive?'📹':''}${screenLive?'🖥️':''}</span>
             <button class="voice-person-tool ${speakerMuted?'off':''}" type="button" data-voice-output="${esc(pid)}" aria-label="${speakerMuted?'Unmute this participant':'Mute this participant locally'}" title="${speakerMuted?'Unmute their audio':'Mute their audio for you'}">${speakerMuted?'🔇':'🔊'}</button>
             <span class="voice-person-mic" title="${participantIsMuted(p)?'Microphone muted':'Microphone on'}">${participantIsMuted(p)?'🎙️':'🎤'}</span>
           </div>`;
         }).join('')}</div>
+        <div class="community-voice-media-tools"><button class="btn btn-ghost" id="toggleCommunityVoiceCamera" type="button">${liveKitRoom.localParticipant.isCameraEnabled?'📷 Camera off':'📹 Turn camera on'}</button><button class="btn btn-ghost" id="toggleCommunityVoiceScreen" type="button" ${communityScreenShareBusy?'disabled':''}>${communityScreenShareBusy?'Opening screen picker…':liveKitRoom.localParticipant.isScreenShareEnabled?'⏹ Stop sharing':'🖥️ Share screen'}</button><button class="btn btn-ghost" id="openCommunityMediaViewer" type="button">▣ View streams · ${communityMediaTracks.size}</button></div>
         <form class="community-voice-mini-chat" id="communityVoiceMiniChat"><input id="communityVoiceMiniInput" maxlength=2000 autocomplete="off" placeholder="Message the community…"><button class="voice-mini-chat-send" type="submit" aria-label="Send message">➤</button></form>
         <div class="community-voice-mini-actions"><button class="btn btn-primary" id="enableCommunityVoiceAudio">🔊 Audio</button><button class="btn btn-ghost" id="toggleCommunityVoiceMute">${participantIsMuted(liveKitRoom.localParticipant)?'🎤 Unmute':'🔇 Mute'}</button><button class="btn btn-danger" id="leaveCommunityVoice2">Leave</button></div>`;
       mini?.classList.remove('hidden');
       $('#leaveCommunityVoice')?.addEventListener('click',leaveVoice,{once:true});
       $('#leaveCommunityVoice2')?.addEventListener('click',leaveVoice,{once:true});
       $('#toggleCommunityVoiceMute')?.addEventListener('click',toggleVoiceMute,{once:true});
+      $('#toggleCommunityVoiceCamera')?.addEventListener('click',toggleCommunityCamera,{once:true});
+      $('#toggleCommunityVoiceScreen')?.addEventListener('click',toggleCommunityScreenShare,{once:true});
+      $('#openCommunityMediaViewer')?.addEventListener('click',openCommunityMediaViewer,{once:true});
       $('#enableCommunityVoiceAudio')?.addEventListener('click',()=>enableVoiceAudio(true),{once:true});
       mini.querySelector('#communityVoiceMiniChat')?.addEventListener('submit',async ev=>{
         ev.preventDefault();
@@ -5803,7 +5906,7 @@ messageImageInput?.addEventListener("change", async () => {
 
     async function stopLiveKit(silent=false){
       try{await liveKitRoom?.disconnect();}catch{}
-      liveKitRoom=null; voiceJoined=false; activeSpeakerIds.clear(); remoteAudioState.clear();
+      liveKitRoom=null; voiceJoined=false; activeSpeakerIds.clear(); remoteAudioState.clear();clearCommunityVideos();
       liveKitAudio.forEach(el=>{try{el.pause?.();el.srcObject=null;el.remove();}catch{}});
       liveKitAudio=[]; liveKitAudioByParticipant.clear(); liveKitAudioByTrack.clear();
       renderVoiceParticipants(); renderVoiceBar();
@@ -5916,6 +6019,18 @@ messageImageInput?.addEventListener("change", async () => {
       }catch{}
     }
 
+    function attachExistingCommunityVideo(room){
+      try{
+        for(const participant of [room.localParticipant,...room.remoteParticipants.values()]){
+          for(const publication of participant.trackPublications.values()){
+            if(String(publication.kind)!=='video')continue;
+            try{if(typeof publication.setSubscribed==='function'&&!publication.isSubscribed&&!isLocalParticipant(participant))publication.setSubscribed(true);}catch{}
+            if(publication.track)attachCommunityVideo(publication.track,publication,participant,isLocalParticipant(participant));
+          }
+        }
+      }catch{}
+    }
+
     function removeParticipantAudio(participantId){
       const bucket=liveKitAudioByParticipant.get(String(participantId||''))||[];
       bucket.forEach(el=>{try{el.pause?.();el.srcObject=null;el.remove();}catch{}if(el.dataset?.rivoTrackKey)liveKitAudioByTrack.delete(el.dataset.rivoTrackKey);});
@@ -5980,11 +6095,11 @@ messageImageInput?.addEventListener("change", async () => {
           loadLiveKitClient(), getLiveKitToken(voiceRoom.room_name,me)
         ]);
         const room=new LK.Room({adaptiveStream:true,dynacast:true,stopLocalTrackOnUnpublish:true});
-        room.on(LK.RoomEvent.TrackSubscribed,(track,publication,participant)=>{if(track.kind==='audio'){attachAudioElement(track,participant);renderVoiceParticipants();}});
-        room.on(LK.RoomEvent.TrackUnsubscribed,(track,publication,participant)=>{try{track.detach().forEach(x=>x.remove());}catch{} if(participant?.identity)removeParticipantAudio(participant.identity);renderVoiceParticipants();});
+        room.on(LK.RoomEvent.TrackSubscribed,(track,publication,participant)=>{if(track.kind==='audio')attachAudioElement(track,participant);else if(track.kind==='video')attachCommunityVideo(track,publication,participant,false);renderVoiceParticipants();});
+        room.on(LK.RoomEvent.TrackUnsubscribed,(track,publication,participant)=>{if(track.kind==='video')detachCommunityVideo(track);try{track.detach().forEach(x=>x.remove());}catch{} if(participant?.identity)removeParticipantAudio(participant.identity);renderVoiceParticipants();});
         room.on(LK.RoomEvent.TrackSubscriptionFailed,async(trackSid,participant)=>{
           try{const publication=participant?.getTrackPublication?.(trackSid);if(publication?.setSubscribed)await publication.setSubscribed(true);}catch{}
-          notify(`Could not receive audio from ${participantLabel(participant)}. Tap Audio to retry.`,'error');
+          notify(`Could not receive a media stream from ${participantLabel(participant)}. Check your connection and retry.`,'error');
         });
         room.on(LK.RoomEvent.ParticipantPermissionChanged,()=>renderVoiceParticipants());
         room.on(LK.RoomEvent.ParticipantConnected,(participant)=>{renderVoiceParticipants();notify(`${participantLabel(participant)} joined voice`,'success');});
@@ -5993,8 +6108,8 @@ messageImageInput?.addEventListener("change", async () => {
         room.on(LK.RoomEvent.ParticipantNameChanged,()=>renderVoiceParticipants());
         room.on(LK.RoomEvent.TrackMuted,()=>renderVoiceParticipants());
         room.on(LK.RoomEvent.TrackUnmuted,()=>renderVoiceParticipants());
-        room.on(LK.RoomEvent.LocalTrackPublished,()=>renderVoiceParticipants());
-        room.on(LK.RoomEvent.LocalTrackUnpublished,()=>renderVoiceParticipants());
+        room.on(LK.RoomEvent.LocalTrackPublished,(publication)=>{if(publication?.kind==='video'&&publication.track)attachCommunityVideo(publication.track,publication,room.localParticipant,true);renderVoiceParticipants();});
+        room.on(LK.RoomEvent.LocalTrackUnpublished,(publication)=>{if(publication?.kind==='video'&&publication.track)detachCommunityVideo(publication.track);renderVoiceParticipants();});
         room.on(LK.RoomEvent.ActiveSpeakersChanged,(speakers)=>{activeSpeakerIds.clear();(speakers||[]).forEach(p=>activeSpeakerIds.add(p.identity));renderVoiceParticipants();});
         room.on(LK.RoomEvent.AudioPlaybackStatusChanged,(playing)=>{
           if(playing){voiceAudioUnlocked=true;renderVoiceBar();renderVoiceParticipants();}
@@ -6002,7 +6117,7 @@ messageImageInput?.addEventListener("change", async () => {
         });
         room.on(LK.RoomEvent.Disconnected,()=>{
           const disconnectedRoomName=room.name||voiceRoom?.room_name||'';
-          liveKitRoom=null;voiceJoined=false;liveKitAudio.forEach(x=>{try{x.pause?.();x.srcObject=null;x.remove();}catch{}});liveKitAudio=[];liveKitAudioByParticipant.clear();liveKitAudioByTrack.clear();renderVoiceBar();renderVoiceParticipants();showVoiceInvite();
+          liveKitRoom=null;voiceJoined=false;clearCommunityVideos();liveKitAudio.forEach(x=>{try{x.pause?.();x.srcObject=null;x.remove();}catch{}});liveKitAudio=[];liveKitAudioByParticipant.clear();liveKitAudioByTrack.clear();renderVoiceBar();renderVoiceParticipants();showVoiceInvite();
           syncVoicePresence(disconnectedRoomName,0);
           setTimeout(()=>syncVoicePresence(disconnectedRoomName,0),350);
         });
@@ -6010,6 +6125,7 @@ messageImageInput?.addEventListener("change", async () => {
         liveKitRoom=room; voiceJoined=true;
         await enableVoiceAudio(false);
         attachExistingAudioTracks(room);
+        attachExistingCommunityVideo(room);
         try{await room.localParticipant.setMicrophoneEnabled(true,COMMUNITY_AUDIO_CAPTURE_OPTIONS);}catch(e){notify('Joined voice, but microphone permission or publishing is blocked. You can still listen.','error');}
         startVoicePresenceWatcher();
         renderVoiceParticipants();renderVoiceBar();showVoiceInvite();
@@ -6042,6 +6158,53 @@ messageImageInput?.addEventListener("change", async () => {
       }catch(e){
         const msg=String(e?.message||'');
         notify(/permission|publish|not allowed|forbidden|denied/i.test(msg)?'Your microphone is currently blocked by voice permissions or browser permission.':'Could not change microphone','error');
+      }
+    }
+
+    async function toggleCommunityCamera(){
+      if(!liveKitRoom){notify('Join the community voice room before turning on your camera.','error');return;}
+      const participant=liveKitRoom.localParticipant;
+      if(participant.permissions?.canPublish===false){notify('Your community media publishing is currently restricted.','error');return;}
+      const enabling=!participant.isCameraEnabled;
+      try{
+        await participant.setCameraEnabled(enabling,{facingMode:'user'});
+        if(enabling)notify('Your camera is on and visible to people in this room.','success');
+        else notify('Your camera is off.','success');
+        renderVoiceParticipants();
+      }catch(error){
+        const message=String(error?.message||'');
+        notify(/permission|denied|notallowed/i.test(message)?'Camera permission is blocked. Allow camera access in your browser settings, then try again.':message||'Could not turn on the camera. Check that no other app is using it.','error');
+      }
+    }
+
+    async function toggleCommunityScreenShare(){
+      if(!liveKitRoom){notify('Join the community voice room before sharing your screen.','error');return;}
+      if(communityScreenShareBusy)return;
+      const participant=liveKitRoom.localParticipant;
+      if(participant.permissions?.canPublish===false){notify('Your community media publishing is currently restricted.','error');return;}
+      if(typeof participant.setScreenShareEnabled!=='function'){notify('Screen sharing is not supported in this browser. Use a recent desktop browser over HTTPS.','error');return;}
+      if(!window.isSecureContext||typeof navigator.mediaDevices?.getDisplayMedia!=='function'){notify('This phone browser does not provide screen sharing to websites. Use an updated browser that supports screen capture, or share from a computer.','error');return;}
+      let existingPublication=null;
+      try{existingPublication=participant.getTrackPublication?.(window.LivekitClient?.Track?.Source?.ScreenShare);}catch{}
+      const isSharing=!!participant.isScreenShareEnabled||!!existingPublication?.track||[...communityMediaTracks.values()].some(item=>item.isLocal&&item.source==='screen');
+      const enabling=!isSharing;
+      const roomAtStart=liveKitRoom;
+      communityScreenShareBusy=true;
+      renderVoiceParticipants();
+      try{
+        await participant.setScreenShareEnabled(enabling,{audio:false});
+        if(liveKitRoom!==roomAtStart)return;
+        if(enabling){
+          const publication=participant.getTrackPublication?.(window.LivekitClient?.Track?.Source?.ScreenShare);
+          if(publication?.track)attachCommunityVideo(publication.track,publication,participant,true);
+          notify('Screen sharing started. The active share appears in View streams.','success');
+        }else notify('Screen sharing stopped.','success');
+      }catch(error){
+        const message=String(error?.message||'');
+        if(!/cancel/i.test(message))notify(/permission|denied|notallowed/i.test(message)?'Screen sharing was blocked. Choose a screen or tab in your browser prompt.':message||'Could not start screen sharing.','error');
+      }finally{
+        communityScreenShareBusy=false;
+        if(liveKitRoom===roomAtStart)renderVoiceParticipants();
       }
     }
 
